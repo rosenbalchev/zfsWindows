@@ -156,6 +156,12 @@ zfs_core_status_t zfs_core_get_info(const zfs_core_device_t *device, zfs_core_de
     return ZFS_CORE_OK;
 }
 
+zfs_core_status_t zfs_core_probe_pool(const zfs_core_device_t *device)
+{
+    if (device == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    return device->uberblocks_found > 0 ? ZFS_CORE_OK : ZFS_CORE_NOT_A_ZFS_DEVICE;
+}
+
 zfs_core_status_t zfs_core_read(const zfs_core_device_t *device, uint64_t offset,
     void *buffer, uint64_t length, uint64_t *bytes_read)
 {

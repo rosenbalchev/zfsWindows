@@ -32,6 +32,9 @@ internal static partial class NativeMethods
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_info")]
     internal static partial ZfsStatus GetInfo(nint device, out ZfsDeviceInfo info);
 
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_probe_pool")]
+    internal static partial ZfsStatus ProbePool(nint device);
+
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read")]
     internal static partial ZfsStatus Read(nint device, ulong offset, nint buffer, ulong length, out ulong bytesRead);
 }
@@ -66,6 +69,8 @@ public sealed class ZfsReadOnlyDevice : IDisposable
         }
         finally { handle.Free(); }
     }
+
+    public bool IsRecognizedPool => NativeMethods.ProbePool(_handle) == ZfsStatus.Ok;
 
     public void Dispose()
     {

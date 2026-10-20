@@ -40,6 +40,8 @@ ZFS_CORE_API zfs_core_status_t zfs_core_open_readonly(
 ZFS_CORE_API void zfs_core_close(zfs_core_device_t *device);
 ZFS_CORE_API zfs_core_status_t zfs_core_get_info(
     const zfs_core_device_t *device, zfs_core_device_info_t *info);
+ZFS_CORE_API zfs_core_status_t zfs_core_probe_pool(
+    const zfs_core_device_t *device);
 ZFS_CORE_API zfs_core_status_t zfs_core_read(
     const zfs_core_device_t *device, uint64_t offset, void *buffer,
     uint64_t length, uint64_t *bytes_read);

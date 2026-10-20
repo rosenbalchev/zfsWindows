@@ -18,8 +18,10 @@ matches independent upstream inspection; image hash unchanged.
 
 Current result: the ABI now reports uberblock candidates and the highest TXG
 seen in the vdev-label rings, with native-endian and byte-swapped magic
-handling. This is not yet pool recognition: checksum validation, nvlist
-decoding, and a genuine OpenZFS fixture remain required.
+handling. It also exposes a separate pool-probe operation that rejects a
+plain raw file without uberblock magic. This is not yet full pool recognition:
+checksum validation, nvlist decoding, and a genuine OpenZFS fixture remain
+required.
 
 Blocker: WSL2 Ubuntu has OpenZFS 2.4.1 user-space tools installed, but the
 Microsoft WSL kernel has no `zfs` module and exposes no `/dev/zfs`. Therefore
