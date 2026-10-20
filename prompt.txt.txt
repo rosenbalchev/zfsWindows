@@ -1,0 +1,905 @@
+# Project: Native ZFS Filesystem Driver for Windows — C + .NET 10 + Automated Integrity and Stress Testing
+
+## Role
+
+You are a senior autonomous software engineering team with expertise in:
+
+- Windows kernel-mode filesystem development
+- Windows Driver Kit (WDK)
+- Native C and portable filesystem engines
+- OpenZFS architecture and on-disk formats
+- ZFS copy-on-write, compression, checksums, mirrors, and snapshots
+- .NET 10 / C# and xUnit
+- Native interoperability using P/Invoke
+- Automated integration testing and filesystem corruption detection
+
+Your mission is to implement a new native Windows ZFS filesystem driver written primarily in C, together with a reusable user-mode C library and comprehensive C# automated tests.
+
+This is an actual software implementation project, not a proof-of-concept description.
+
+Implement functionality incrementally and verify each milestone against genuine ZFS disk images.
+
+Do not claim that incomplete functionality is operational.
+
+---
+
+# 1. Repository layout and reference source
+
+The repository is initialized by the project owner.
+
+Inside the repository, an existing subdirectory is provided:
+
+    OpenZFS/
+
+This directory contains the upstream OpenZFS source code.
+
+Treat `OpenZFS/` as the authoritative reference for ZFS behavior, filesystem structures, algorithms, and supported features.
+
+Before implementing anything:
+
+1. Inspect the entire repository structure.
+2. Verify the contents and exact commit of `OpenZFS/`.
+3. Inspect the upstream ZFS architecture.
+4. Identify reusable ZFS components.
+5. Identify Linux-specific code that cannot execute on Windows without adaptation.
+6. Analyze compatibility and licensing constraints.
+7. Produce an implementation plan.
+
+Do not rewrite established ZFS algorithms without a compelling technical reason.
+
+Do not modify `OpenZFS/` directly unless an explicit task requires a documented change.
+
+Prefer an adapter layer around reusable upstream code.
+
+If necessary, investigate the existing OpenZFS Windows port as an additional reference:
+
+https://github.com/openzfsonwindows/openzfs
+
+The intended result is a new, independently maintained Windows implementation that remains compatible with mainstream OpenZFS pools.
+
+---
+
+# 2. Required architecture
+
+Implement three major components.
+
+## A. Portable ZFS engine — C
+
+Location:
+
+    src/native/ZfsCore/
+
+Build a portable ZFS engine written in C.
+
+The engine must support:
+
+- Opening ZFS pools
+- Parsing vdev labels
+- Reading and validating uberblocks
+- Interpreting block pointers
+- Reading ZFS objects
+- Dataset discovery
+- Directory traversal
+- File reads
+- Checksums
+- Compression and decompression
+- Snapshot discovery and reading
+- Pool and dataset modification in later milestones
+- Copy-on-write transactions in later milestones
+- Mirrored virtual devices in later milestones
+
+The engine must not directly depend on the Windows kernel.
+
+Implement platform abstractions for:
+
+- Block I/O
+- Allocation
+- Synchronization
+- Logging
+- Time
+- Error handling
+
+Use a well-defined C API with opaque handles.
+
+Compile the shared core into a Windows user-mode DLL and, with appropriate kernel adapters, into the native driver.
+
+## B. Windows native kernel driver — C
+
+Location:
+
+    src/native/ZfsDriver/
+
+Produce:
+
+    ZfsWindows.sys
+
+Implement a real Windows filesystem driver using WDK.
+
+Progressively support:
+
+- Pool discovery
+- Volume mount and dismount
+- File and directory enumeration
+- File reads
+- Metadata operations
+- File creation and writing
+- Flush and synchronization
+- Concurrent filesystem operations
+- Snapshot-aware filesystem access
+
+The filesystem driver must use correct Windows kernel synchronization, memory-management, I/O, and caching mechanisms.
+
+Do not assume that a filesystem minifilter provides a complete filesystem implementation.
+
+Do not install or load the experimental driver on the developer's primary machine.
+
+## C. User-mode C DLL and .NET test framework
+
+Location:
+
+    src/native/ZfsNativeApi/
+    src/managed/Zfs.Interop/
+    tests/Zfs.Core.Tests/
+
+Produce:
+
+    ZfsCore.dll
+
+Expose the same filesystem engine to C#.
+
+Use .NET 10 and xUnit.
+
+All core integration tests must be executable on a normal Windows machine without installing the kernel driver.
+
+Example:
+
+    dotnet test
+
+Separate kernel integration tests into a dedicated project requiring an isolated Windows VM.
+
+---
+
+# 3. File-backed virtual partitions
+
+The implementation must support ordinary files as virtual block devices.
+
+Examples:
+
+    TestVolumes/
+      single/
+        disk01.raw
+      mirror/
+        disk01.raw
+        disk02.raw
+      snapshots/
+        snapshot-test.raw
+
+Each file represents a block device containing genuine ZFS data structures.
+
+Implement:
+
+    IBlockDevice
+
+The native abstraction must support:
+
+- Open
+- Close
+- Read at offset
+- Write at offset
+- Flush
+- Device size
+- Logical sector size
+- Physical sector size
+- Read-only access
+- Exclusive write access
+
+Support both:
+
+1. Raw ZFS vdev image files.
+2. Complete disk images containing GPT partitions.
+
+Avoid hardcoded device offsets.
+
+The block-device interface must be usable by both the user-mode DLL and kernel driver.
+
+Write access must initially be allowed only on explicitly designated disposable test images.
+
+---
+
+# 4. Test fixture generation
+
+Develop a reusable C# test fixture generator, backed by official OpenZFS tools running in a supported Linux environment or dedicated VM.
+
+The generator must create genuine OpenZFS pools.
+
+Do not simulate ZFS by writing arbitrary bytes into a file.
+
+Generate deterministic test data using configurable seeds.
+
+All fixtures must include:
+
+- Pool identity
+- Dataset names
+- ZFS version
+- Enabled feature flags
+- Compression algorithms
+- File paths
+- File sizes
+- File hashes
+- Snapshot names
+- Expected metadata
+
+Store this information in a JSON manifest.
+
+Use SHA-256 as the independent test-data integrity check.
+
+Do not assume that successful ZFS block-checksum validation proves the correct application-level file data was returned.
+
+For writable testing, clone golden fixtures before modification.
+
+---
+
+# 5. Test scenario A — 5 GB single-disk ZFS pool
+
+Create:
+
+    TestVolumes/single/disk01.raw
+
+Logical device size:
+
+    5 GiB
+
+Generate a file workload containing approximately 4 GiB of logical application data.
+
+Organize the data across several directories.
+
+Example:
+
+    /documents/
+    /images/
+    /binary/
+    /large/
+    /random/
+    /compressed/
+    /nested/
+
+Test files of different sizes:
+
+- 0 bytes
+- 1 byte
+- 512 bytes
+- 4 KiB
+- 64 KiB
+- 1 MiB
+- 16 MiB
+- 128 MiB
+- 512 MiB
+
+Include:
+
+- Text files
+- Binary files
+- Random data
+- Repeating patterns
+- Compressible data
+- Incompressible data
+- Unicode filenames
+- Deep directory trees
+
+Generate a manifest recording the expected SHA-256 of each file.
+
+## Test procedure
+
+1. Create the pool with official OpenZFS.
+2. Populate approximately 4 GiB of logical data.
+3. Export the pool cleanly.
+4. Open the image using the native Windows ZFS DLL.
+5. Validate pool metadata.
+6. Enumerate all expected directories.
+7. Read every generated file.
+8. Compare exact lengths and SHA-256 hashes.
+9. Perform random offset reads.
+10. Close the pool.
+11. Verify image integrity for read-only tests.
+
+The pool must have sufficient free physical space for metadata and copy-on-write updates.
+
+If the requested workload cannot fit, report capacity exhaustion explicitly instead of silently reducing test coverage.
+
+---
+
+# 6. Test scenario B — Compression compatibility
+
+Create separate datasets or independent fixtures using:
+
+    compression=off
+    compression=lz4
+    compression=gzip-1
+    compression=gzip-9
+    compression=zstd
+
+Also test additional supported algorithms discovered in the upstream source.
+
+For each compression setting:
+
+1. Create a dataset.
+2. Set compression before writing test data.
+3. Generate known files.
+4. Write the files.
+5. Export the pool.
+6. Open it using the Windows implementation.
+7. Read every file.
+8. Compare SHA-256 hashes.
+9. Validate reported logical and physical space consumption.
+
+Include at least three data patterns:
+
+- Highly compressible data
+- Moderately compressible data
+- Cryptographically pseudorandom or effectively incompressible data
+
+Record:
+
+- Original logical size
+- Allocated physical size
+- Compression ratio
+- Write throughput
+- Read throughput
+- Hash verification results
+
+Also test changing the compression property after data has already been written.
+
+Verify that existing blocks remain readable using their original encoding and newly written blocks use the appropriate setting.
+
+Never assume changing a compression property retroactively recompresses existing files.
+
+Compression failures must return clear errors rather than corrupted content.
+
+---
+
+# 7. Test scenario C — Large numbers of small files
+
+Build a configurable file-count stress suite.
+
+Profiles:
+
+    Small:       5,000 files
+    Medium:     50,000 files
+    Large:     500,000 files
+    Extreme: 5,000,000 files
+
+The extreme profile is optional for ordinary CI and mandatory only for dedicated stress testing.
+
+Distribute files across hundreds or thousands of subdirectories.
+
+Use a configurable directory fan-out and depth.
+
+Include:
+
+- Empty files
+- Files containing 1–128 bytes
+- Small binary files
+- Unicode filenames
+- Long filenames
+- Similar filenames
+- Case-sensitive name collisions where supported
+- Nested directory traversal
+- Repeated open/close
+- Random file reads
+- Concurrent directory enumeration
+
+Tests must validate:
+
+1. Every file can be created.
+2. Every file can be enumerated.
+3. Every expected file can be opened.
+4. File content matches its hash.
+5. File size is correct.
+6. Filesystem metadata remains consistent.
+7. Files are accessible after export and re-import.
+8. There are no missing or unexpectedly duplicated directory entries.
+
+For newly implemented write support, create and verify the files using the new engine.
+
+For read-only milestones, create them using upstream OpenZFS and verify using the Windows engine.
+
+Do not load all file hashes and contents into memory unnecessarily.
+
+Use streaming manifests or indexed verification.
+
+Track memory usage and execution time.
+
+A 5 GiB pool may not be large enough for 5 million files. Use a separate appropriately sized pool or report the capacity limit.
+
+---
+
+# 8. Test scenario D — Mirrored ZFS pool
+
+Create two image files:
+
+    TestVolumes/mirror/disk01.raw
+    TestVolumes/mirror/disk02.raw
+
+Each image:
+
+    5 GiB
+
+Construct a genuine two-device ZFS mirror.
+
+Logical usable pool capacity is approximately one device, minus filesystem overhead.
+
+Generate workloads similar to scenario A:
+
+- Approximately 4 GiB of logical application data when capacity permits
+- Large files
+- Small files
+- Compressible data
+- Incompressible data
+- Nested directories
+
+## Mirror read testing
+
+1. Create the mirror using upstream OpenZFS.
+2. Populate data.
+3. Export the pool.
+4. Open both images using the Windows engine.
+5. Verify pool configuration.
+6. Read all files.
+7. Verify hashes.
+
+## Mirror degradation testing
+
+On disposable copies only:
+
+1. Simulate one unavailable mirror member.
+2. Reopen the pool with the remaining device.
+3. Verify expected degraded read behavior.
+4. Validate all accessible files.
+
+## Mirror corruption testing
+
+1. Clone the golden mirror images.
+2. Corrupt selected blocks on one member.
+3. Verify checksums detect corruption.
+4. Verify reads can obtain valid data from the other member.
+5. Verify returned file hashes.
+
+## Mirror repair testing
+
+Once repair functionality exists:
+
+1. Simulate a failed member.
+2. Replace it with a new blank image.
+3. Trigger the supported replacement/resilver workflow.
+4. Verify resilver completion.
+5. Verify file hashes.
+6. Independently validate the pool using upstream OpenZFS.
+
+Do not claim automatic self-healing until actual repair and subsequent validation have been demonstrated.
+
+---
+
+# 9. Test scenario E — ZFS snapshots
+
+Create:
+
+    TestVolumes/snapshots/disk01.raw
+
+Support snapshot creation, enumeration, reading, rollback, and deletion in separate milestones.
+
+## Snapshot lifecycle
+
+Create initial files:
+
+    /documents/report.txt
+    /documents/config.json
+    /binary/data.bin
+
+Record hashes.
+
+Create:
+
+    tank/test@snapshot1
+
+Modify the original files.
+
+Create new files.
+
+Delete some original files.
+
+Create:
+
+    tank/test@snapshot2
+
+Modify files again.
+
+Create:
+
+    tank/test@snapshot3
+
+## Required validations
+
+Verify that:
+
+- Current dataset contains the latest data.
+- Snapshot1 exposes original file contents.
+- Snapshot2 exposes intermediate file contents.
+- Snapshot3 exposes its expected contents.
+- Deleting a file from the live dataset does not remove it from existing snapshots.
+- Modifying a live file does not alter earlier snapshots.
+- Snapshot enumeration returns the correct snapshot identifiers.
+- Snapshot reads return the expected historical SHA-256 hashes.
+
+## Snapshot rollback
+
+On a disposable pool:
+
+1. Record the latest dataset state.
+2. Roll back to a selected snapshot.
+3. Verify expected files and hashes.
+4. Verify that rollback follows documented ZFS snapshot/dependency semantics.
+
+## Snapshot deletion
+
+Delete selected snapshots using supported ZFS semantics.
+
+Verify:
+
+- Remaining snapshots are readable.
+- The live dataset remains consistent.
+- Relevant block reference counts and space accounting remain valid.
+
+Snapshot creation and deletion must not be implemented as ordinary full-file copies.
+
+Use genuine ZFS copy-on-write snapshot semantics.
+
+---
+
+# 10. Test scenario F — Native write support
+
+After the read-only implementation passes, implement writes incrementally.
+
+Initially support only disposable file-backed pools.
+
+Required operations:
+
+- Create file
+- Write file
+- Append
+- Overwrite a range
+- Truncate
+- Delete
+- Rename
+- Create directory
+- Delete directory
+- Flush
+- Close and reopen
+
+For each operation:
+
+1. Execute the operation using the new native C implementation.
+2. Close or cleanly export the pool.
+3. Reopen it.
+4. Verify contents.
+5. Validate hashes.
+6. Independently import the resulting image using official OpenZFS on Linux.
+7. Confirm the pool is healthy and the expected filesystem data is visible.
+
+Compatibility testing must work in both directions:
+
+    Linux OpenZFS writes → Windows implementation reads
+
+    Windows implementation writes → Linux OpenZFS reads
+
+Never claim write compatibility based only on the Windows implementation reading its own output.
+
+Implement transaction groups, block allocation, copy-on-write metadata updates, space accounting, flush ordering, and crash consistency correctly.
+
+Do not implement direct in-place data modifications that violate ZFS transactional semantics.
+
+---
+
+# 11. Test scenario G — Persistence and simulated crashes
+
+For disposable writable test images:
+
+1. Mount or open the pool.
+2. Generate a write workload.
+3. Flush at controlled checkpoints.
+4. Close and reopen normally.
+5. Validate all committed data.
+
+Add failure-injection tests:
+
+- I/O error
+- Partial write
+- Read failure
+- Interrupted write sequence
+- Allocation failure
+- Simulated process termination
+- Corrupted metadata
+- Missing mirror member
+
+Distinguish between committed data and data not guaranteed durable.
+
+Use a disposable VM for actual abrupt-power-off and kernel-driver crash tests.
+
+After failure injection, attempt pool recovery using upstream OpenZFS.
+
+Verify that the pool remains consistent and that acknowledged durable writes satisfy their documented guarantees.
+
+A successful process restart alone is not proof of crash consistency.
+
+---
+
+# 12. Test scenario H — Performance benchmarking
+
+Implement benchmarks for:
+
+- Sequential reads
+- Sequential writes
+- Random reads
+- Random writes
+- Small-file creation
+- Small-file enumeration
+- Large-file reading
+- Large-file writing
+- Concurrent reads
+- Concurrent writes
+- Snapshot creation
+- Snapshot traversal
+- Mirror reads
+- Compression and decompression
+
+Capture:
+
+- Operations per second
+- MB/s or MiB/s
+- IOPS
+- Latency p50
+- Latency p95
+- Latency p99
+- CPU utilization
+- Peak memory usage
+- Allocated disk space
+
+Use BenchmarkDotNet where appropriate for user-mode microbenchmarks, and dedicated workload runners for end-to-end filesystem benchmarks.
+
+Compare equivalent workloads against upstream OpenZFS.
+
+Do not compare cached and uncached measurements as though they were equivalent.
+
+Document caching, warm-up, flush behavior, hardware, and environmental differences.
+
+Performance benchmarks should not fail correctness tests merely because one implementation is slower.
+
+---
+
+# 13. Critical data-integrity requirements
+
+Data correctness has priority over performance.
+
+For every fixture:
+
+- Maintain independent SHA-256 reference hashes.
+- Validate file lengths.
+- Validate directory entries.
+- Validate pool metadata.
+- Detect unsupported feature flags.
+- Detect corrupted blocks.
+- Detect malformed metadata.
+- Prevent out-of-bounds block access.
+- Prevent integer overflow.
+- Validate physical device bounds.
+
+For read-only tests, calculate image hashes before and after execution.
+
+The image must remain byte-for-byte identical.
+
+For write tests, preserve the original golden image and perform operations on an isolated copy.
+
+Never allow an automated test to modify a real physical disk.
+
+The default mode must be read-only.
+
+Enable image writes only when the test explicitly selects a disposable writable image.
+
+Never silently perform GPT repair, partition initialization, pool upgrades, or disk formatting.
+
+---
+
+# 14. Windows driver testing
+
+The Windows kernel driver must be tested separately from the native DLL.
+
+Use a dedicated Windows 11 VM.
+
+Create C# driver integration tests that:
+
+1. Prepare disposable test images.
+2. Load the test-signed driver in the authorized VM.
+3. Expose a ZFS filesystem through a Windows volume.
+4. Enumerate files using standard .NET APIs.
+5. Read files using `FileStream`.
+6. Verify hashes.
+7. Exercise multiple concurrent readers.
+8. Exercise writes only after write support is validated.
+9. Test clean dismount.
+10. Verify pool integrity externally.
+
+Use Driver Verifier, WinDbg, and crash dump analysis where appropriate.
+
+Do not enable test signing, disable security protections, or load experimental drivers automatically on the developer's primary Windows machine.
+
+---
+
+# 15. Build and test commands
+
+Provide PowerShell scripts:
+
+    scripts/build-native.ps1
+    scripts/build-managed.ps1
+    scripts/run-tests.ps1
+    scripts/run-integration-tests.ps1
+    scripts/run-stress-tests.ps1
+    scripts/run-benchmarks.ps1
+
+The default command:
+
+    dotnet test
+
+must run fast and medium tests that require no kernel driver, administrator privileges, or real disk writes.
+
+Large workloads must be opt-in.
+
+Examples of xUnit traits:
+
+    Category=Unit
+    Category=Integration
+    Category=Compression
+    Category=Mirror
+    Category=Snapshot
+    Category=Stress
+    Category=Kernel
+
+Provide filtering support to run selected categories.
+
+---
+
+# 16. Milestone execution plan
+
+Implement in the following order:
+
+**M1 — Repository analysis and build infrastructure**
+
+Analyze `OpenZFS/`, establish the native build, DLL exports, C# interoperability, and xUnit infrastructure.
+
+**M2 — Read genuine ZFS pool images**
+
+Recognize an upstream-generated pool, inspect its metadata, and read files from it.
+
+**M3 — Single-disk integrity tests**
+
+Pass the 5 GiB single-disk read-only workload and verify all file hashes.
+
+**M4 — Compression**
+
+Implement and test supported compression algorithms using genuine OpenZFS fixtures.
+
+**M5 — Large directory and file-count tests**
+
+Pass small and medium profiles, then scale toward 500,000 and 5 million files when storage permits.
+
+**M6 — Mirror read functionality**
+
+Open multi-vdev mirrored pools and validate degraded reads and checksum recovery.
+
+**M7 — Snapshot reading**
+
+Discover snapshots and read historical files correctly.
+
+**M8 — Writable single-disk pools**
+
+Implement crash-consistent writes, persist changes, and verify Windows-written images using upstream Linux OpenZFS.
+
+**M9 — Writable snapshots and mirrors**
+
+Implement snapshot creation/management, mirrored writes, failure handling, and recovery.
+
+**M10 — Windows kernel driver**
+
+Implement and validate the native `.sys` filesystem driver in an isolated Windows VM.
+
+**M11 — Stress testing and performance optimization**
+
+Run large-scale integrity tests, corruption injection, failure scenarios, and performance benchmarks.
+
+Do not advance by declaring an incomplete milestone successful.
+
+Report actual successful and failed tests.
+
+---
+
+# 17. Acceptance criteria
+
+A feature is considered implemented only when:
+
+1. The code builds successfully.
+2. The relevant C# tests execute successfully.
+3. The tests use real ZFS structures rather than mock data.
+4. Expected file contents and SHA-256 hashes match.
+5. Read-only images are unchanged.
+6. Writable images remain readable by upstream OpenZFS.
+7. Error scenarios are handled without undefined behavior.
+8. Test reports contain verifiable results.
+9. Unsupported functionality is documented accurately.
+
+A successful compile is not sufficient.
+
+A passing mock test is not sufficient.
+
+An image that can be read only by this project's own code is not sufficient proof of upstream compatibility.
+
+---
+
+# 18. Autonomous development rules
+
+- Read and understand the existing source before modifying it.
+- Keep `OpenZFS/` unchanged unless explicitly authorized.
+- Implement reusable code rather than duplicating ZFS algorithms.
+- Make small, reviewable commits.
+- Add tests alongside implementation.
+- Run relevant tests after each meaningful change.
+- Never fabricate passing test results.
+- Never weaken an assertion merely to make a test pass.
+- Never replace genuine ZFS tests with fake filesystem objects.
+- Never modify production storage.
+- Never install unverified drivers on the host.
+- Do not silently skip failing tests.
+- Document every blocker and unsupported feature.
+- Report progress at the end of each milestone.
+
+Do not assume that an AI-generated kernel component is safe merely because it compiles.
+
+Treat disk writes, memory management, locking, and on-disk format updates as high-risk changes requiring careful review.
+
+---
+
+# 19. Required reporting
+
+Produce a test summary after each milestone containing:
+
+| Metric | Result |
+|---|---|
+| Native build | Pass / Fail |
+| C# build | Pass / Fail |
+| Tests executed | Count |
+| Tests passed | Count |
+| Tests failed | Count |
+| Tested ZFS features | List |
+| Tested pool configurations | List |
+| Files verified | Count |
+| Logical data verified | GiB |
+| Hash mismatches | Count |
+| Image corruption | Yes / No |
+| Known issues | Details |
+
+Include execution logs and benchmark artifacts where appropriate.
+
+---
+
+# 20. Begin implementation
+
+Start by inspecting the root repository and the provided `OpenZFS/` subdirectory.
+
+Determine the source version and identify a practical architecture for sharing ZFS logic between the user-mode DLL and Windows kernel driver.
+
+Implement M1 and M2 first.
+
+The initial tangible objective is:
+
+**A C# xUnit test running on Windows must load the real native C DLL, open a genuine upstream-generated ZFS raw image, read a known file, verify its SHA-256, and prove that the image was not modified.**
+
+After this works, systematically implement the remaining milestones.
+
+The final goal is a production-oriented Windows filesystem implementation with comprehensive cross-platform compatibility tests, but production readiness must be established by evidence, not assumed.
