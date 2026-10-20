@@ -2,3 +2,5 @@
 /TestVolumes/
 /artifacts/
 /.vs/
+**/bin/
+**/obj/

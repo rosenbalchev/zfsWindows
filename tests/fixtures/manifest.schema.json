@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["pool", "image", "files"],
+  "properties": {
+    "pool": { "type": "object", "required": ["name", "guid", "zfsVersion", "features"] },
+    "image": { "type": "object", "required": ["path", "sizeBytes", "sha256"] },
+    "files": { "type": "array", "items": { "type": "object", "required": ["path", "length", "sha256"] } },
+    "snapshots": { "type": "array", "items": { "type": "string" } }
+  }
+}
