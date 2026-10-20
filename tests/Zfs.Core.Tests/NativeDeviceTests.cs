@@ -38,6 +38,7 @@ public sealed class NativeDeviceTests
                 Assert.Equal(512U, device.Info.LogicalSectorSize);
                 Assert.Equal(4096U, device.Info.PhysicalSectorSize);
                 Assert.Equal(1U, device.Info.ReadOnly);
+                Assert.Equal(0U, device.Info.UberblocksFound);
                 Assert.Equal(expected[100..300], device.Read(100, 200));
                 Assert.Throws<IOException>(() => device.Read((ulong)expected.Length - 4, 8));
             }

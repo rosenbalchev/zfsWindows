@@ -8,12 +8,31 @@
 #define VDEV_LABEL_COUNT 4U
 #define VDEV_LABEL_START_SIZE (2ULL * VDEV_LABEL_SIZE)
 #define VDEV_LABEL_END_SIZE (2ULL * VDEV_LABEL_SIZE)
+#define VDEV_UBERBLOCK_RING_OFFSET (128ULL * 1024ULL)
+#define VDEV_UBERBLOCK_RING_SIZE (128ULL * 1024ULL)
+#define VDEV_UBERBLOCK_SLOT_SIZE (1ULL * 1024ULL)
+#define UBERBLOCK_MAGIC UINT64_C(0x00bab10c)
 
 struct zfs_core_device {
     FILE *file;
     uint64_t size_bytes;
     uint32_t labels_found;
+    uint32_t uberblocks_found;
+    uint64_t selected_txg;
+    uint64_t selected_uberblock_offset;
 };
+
+static uint64_t swap_u64(uint64_t value)
+{
+    return ((value & UINT64_C(0x00000000000000ff)) << 56) |
+        ((value & UINT64_C(0x000000000000ff00)) << 40) |
+        ((value & UINT64_C(0x0000000000ff0000)) << 24) |
+        ((value & UINT64_C(0x00000000ff000000)) << 8) |
+        ((value & UINT64_C(0x000000ff00000000)) >> 8) |
+        ((value & UINT64_C(0x0000ff0000000000)) >> 24) |
+        ((value & UINT64_C(0x00ff000000000000)) >> 40) |
+        ((value & UINT64_C(0xff00000000000000)) >> 56);
+}
 
 static int seek_u64(FILE *file, uint64_t offset)
 {
@@ -44,6 +63,34 @@ static int label_has_payload(FILE *file, uint64_t offset)
         }
     }
     return 0;
+}
+
+static void scan_uberblocks(zfs_core_device_t *device, uint64_t label)
+{
+    for (uint64_t slot = 0; slot < VDEV_UBERBLOCK_RING_SIZE / VDEV_UBERBLOCK_SLOT_SIZE; ++slot) {
+        uint64_t offset = label + VDEV_UBERBLOCK_RING_OFFSET + slot * VDEV_UBERBLOCK_SLOT_SIZE;
+        unsigned char fields[24];
+        if (offset > device->size_bytes || sizeof(fields) > device->size_bytes - offset ||
+            seek_u64(device->file, offset) != 0 || fread(fields, 1, sizeof(fields), device->file) != sizeof(fields)) {
+            continue;
+        }
+        uint64_t magic = 0;
+        uint64_t txg = 0;
+        memcpy(&magic, fields, sizeof(magic));
+        memcpy(&txg, fields + 16, sizeof(txg));
+        if (magic == UBERBLOCK_MAGIC) {
+            /* native little-endian representation */
+        } else if (swap_u64(magic) == UBERBLOCK_MAGIC) {
+            txg = swap_u64(txg);
+        } else {
+            continue;
+        }
+        ++device->uberblocks_found;
+        if (txg >= device->selected_txg) {
+            device->selected_txg = txg;
+            device->selected_uberblock_offset = offset;
+        }
+    }
 }
 
 zfs_core_status_t zfs_core_open_readonly(const char *path, zfs_core_device_t **device)
@@ -80,6 +127,7 @@ zfs_core_status_t zfs_core_open_readonly(const char *path, zfs_core_device_t **d
     if (result->size_bytes >= VDEV_LABEL_START_SIZE + VDEV_LABEL_END_SIZE) {
         for (uint32_t i = 0; i < VDEV_LABEL_COUNT; ++i) {
             if (label_has_payload(file, label_offset(result->size_bytes, i))) ++result->labels_found;
+            scan_uberblocks(result, label_offset(result->size_bytes, i));
         }
     }
     (void)seek_u64(file, 0);
@@ -102,6 +150,9 @@ zfs_core_status_t zfs_core_get_info(const zfs_core_device_t *device, zfs_core_de
     info->physical_sector_size = 4096U;
     info->read_only = 1U;
     info->vdev_labels_found = device->labels_found;
+    info->uberblocks_found = device->uberblocks_found;
+    info->selected_txg = device->selected_txg;
+    info->selected_uberblock_offset = device->selected_uberblock_offset;
     return ZFS_CORE_OK;
 }
 

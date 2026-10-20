@@ -30,6 +30,9 @@ typedef struct zfs_core_device_info {
     uint32_t physical_sector_size;
     uint32_t read_only;
     uint32_t vdev_labels_found;
+    uint32_t uberblocks_found;
+    uint64_t selected_txg;
+    uint64_t selected_uberblock_offset;
 } zfs_core_device_info_t;
 
 ZFS_CORE_API zfs_core_status_t zfs_core_open_readonly(

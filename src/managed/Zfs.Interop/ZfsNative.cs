@@ -16,6 +16,9 @@ public struct ZfsDeviceInfo
     public uint PhysicalSectorSize;
     public uint ReadOnly;
     public uint VdevLabelsFound;
+    public uint UberblocksFound;
+    public ulong SelectedTxg;
+    public ulong SelectedUberblockOffset;
 }
 
 internal static partial class NativeMethods
