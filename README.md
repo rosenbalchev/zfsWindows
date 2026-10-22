@@ -6,7 +6,7 @@ unchanged and is treated as the on-disk format and algorithm reference.
 
 ## Current status
 
-Milestone M2 is complete. The repository now contains:
+Milestone M3 is complete. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
@@ -23,6 +23,12 @@ hole expansion. The current fixture verifies both a 300,000-byte multi-block
 file and a 300,000-byte sparse file. Managed path traversal resolves nested
 micro-ZAP directories, enumerates typed directory entries, and reads
 `/nested/nested.txt` exactly.
+
+The 5 GiB single-disk acceptance fixture contains 4,447,150,593 logical bytes
+across 18 files, including 512 MiB random and compressible files, UTF-8 names,
+and an eight-level path. The integration test streams every file, verifies its
+manifest SHA-256 and deterministic range samples, enumerates every directory,
+and proves the image SHA-256 is unchanged.
 Compatibility claims are made only for behavior exercised against a genuine
 OpenZFS-generated image.
 
@@ -59,8 +65,9 @@ dotnet test ZfsWindows.sln
 ```
 
 The default managed tests do not require a driver, administrator rights, or
-real disk writes. Genuine-image tests are enabled by setting `ZFS_TEST_IMAGE`
-and, for the Step 04 multi-block fixture, `ZFS_STEP04_IMAGE`.
+real disk writes. Genuine-image tests use `ZFS_TEST_IMAGE` and
+`ZFS_STEP04_IMAGE` for development fixtures, or `ZFS_SINGLE_IMAGE` and
+`ZFS_SINGLE_MANIFEST` for the 5 GiB acceptance fixture.
 
 ## Safety
 

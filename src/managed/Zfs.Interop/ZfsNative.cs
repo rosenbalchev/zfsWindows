@@ -145,6 +145,10 @@ internal static partial class NativeMethods
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_object_file")]
     internal static partial ZfsStatus ReadObjectFile(nint file, nint buffer, ulong length,
         out ulong bytesRead);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_object_file_range")]
+    internal static partial ZfsStatus ReadObjectFileRange(nint file, ulong fileOffset,
+        nint buffer, ulong length, out ulong bytesRead);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -429,6 +433,30 @@ public sealed class ZfsDataset : IDisposable
         return new ZfsObject(this, objectHandle);
     }
 
+    public ZfsObject OpenPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var current = OpenRoot();
+        try
+        {
+            foreach (var component in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (component == ".") continue;
+                if (component == "..")
+                    throw new ArgumentException("Parent path components are not supported.", nameof(path));
+                var next = current.OpenChild(component);
+                current.Dispose();
+                current = next;
+            }
+            return current;
+        }
+        catch
+        {
+            current.Dispose();
+            throw;
+        }
+    }
+
     public void Dispose()
     {
         if (_handle == nint.Zero) return;
@@ -513,6 +541,47 @@ public sealed class ZfsObject : IDisposable
             return buffer;
         }
         finally { pinned.Free(); }
+    }
+
+    public ulong GetFileSize()
+    {
+        ObjectDisposedException.ThrowIf(_handle == nint.Zero, this);
+        var status = NativeMethods.GetObjectFileSize(_handle, out var size);
+        if (status != ZfsStatus.Ok) throw new IOException($"File size read failed: {status}");
+        return size;
+    }
+
+    public byte[] Read(ulong offset, int length)
+    {
+        ObjectDisposedException.ThrowIf(_handle == nint.Zero, this);
+        if (length <= 0) throw new ArgumentOutOfRangeException(nameof(length));
+        var buffer = new byte[length];
+        var pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            var status = NativeMethods.ReadObjectFileRange(_handle, offset,
+                pinned.AddrOfPinnedObject(), (ulong)length, out var bytesRead);
+            if (status != ZfsStatus.Ok) throw new IOException($"File range read failed: {status}");
+            if (bytesRead != (ulong)length) throw new EndOfStreamException();
+            return buffer;
+        }
+        finally { pinned.Free(); }
+    }
+
+    public void CopyTo(Stream destination, int bufferSize = 1024 * 1024)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (!destination.CanWrite) throw new ArgumentException("Destination must be writable.", nameof(destination));
+        if (bufferSize <= 0) throw new ArgumentOutOfRangeException(nameof(bufferSize));
+        var length = GetFileSize();
+        ulong offset = 0;
+        while (offset < length)
+        {
+            var count = (int)Math.Min((ulong)bufferSize, length - offset);
+            var data = Read(offset, count);
+            destination.Write(data);
+            offset += (ulong)count;
+        }
     }
 
     public void Dispose()

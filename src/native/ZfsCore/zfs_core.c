@@ -775,14 +775,15 @@ static int get_root_file_size(zfs_core_device_t *device, uint64_t object,
     return valid;
 }
 
-static int read_root_file(zfs_core_device_t *device, uint64_t object,
-    unsigned char *destination, size_t capacity, size_t *file_size_out)
+static int read_root_file_range(zfs_core_device_t *device, uint64_t object,
+    uint64_t file_offset, unsigned char *destination, size_t requested,
+    size_t *bytes_read_out)
 {
     unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
     unsigned char *data_block = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
     unsigned char *indirect = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
     if (dnode_block == NULL || data_block == NULL || indirect == NULL || destination == NULL ||
-        file_size_out == NULL || !read_filesystem_object_dnode_block(device,
+        bytes_read_out == NULL || !read_filesystem_object_dnode_block(device,
             object, dnode_block, 16 * 1024, NULL)) {
         free(indirect); free(data_block); free(dnode_block); return 0;
     }
@@ -806,11 +807,15 @@ static int read_root_file(zfs_core_device_t *device, uint64_t object,
     }
     uint64_t block_count = data_block_size == 0 || file_size == 0 ? 0 :
         1 + (file_size - 1) / data_block_size;
-    if (valid) valid = file_size <= capacity && file_size <= SIZE_MAX &&
+    if (valid) valid = file_offset <= file_size &&
+        requested <= file_size - file_offset &&
         data_block_size >= 512 && data_block_size <= MOS_DNODE_BLOCK_SIZE &&
         (block_count == 0 || block_count - 1 <= load_u64(dnode + 16));
     size_t copied = 0;
-    for (uint64_t block_id = 0; valid && block_id < block_count; ++block_id) {
+    uint64_t block_id = data_block_size == 0 ? 0 : file_offset / data_block_size;
+    size_t block_offset = data_block_size == 0 ? 0 :
+        (size_t)(file_offset % data_block_size);
+    while (valid && copied < requested) {
         uint64_t top_index = block_id / top_span;
         uint64_t relative = block_id % top_span;
         if (top_index >= dnode[3]) { valid = 0; break; }
@@ -827,8 +832,9 @@ static int read_root_file(zfs_core_device_t *device, uint64_t object,
             uint64_t index = (relative >> shift) & (fanout - 1);
             bp = indirect + index * 128;
         }
-        size_t wanted = (size_t)(file_size - copied);
-        if (wanted > data_block_size) wanted = (size_t)data_block_size;
+        size_t wanted = requested - copied;
+        size_t available = (size_t)data_block_size - block_offset;
+        if (wanted > available) wanted = available;
         if (!valid) break;
         if (hole || block_pointer_is_hole(bp)) {
             memset(destination + copied, 0, wanted);
@@ -839,15 +845,27 @@ static int read_root_file(zfs_core_device_t *device, uint64_t object,
                 logical_size != data_block_size) {
                 valid = 0; break;
             }
-            memcpy(destination + copied, data_block, wanted);
+            memcpy(destination + copied, data_block + block_offset, wanted);
         }
         copied += wanted;
+        block_offset = 0;
+        ++block_id;
     }
-    if (valid) *file_size_out = copied;
+    if (valid) *bytes_read_out = copied;
     free(indirect);
     free(data_block);
     free(dnode_block);
     return valid;
+}
+
+static int read_root_file(zfs_core_device_t *device, uint64_t object,
+    unsigned char *destination, size_t capacity, size_t *file_size_out)
+{
+    uint64_t file_size = 0;
+    return get_root_file_size(device, object, &file_size) &&
+        file_size <= capacity && file_size <= SIZE_MAX &&
+        read_root_file_range(device, object, 0, destination,
+            (size_t)file_size, file_size_out);
 }
 
 static uint16_t load_u16(const unsigned char *p)
@@ -1446,6 +1464,21 @@ zfs_core_status_t zfs_core_read_root_file(
     return ZFS_CORE_OK;
 }
 
+zfs_core_status_t zfs_core_read_root_file_range(
+    const zfs_core_device_t *device, uint64_t object, uint64_t file_offset,
+    void *buffer, uint64_t length, uint64_t *bytes_read)
+{
+    if (device == NULL || buffer == NULL || bytes_read == NULL ||
+        length == 0 || length > SIZE_MAX) return ZFS_CORE_INVALID_ARGUMENT;
+    *bytes_read = 0;
+    size_t actual = 0;
+    if (!read_root_file_range((zfs_core_device_t *)device, object, file_offset,
+            (unsigned char *)buffer, (size_t)length, &actual))
+        return ZFS_CORE_CORRUPT_METADATA;
+    *bytes_read = actual;
+    return ZFS_CORE_OK;
+}
+
 zfs_core_status_t zfs_core_get_root_file_size(
     const zfs_core_device_t *device, uint64_t object, uint64_t *size)
 {
@@ -1568,5 +1601,15 @@ zfs_core_status_t zfs_core_read_object_file(
         return ZFS_CORE_INVALID_ARGUMENT;
     return zfs_core_read_root_file(file->device,
         file->object_number, buffer, length, bytes_read);
+}
+
+zfs_core_status_t zfs_core_read_object_file_range(
+    const zfs_core_object_t *file, uint64_t file_offset, void *buffer,
+    uint64_t length, uint64_t *bytes_read)
+{
+    if (file == NULL || file->device == NULL || file->type != 8)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    return zfs_core_read_root_file_range(file->device, file->object_number,
+        file_offset, buffer, length, bytes_read);
 }
 
