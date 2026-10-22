@@ -47,9 +47,14 @@ payload extraction follows OpenZFS by excluding the property and logical-birth
 words. LZ4 decompression now calls the vendored OpenZFS implementation rather
 than a local decoder. The filesystem dnode walker uses the 128 KiB indirect
 block's 1024 block pointers (10 index bits per level). Directory-entry lookup,
-regular-file byte reads, checksums, sparse files, and the final handle ABI
-remain follow-up work. This checkpoint passes all 3 Windows tests against the
-genuine fixture while preserving its SHA-256 hash.
+The root-directory micro-ZAP lookup now decodes the ZFS directory-entry object
+number, resolving `fixture.txt` to object 2. The initial regular-file reader
+validates its plain-file dnode and system-attribute bonus, extracts the exact
+27-byte size from the fixture's OpenZFS SA layout 2, and decodes the embedded
+LZ4 data block through the C ABI and managed wrapper. General SA layout-table
+resolution, multi-block and sparse files, checksums, path traversal, and the
+final handle ABI remain follow-up work. This checkpoint passes all 3 Windows
+tests against the genuine fixture while preserving its SHA-256 hash.
 
 Commit: `native: read datasets directories and files`
 

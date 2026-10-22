@@ -17,9 +17,11 @@ Milestone M1 is in progress. The repository now contains:
 - a fixture manifest contract and an implementation specification.
 
 The native layer can traverse the genuine fixture into its populated child
-dataset and decode its root directory and file dnodes. General path lookup and
-regular-file byte reads are not implemented yet. Compatibility claims are made
-only for behavior exercised against a genuine OpenZFS-generated image.
+dataset, resolve `fixture.txt` in its root directory, and return that file's
+exact bytes through C# using its dnode, SA size, and embedded LZ4 block. General
+path traversal and multi-block/sparse file reads are not implemented yet.
+Compatibility claims are made only for behavior exercised against a genuine
+OpenZFS-generated image.
 
 ## Development approach and resume flow
 

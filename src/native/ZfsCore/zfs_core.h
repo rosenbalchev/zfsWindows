@@ -86,4 +86,9 @@ ZFS_CORE_API zfs_core_status_t zfs_core_read_root_filesystem_object_dnode_block(
 ZFS_CORE_API zfs_core_status_t zfs_core_read_root_directory_data_block(
     const zfs_core_device_t *device, void *buffer, uint64_t length,
     uint64_t *bytes_read);
+ZFS_CORE_API zfs_core_status_t zfs_core_lookup_root_directory(
+    const zfs_core_device_t *device, const char *name, uint64_t *object);
+ZFS_CORE_API zfs_core_status_t zfs_core_read_root_file(
+    const zfs_core_device_t *device, uint64_t object, void *buffer,
+    uint64_t length, uint64_t *bytes_read);
 

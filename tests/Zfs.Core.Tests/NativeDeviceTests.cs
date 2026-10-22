@@ -99,6 +99,10 @@ public sealed class NativeDeviceTests
         Assert.Equal(512, rootDirectoryData.Length);
         Assert.Equal(0x8000000000000003UL, BitConverter.ToUInt64(rootDirectoryData, 0));
         Assert.Contains("fixture.txt", Encoding.UTF8.GetString(rootDirectoryData));
+        var fixtureObject = device.LookupRootDirectory("fixture.txt");
+        Assert.Equal(2UL, fixtureObject);
+        Assert.Equal("zfs-windows-step03-fixture\n",
+            Encoding.UTF8.GetString(device.ReadRootFile(fixtureObject)));
         Assert.True(device.IsRecognizedPool);
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }
