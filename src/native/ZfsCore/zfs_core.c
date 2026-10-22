@@ -438,8 +438,8 @@ static int read_filesystem_object_dnode_block(zfs_core_device_t *device,
         valid = read_block_pointer(device, bp, level_block, MOS_DNODE_BLOCK_SIZE, &block_size) &&
             block_size == MOS_DNODE_BLOCK_SIZE;
         if (valid) {
-            uint64_t shift = (level - 1) * 10;
-            uint64_t index = (block_id >> shift) & UINT64_C(0x3ff);
+            uint64_t shift = (level - 1) * 7;
+            uint64_t index = (block_id >> shift) & UINT64_C(0x7f);
             bp = level_block + index * 128;
         }
     }

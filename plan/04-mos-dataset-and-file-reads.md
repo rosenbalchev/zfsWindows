@@ -40,7 +40,9 @@ through the native ABI and C# wrapper. The genuine fixture confirms the
 directory dnode type, a 512-byte logical block, and the `ZBT_MICRO` header.
 Directory-entry lookup remains a follow-up because the decoded embedded block
 does not yet expose the `fixture.txt` entry expected from `zdb`; no unverified
-lookup behavior is included in this checkpoint.
+lookup behavior is included in this checkpoint. The filesystem dnode walker
+also now uses the OpenZFS 128-pointer indirect-block fanout (7 index bits per
+level), which is required once object numbers cross the first zero-index path.
 
 Commit: `native: read datasets directories and files`
 
