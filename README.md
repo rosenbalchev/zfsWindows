@@ -6,7 +6,7 @@ unchanged and is treated as the on-disk format and algorithm reference.
 
 ## Current status
 
-Milestone M3 is complete. The repository now contains:
+Milestone M4 is complete. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
@@ -31,6 +31,12 @@ manifest SHA-256 and deterministic range samples, enumerates every directory,
 and proves the image SHA-256 is unchanged.
 Compatibility claims are made only for behavior exercised against a genuine
 OpenZFS-generated image.
+
+Compression compatibility is verified with fourteen genuine OpenZFS 2.4.1
+images covering uncompressed blocks, LZJB, gzip levels 1–9, ZLE, LZ4, and
+Zstandard. Tests stream and hash 448 MiB of file content, cover a compression
+property change, report per-algorithm throughput, and prove every image remains
+byte-for-byte unchanged.
 
 Read-only recognition validates OpenZFS SHA-256 checksums on labels and
 uberblocks and Fletcher-4 checksums on referenced non-embedded metadata before
@@ -67,7 +73,10 @@ dotnet test ZfsWindows.sln
 The default managed tests do not require a driver, administrator rights, or
 real disk writes. Genuine-image tests use `ZFS_TEST_IMAGE` and
 `ZFS_STEP04_IMAGE` for development fixtures, or `ZFS_SINGLE_IMAGE` and
-`ZFS_SINGLE_MANIFEST` for the 5 GiB acceptance fixture.
+`ZFS_SINGLE_MANIFEST` for the 5 GiB acceptance fixture. Set
+`ZFS_COMPRESSION_IMAGES` to the directory containing compression `.raw` files
+and `ZFS_COMPRESSION_MANIFESTS` to `tests/fixtures/compression` to run the
+compression matrix.
 
 ## Safety
 

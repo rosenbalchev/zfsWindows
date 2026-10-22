@@ -240,7 +240,8 @@ static int feature_is_supported(const unsigned char *name, size_t length)
     static const char *supported[] = {
         "com.delphix:hole_birth",
         "com.delphix:embedded_data",
-        "com.klarasystems:vdev_zaps_v2"
+        "com.klarasystems:vdev_zaps_v2",
+        "org.freebsd:zstd_compress"
     };
     for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) {
         if (length == strlen(supported[i]) &&
@@ -391,7 +392,8 @@ static int zle_decompress(const unsigned char *source, size_t source_length,
             destination_offset += length;
         }
     }
-    return source_offset == source_length && destination_offset == destination_length;
+    /* Physical ZFS blocks are sector-aligned and may contain trailing padding. */
+    return destination_offset == destination_length;
 }
 
 static int lz4_decompress(const unsigned char *source, size_t source_length,

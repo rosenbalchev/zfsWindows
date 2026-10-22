@@ -95,11 +95,21 @@ static FileResult Write(string mount, FileSpec spec)
 static void Fill(Span<byte> bytes, Pattern pattern, Prng random, long position)
 {
     if (pattern == Pattern.Random) { random.Fill(bytes); return; }
+    if (pattern == Pattern.Highly)
+    {
+        bytes.Clear();
+        for (var index = 0; index < bytes.Length; ++index)
+        {
+            var absolute = position + index;
+            if (absolute % 4096 == 0)
+                bytes[index] = (byte)(1 + (absolute / 4096) % 251);
+        }
+        return;
+    }
     for (var index = 0; index < bytes.Length; ++index)
     {
         var absolute = position + index;
-        bytes[index] = pattern == Pattern.Highly ? (byte)('A' + (absolute / 4096) % 3) :
-            absolute % 64 < 48 ? (byte)('a' + absolute % 23) : random.NextByte();
+        bytes[index] = absolute % 64 < 48 ? (byte)('a' + absolute % 23) : random.NextByte();
     }
 }
 

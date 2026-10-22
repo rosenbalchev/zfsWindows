@@ -1,0 +1,50 @@
+{
+  "pool": "zc_off",
+  "poolGuid": 12171684238240453250,
+  "zfsVersion": "zfs-2.4.1-1ubuntu5.1",
+  "initialCompression": "off",
+  "changedCompression": "gzip-1",
+  "logicalUsedBytes": 25225728,
+  "physicalUsedBytes": 25296896,
+  "compressionRatio": "1.00x",
+  "imageSizeBytes": 536870912,
+  "imageSha256": "23DA4360B4BEA8FBC3D151E615BA700D26B172350E9878256B4589205FD9225F",
+  "files": [
+    {
+      "path": "/highly.bin",
+      "length": 8388608,
+      "sha256": "47825B43F10916804F5A5EA18A91C89292E2814994638908EA58F3E170A2B627",
+      "pattern": "highly",
+      "compression": "off",
+      "allocatedBytes": 8397312,
+      "writeMiBPerSecond": 149.07267479236972
+    },
+    {
+      "path": "/moderate.bin",
+      "length": 8388608,
+      "sha256": "6B3B2BB71C143B483FEA3CD3DB787670C9A3B2A20E741D2CA7E12CF2B8586896",
+      "pattern": "moderate",
+      "compression": "off",
+      "allocatedBytes": 512,
+      "writeMiBPerSecond": 147.44097753368104
+    },
+    {
+      "path": "/random.bin",
+      "length": 8388608,
+      "sha256": "199E9F6A1531A0DC3E588D85FD122E5CBEF88D5FF752F0E0FBEA303304A17DBE",
+      "pattern": "random",
+      "compression": "off",
+      "allocatedBytes": 6169088,
+      "writeMiBPerSecond": 135.65668007406853
+    },
+    {
+      "path": "/property-change/after.bin",
+      "length": 8388608,
+      "sha256": "47825B43F10916804F5A5EA18A91C89292E2814994638908EA58F3E170A2B627",
+      "pattern": "highly",
+      "compression": "gzip-1",
+      "allocatedBytes": 512,
+      "writeMiBPerSecond": 211.55849856933568
+    }
+  ]
+}
