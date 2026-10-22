@@ -16,6 +16,7 @@
 #define VDEV_UBERBLOCK_SLOT_SIZE (1ULL * 1024ULL)
 #define UBERBLOCK_MAGIC UINT64_C(0x00bab10c)
 #define ZEC_MAGIC UINT64_C(0x0210da7ab10c7a11)
+#define DMU_OT_DNODE 10U
 
 struct zfs_core_device {
     FILE *file;
@@ -146,6 +147,23 @@ static int decode_label(zfs_core_device_t *device, uint64_t label)
     return valid;
 }
 
+static int validate_mos_root(zfs_core_device_t *device)
+{
+    if (!device->mos_root_valid || device->mos_root_size < 512 ||
+        device->mos_root_size > SIZE_MAX) return 0;
+    size_t length = (size_t)device->mos_root_size;
+    unsigned char *block = (unsigned char *)malloc(length);
+    if (block == NULL || seek_u64(device->file, device->mos_root_offset) != 0 ||
+        fread(block, 1, length, device->file) != length) {
+        free(block); return 0;
+    }
+    /* The MOS root block is a dnode block. Each legacy dnode is 512 bytes. */
+    int valid = block[0] == DMU_OT_DNODE && block[2] >= 1 && block[2] <= 5 &&
+        block[3] >= 1 && block[3] <= 16 && (length % 512U) == 0;
+    free(block);
+    return valid;
+}
+
 static int seek_u64(FILE *file, uint64_t offset)
 {
 #if defined(_WIN32)
@@ -207,7 +225,8 @@ static void scan_uberblocks(zfs_core_device_t *device, uint64_t label)
             device->selected_uberblock_offset = offset;
             uint64_t dva_word = 0;
             uint64_t prop = 0;
-            memcpy(&dva_word, fields + 40, sizeof(dva_word));
+            /* DVA word 1 contains the sector offset; word 0 is asize/vdev. */
+            memcpy(&dva_word, fields + 48, sizeof(dva_word));
             memcpy(&prop, fields + 88, sizeof(prop));
             uint64_t dva_offset = (dva_word & UINT64_C(0x7fffffffffffffff)) << 9;
             uint64_t logical_size = (((prop >> 0) & UINT64_C(0xffff)) + 1) << 9;
@@ -257,6 +276,7 @@ zfs_core_status_t zfs_core_open_readonly(const char *path, zfs_core_device_t **d
             if (label_has_payload(file, label)) ++result->labels_found;
             if (decode_label(result, label)) scan_uberblocks(result, label);
         }
+        if (result->mos_root_valid) result->mos_root_valid = validate_mos_root(result);
     }
     (void)seek_u64(file, 0);
     *device = result;
