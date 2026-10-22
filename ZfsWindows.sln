@@ -15,6 +15,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zfs.FixtureGenerator", "tools\Zfs.FixtureGenerator\Zfs.FixtureGenerator.csproj", "{29B5BD31-A95E-4DC8-97B7-4FA6E45BF4FC}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zfs.CompressionFixtureGenerator", "tools\Zfs.CompressionFixtureGenerator\Zfs.CompressionFixtureGenerator.csproj", "{1C318024-A4CA-4FE5-A031-1C4894180E72}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -81,11 +83,24 @@ Global
 		{29B5BD31-A95E-4DC8-97B7-4FA6E45BF4FC}.Release|x64.Build.0 = Release|Any CPU
 		{29B5BD31-A95E-4DC8-97B7-4FA6E45BF4FC}.Release|x86.ActiveCfg = Release|Any CPU
 		{29B5BD31-A95E-4DC8-97B7-4FA6E45BF4FC}.Release|x86.Build.0 = Release|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Debug|x64.Build.0 = Debug|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Debug|x86.Build.0 = Debug|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Release|x64.ActiveCfg = Release|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Release|x64.Build.0 = Release|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Release|x86.ActiveCfg = Release|Any CPU
+		{1C318024-A4CA-4FE5-A031-1C4894180E72}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{29B5BD31-A95E-4DC8-97B7-4FA6E45BF4FC} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
+		{1C318024-A4CA-4FE5-A031-1C4894180E72} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 EndGlobal

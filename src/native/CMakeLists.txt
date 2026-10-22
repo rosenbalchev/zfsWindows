@@ -5,6 +5,13 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF)
 
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(../../third_party/zlib-1.3.2 ${CMAKE_BINARY_DIR}/zlib EXCLUDE_FROM_ALL)
+
+add_library(zstd_vendor STATIC ZfsCore/zstd_decompress.c)
+target_include_directories(zstd_vendor PUBLIC ../../OpenZFS/module/zstd/lib)
+target_compile_definitions(zstd_vendor PRIVATE ZSTD_DISABLE_ASM)
+
 add_library(ZfsCore SHARED
     ZfsCore/zfs_core.c
     ZfsCore/zfs_core.h
@@ -12,7 +19,12 @@ add_library(ZfsCore SHARED
 )
 target_compile_definitions(ZfsCore PRIVATE ZFS_CORE_BUILD)
 target_include_directories(ZfsCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ZfsCore)
-target_link_libraries(ZfsCore PRIVATE bcrypt)
+target_include_directories(ZfsCore PRIVATE
+    ${CMAKE_BINARY_DIR}/zlib
+    ../../third_party/zlib-1.3.2
+    ../../OpenZFS/module/zstd/lib
+)
+target_link_libraries(ZfsCore PRIVATE bcrypt zlibstatic zstd_vendor)
 if (MSVC)
     target_compile_options(ZfsCore PRIVATE /W4 /WX)
 else()

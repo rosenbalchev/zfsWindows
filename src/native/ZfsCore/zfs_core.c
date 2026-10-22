@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <zlib.h>
+#define ZSTD_STATIC_LINKING_ONLY
+#include <zstd.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -403,6 +406,87 @@ static int lz4_decompress(const unsigned char *source, size_t source_length,
     return decoded == (int)destination_length;
 }
 
+static int lzjb_decompress(const unsigned char *source, size_t source_length,
+    unsigned char *destination, size_t destination_length)
+{
+    size_t source_offset = 0;
+    size_t destination_offset = 0;
+    unsigned int copy_map = 0;
+    unsigned int copy_mask = 1U << 7;
+    while (destination_offset < destination_length) {
+        if ((copy_mask <<= 1) == (1U << 8)) {
+            if (source_offset >= source_length) return 0;
+            copy_mask = 1;
+            copy_map = source[source_offset++];
+        }
+        if (copy_map & copy_mask) {
+            if (source_length - source_offset < 2) return 0;
+            size_t match_length = (source[source_offset] >> 2) + 3;
+            size_t match_offset = (((size_t)source[source_offset] << 8) |
+                source[source_offset + 1]) & 1023U;
+            source_offset += 2;
+            if (match_offset == 0 || match_offset > destination_offset)
+                return 0;
+            while (match_length-- > 0 && destination_offset < destination_length) {
+                destination[destination_offset] =
+                    destination[destination_offset - match_offset];
+                ++destination_offset;
+            }
+        } else {
+            if (source_offset >= source_length) return 0;
+            destination[destination_offset++] = source[source_offset++];
+        }
+    }
+    return 1;
+}
+
+static int gzip_decompress(const unsigned char *source, size_t source_length,
+    unsigned char *destination, size_t destination_length)
+{
+    if (source_length > ULONG_MAX || destination_length > ULONG_MAX) return 0;
+    uLongf decoded_length = (uLongf)destination_length;
+    return uncompress(destination, &decoded_length, source,
+        (uLong)source_length) == Z_OK && decoded_length == destination_length;
+}
+
+static int zstd_decompress(const unsigned char *source, size_t source_length,
+    unsigned char *destination, size_t destination_length)
+{
+    if (source_length < 8) return 0;
+    uint32_t compressed_length = be32(source);
+    if (compressed_length > source_length - 8) return 0;
+    ZSTD_DCtx *context = ZSTD_createDCtx();
+    if (context == NULL || ZSTD_isError(ZSTD_DCtx_setParameter(context,
+            ZSTD_d_format, ZSTD_f_zstd1_magicless))) {
+        ZSTD_freeDCtx(context); return 0;
+    }
+    size_t decoded = ZSTD_decompressDCtx(context, destination,
+        destination_length, source + 8, compressed_length);
+    ZSTD_freeDCtx(context);
+    return !ZSTD_isError(decoded) && decoded == destination_length;
+}
+
+static int decompress_block(uint64_t compression, const unsigned char *source,
+    size_t source_length, unsigned char *destination, size_t destination_length)
+{
+    if (compression == 2) {
+        if (source_length != destination_length) return 0;
+        memcpy(destination, source, destination_length);
+        return 1;
+    }
+    if (compression == 3) return lzjb_decompress(source, source_length,
+        destination, destination_length);
+    if (compression >= 5 && compression <= 13) return gzip_decompress(source,
+        source_length, destination, destination_length);
+    if (compression == 14) return zle_decompress(source, source_length,
+        destination, destination_length);
+    if (compression == 15) return lz4_decompress(source, source_length,
+        destination, destination_length);
+    if (compression == 16) return zstd_decompress(source, source_length,
+        destination, destination_length);
+    return 0;
+}
+
 static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp,
     unsigned char *destination, size_t capacity, size_t *logical_size_out)
 {
@@ -423,13 +507,8 @@ static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp
         }
         if (logical_size > capacity || physical_size > sizeof(payload) ||
             ((prop >> 40) & UINT64_C(0xff)) != 0) return 0;
-        int decoded = compression == 2 ?
-            (physical_size == logical_size ?
-                (memcpy(destination, payload, (size_t)logical_size), 1) : 0) :
-            compression == 14 ? zle_decompress(payload, (size_t)physical_size,
-                destination, (size_t)logical_size) :
-            compression == 15 ? lz4_decompress(payload, (size_t)physical_size,
-                destination, (size_t)logical_size) : 0;
+        int decoded = decompress_block(compression, payload,
+            (size_t)physical_size, destination, (size_t)logical_size);
         if (decoded && logical_size_out != NULL) *logical_size_out = (size_t)logical_size;
         return decoded;
     }
@@ -439,8 +518,8 @@ static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp
     uint64_t offset = VDEV_LABEL_START_SIZE_FULL +
         ((dva_word & UINT64_C(0x7fffffffffffffff)) << 9);
     int valid = physical_size >= 512 && physical_size <= logical_size &&
-        (compression == 2 /* uncompressed */ || compression == 14 /* ZLE */ ||
-        compression == 15 /* LZ4 */);
+        (compression == 2 || compression == 3 ||
+        (compression >= 5 && compression <= 16));
     if (!valid || logical_size > capacity || offset > device->size_bytes ||
         physical_size > device->size_bytes - offset ||
         logical_size > SIZE_MAX) {
@@ -454,13 +533,8 @@ static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp
     if (!block_pointer_checksum_valid(bp, compressed, (size_t)physical_size)) {
         free(compressed); return 0;
     }
-    int decoded = compression == 2 ?
-        (physical_size == logical_size && (memcpy(destination, compressed,
-            (size_t)logical_size), 1)) :
-        compression == 14 ? zle_decompress(compressed, (size_t)physical_size,
-            destination, (size_t)logical_size) :
-        lz4_decompress(compressed, (size_t)physical_size, destination,
-            (size_t)logical_size);
+    int decoded = decompress_block(compression, compressed,
+        (size_t)physical_size, destination, (size_t)logical_size);
     free(compressed);
     if (decoded && logical_size_out != NULL) *logical_size_out = (size_t)logical_size;
     return decoded;

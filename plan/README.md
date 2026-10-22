@@ -42,7 +42,7 @@ verification and update the step rather than creating duplicate work.
 | 03 | `03-uberblocks-and-pool-recognition.md` | Label nvlist and uberblocks | complete |
 | 04 | `04-mos-dataset-and-file-reads.md` | MOS, datasets, directories, files | complete |
 | 05 | `05-genuine-single-disk-fixture.md` | 5 GiB fixture and hashes | complete |
-| 06 | `06-compression.md` | Compression compatibility | planned |
+| 06 | `06-compression.md` | Compression compatibility | in-progress |
 | 07 | `07-scale-stress-and-benchmarks.md` | Small-file scale and measurement | planned |
 | 08 | `08-mirrors.md` | Mirror reads, degradation, recovery | planned |
 | 09 | `09-snapshots.md` | Snapshot discovery and historical reads | planned |

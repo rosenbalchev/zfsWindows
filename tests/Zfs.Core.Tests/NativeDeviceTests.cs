@@ -52,13 +52,12 @@ public sealed class NativeDeviceTests
         }
     }
 
-    [Fact]
+    [RequiresEnvironmentFact("ZFS_TEST_IMAGE")]
     [Trait("Category", "Integration")]
     public void GenuineOpenZfsImageIsRecognizedReadOnly()
     {
         var image = Environment.GetEnvironmentVariable("ZFS_TEST_IMAGE");
-        if (string.IsNullOrWhiteSpace(image) || !File.Exists(image))
-            throw SkipException.ForSkip("Set ZFS_TEST_IMAGE to an exported OpenZFS raw image.");
+        Assert.NotNull(image);
         var before = SHA256.HashData(File.ReadAllBytes(image));
         using var device = ZfsReadOnlyDevice.Open(image);
         Assert.True(device.Info.VdevLabelsFound > 0);
@@ -110,13 +109,12 @@ public sealed class NativeDeviceTests
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }
 
-    [Fact]
+    [RequiresEnvironmentFact("ZFS_STEP04_IMAGE")]
     [Trait("Category", "Integration")]
     public void MultiBlockAndSparseFilesAreReadExactly()
     {
         var image = Environment.GetEnvironmentVariable("ZFS_STEP04_IMAGE");
-        if (string.IsNullOrWhiteSpace(image) || !File.Exists(image))
-            throw SkipException.ForSkip("Set ZFS_STEP04_IMAGE to the Step 04 OpenZFS fixture.");
+        Assert.NotNull(image);
         var before = SHA256.HashData(File.ReadAllBytes(image));
         using var device = ZfsReadOnlyDevice.Open(image);
 

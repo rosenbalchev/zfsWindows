@@ -2,21 +2,19 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Zfs.Interop;
 using Xunit;
-using Xunit.Sdk;
 
 namespace Zfs.Core.Tests;
 
 public sealed class SingleDiskFixtureTests
 {
-    [Fact]
+    [RequiresEnvironmentFact("ZFS_SINGLE_IMAGE", "ZFS_SINGLE_MANIFEST")]
     [Trait("Category", "Integration")]
     public void GenuineFiveGiBFixtureMatchesManifest()
     {
         var image = Environment.GetEnvironmentVariable("ZFS_SINGLE_IMAGE");
         var manifestPath = Environment.GetEnvironmentVariable("ZFS_SINGLE_MANIFEST");
-        if (string.IsNullOrWhiteSpace(image) || !File.Exists(image) ||
-            string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
-            throw SkipException.ForSkip("Set ZFS_SINGLE_IMAGE and ZFS_SINGLE_MANIFEST for the 5 GiB fixture.");
+        Assert.NotNull(image);
+        Assert.NotNull(manifestPath);
 
         var manifest = JsonSerializer.Deserialize<FixtureManifest>(File.ReadAllText(manifestPath),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ??
