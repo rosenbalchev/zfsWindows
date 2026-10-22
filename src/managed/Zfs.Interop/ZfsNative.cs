@@ -77,6 +77,13 @@ internal static partial class NativeMethods
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_lookup_root_filesystem_master", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial ZfsStatus LookupRootFilesystemMaster(nint device, string name, out ulong value);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_root_filesystem_object_dnode_block")]
+    internal static partial ZfsStatus ReadRootFilesystemObjectDnodeBlock(nint device, ulong objectNumber,
+        nint buffer, ulong length, out ulong bytesRead);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_root_directory_data_block")]
+    internal static partial ZfsStatus ReadRootDirectoryDataBlock(nint device, nint buffer, ulong length, out ulong bytesRead);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -212,6 +219,37 @@ public sealed class ZfsReadOnlyDevice : IDisposable
         var status = NativeMethods.LookupRootFilesystemMaster(_handle, name, out var value);
         if (status != ZfsStatus.Ok) throw new IOException($"Filesystem master lookup failed: {status}");
         return value;
+    }
+
+    public byte[] ReadRootFilesystemObjectDnodeBlock(ulong objectNumber)
+    {
+        const int capacity = 128 * 1024;
+        var buffer = new byte[capacity];
+        var pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            var status = NativeMethods.ReadRootFilesystemObjectDnodeBlock(_handle, objectNumber,
+                pinned.AddrOfPinnedObject(), (ulong)buffer.Length, out var bytesRead);
+            if (status != ZfsStatus.Ok) throw new IOException($"Filesystem object dnode read failed: {status}");
+            if (bytesRead == 0 || bytesRead > (ulong)buffer.Length) throw new EndOfStreamException();
+            return buffer[..(int)bytesRead];
+        }
+        finally { pinned.Free(); }
+    }
+
+    public byte[] ReadRootDirectoryDataBlock()
+    {
+        const int capacity = 128 * 1024;
+        var buffer = new byte[capacity];
+        var pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            var status = NativeMethods.ReadRootDirectoryDataBlock(_handle,
+                pinned.AddrOfPinnedObject(), (ulong)buffer.Length, out var bytesRead);
+            if (status != ZfsStatus.Ok) throw new IOException($"Root directory data read failed: {status}");
+            return buffer[..(int)bytesRead];
+        }
+        finally { pinned.Free(); }
     }
 
     public void Dispose()

@@ -250,6 +250,31 @@ static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp
 {
     uint64_t dva_word = load_u64(bp + 8);
     uint64_t prop = load_u64(bp + 48);
+    if ((prop >> 39) & UINT64_C(1)) {
+        uint64_t logical_size = (prop & UINT64_C(0x1ffffff)) + 1;
+        uint64_t physical_size = ((prop >> 25) & UINT64_C(0x7f)) + 1;
+        uint64_t compression = (prop >> 32) & UINT64_C(0x7f);
+        unsigned char payload[112];
+        size_t payload_offset = 0;
+        for (size_t word = 0; word < 16 && payload_offset < sizeof(payload); ++word) {
+            if (word == 6 || word == 15) continue;
+            size_t remaining = sizeof(payload) - payload_offset;
+            size_t copy_length = remaining < 8 ? remaining : 8;
+            memcpy(payload + payload_offset, bp + word * 8, copy_length);
+            payload_offset += copy_length;
+        }
+        if (logical_size > capacity || physical_size > sizeof(payload) ||
+            ((prop >> 40) & UINT64_C(0xff)) != 0) return 0;
+        int decoded = compression == 2 ?
+            (physical_size == logical_size ?
+                (memcpy(destination, payload, (size_t)logical_size), 1) : 0) :
+            compression == 14 ? zle_decompress(payload, (size_t)physical_size,
+                destination, (size_t)logical_size) :
+            compression == 15 ? lz4_decompress(payload, (size_t)physical_size,
+                destination, (size_t)logical_size) : 0;
+        if (decoded && logical_size_out != NULL) *logical_size_out = (size_t)logical_size;
+        return decoded;
+    }
     uint64_t physical_size = (((prop >> 16) & UINT64_C(0xffff)) + 1) << 9;
     uint64_t logical_size = ((prop & UINT64_C(0xffff)) + 1) << 9;
     uint64_t compression = (prop >> 32) & UINT64_C(0x7f);
@@ -400,6 +425,7 @@ static int read_filesystem_object_dnode_block(zfs_core_device_t *device,
         free(level_block); free(objset_root); return 0;
     }
     const unsigned char *bp = objset_root + 64;
+    uint64_t block_id = object / 32;
     int valid = 1;
     while (valid) {
         uint64_t prop = load_u64(bp + 48);
@@ -411,24 +437,28 @@ static int read_filesystem_object_dnode_block(zfs_core_device_t *device,
         size_t block_size = 0;
         valid = read_block_pointer(device, bp, level_block, MOS_DNODE_BLOCK_SIZE, &block_size) &&
             block_size == MOS_DNODE_BLOCK_SIZE;
-        if (valid) bp = level_block;
+        if (valid) {
+            uint64_t shift = (level - 1) * 10;
+            uint64_t index = (block_id >> shift) & UINT64_C(0x3ff);
+            bp = level_block + index * 128;
+        }
     }
     free(level_block);
     free(objset_root);
-    (void)object; /* object 1 is in dnode data block 0; generalized indexing follows. */
     return valid;
 }
 
-static int read_filesystem_master_zap(zfs_core_device_t *device,
+static int read_filesystem_object_zap(zfs_core_device_t *device, uint64_t object,
+    uint8_t object_type,
     unsigned char *destination, size_t capacity, size_t *logical_size_out)
 {
     unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
-    if (dnode_block == NULL || !read_filesystem_object_dnode_block(device, 1,
+    if (dnode_block == NULL || !read_filesystem_object_dnode_block(device, object,
         dnode_block, 16 * 1024, logical_size_out)) {
         free(dnode_block); return 0;
     }
-    const unsigned char *dnode = dnode_block + 512;
-    int valid = dnode[0] == 21 /* DMU_OT_MASTER_NODE */ && dnode[3] >= 1 && dnode[3] <= 3;
+    const unsigned char *dnode = dnode_block + (object % 32) * 512;
+    int valid = dnode[0] == object_type && dnode[3] >= 1 && dnode[3] <= 3;
     size_t data_size = 0;
     if (valid) valid = read_block_pointer(device, dnode + 64, destination,
         capacity, &data_size);
@@ -437,13 +467,13 @@ static int read_filesystem_master_zap(zfs_core_device_t *device,
     return valid;
 }
 
-static int lookup_master_microzap(zfs_core_device_t *device,
-    const char *name, uint64_t *value)
+static int lookup_filesystem_microzap(zfs_core_device_t *device, uint64_t object,
+    uint8_t object_type, const char *name, uint64_t *value)
 {
     unsigned char *block = (unsigned char *)malloc(16 * 1024);
     size_t block_size = 0;
-    int valid = block != NULL && read_filesystem_master_zap(device, block,
-        16 * 1024, &block_size) && block_size >= 64 && block[0] == 3;
+    int valid = block != NULL && read_filesystem_object_zap(device, object,
+        object_type, block, 16 * 1024, &block_size) && block_size >= 64 && block[0] == 3;
     if (valid) {
         for (size_t offset = 64; offset + 64 <= block_size; offset += 64) {
             const char *entry_name = (const char *)(block + offset + 14);
@@ -807,7 +837,38 @@ zfs_core_status_t zfs_core_lookup_root_filesystem_master(
 {
     if (device == NULL || name == NULL || value == NULL) return ZFS_CORE_INVALID_ARGUMENT;
     *value = 0;
-    return lookup_master_microzap((zfs_core_device_t *)device, name, value) ?
+    return lookup_filesystem_microzap((zfs_core_device_t *)device, 1, 21,
+        name, value) ?
         ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
+}
+
+zfs_core_status_t zfs_core_read_root_filesystem_object_dnode_block(
+    const zfs_core_device_t *device, uint64_t object, void *buffer,
+    uint64_t length, uint64_t *bytes_read)
+{
+    if (device == NULL || buffer == NULL || bytes_read == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *bytes_read = 0;
+    if (length < MOS_DNODE_BLOCK_SIZE) return ZFS_CORE_OUT_OF_RANGE;
+    size_t logical_size = 0;
+    if (!read_filesystem_object_dnode_block((zfs_core_device_t *)device, object,
+        (unsigned char *)buffer, (size_t)length, &logical_size))
+        return ZFS_CORE_CORRUPT_METADATA;
+    *bytes_read = logical_size;
+    return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_read_root_directory_data_block(
+    const zfs_core_device_t *device, void *buffer, uint64_t length,
+    uint64_t *bytes_read)
+{
+    if (device == NULL || buffer == NULL || bytes_read == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *bytes_read = 0;
+    if (length < MOS_DNODE_BLOCK_SIZE) return ZFS_CORE_OUT_OF_RANGE;
+    size_t logical_size = 0;
+    if (!read_filesystem_object_zap((zfs_core_device_t *)device, 34, 20,
+        (unsigned char *)buffer, (size_t)length, &logical_size))
+        return ZFS_CORE_CORRUPT_METADATA;
+    *bytes_read = logical_size;
+    return ZFS_CORE_OK;
 }
 

@@ -34,7 +34,13 @@ node block (object 1), validated as a ZFS master-node dnode. The current Visual
 Studio installation is temporarily incomplete for CMake manifest linking
 (`rc.exe` is missing), so this checkpoint was additionally verified with the
 available MSVC compiler/linker directly. The master-node micro-ZAP now resolves
-`ROOT` to object 34.
+`ROOT` to object 34. Filesystem dnode indexing is now generalized beyond object
+1, and object 34's directory dnode and embedded LZ4 data block can be read
+through the native ABI and C# wrapper. The genuine fixture confirms the
+directory dnode type, a 512-byte logical block, and the `ZBT_MICRO` header.
+Directory-entry lookup remains a follow-up because the decoded embedded block
+does not yet expose the `fixture.txt` entry expected from `zdb`; no unverified
+lookup behavior is included in this checkpoint.
 
 Commit: `native: read datasets directories and files`
 
