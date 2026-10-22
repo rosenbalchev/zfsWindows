@@ -27,6 +27,12 @@ typedef struct zfs_core_object_info {
     uint32_t type;
 } zfs_core_object_info_t;
 
+typedef struct zfs_core_snapshot_info {
+    uint64_t dataset_object;
+    uint64_t creation_txg;
+    uint64_t guid;
+} zfs_core_snapshot_info_t;
+
 typedef enum zfs_core_status {
     ZFS_CORE_OK = 0,
     ZFS_CORE_INVALID_ARGUMENT = 1,
@@ -125,6 +131,15 @@ ZFS_CORE_API zfs_core_status_t zfs_core_get_root_file_size(
     const zfs_core_device_t *device, uint64_t object, uint64_t *size);
 ZFS_CORE_API zfs_core_status_t zfs_core_open_default_dataset(
     zfs_core_device_t *device, zfs_core_dataset_t **dataset);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_snapshot_count(
+    zfs_core_device_t *device, uint64_t *count);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_snapshot(
+    zfs_core_device_t *device, uint64_t index, char *name,
+    uint64_t name_capacity, uint64_t *name_bytes,
+    zfs_core_snapshot_info_t *info);
+ZFS_CORE_API zfs_core_status_t zfs_core_open_snapshot_dataset(
+    zfs_core_device_t *device, const char *name,
+    zfs_core_dataset_t **dataset);
 ZFS_CORE_API void zfs_core_close_dataset(zfs_core_dataset_t *dataset);
 ZFS_CORE_API zfs_core_status_t zfs_core_open_dataset_root(
     zfs_core_dataset_t *dataset, zfs_core_object_t **object);

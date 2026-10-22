@@ -37,8 +37,10 @@ int LZ4_uncompress_unknownOutputSize(const char *source, char *destination,
 static uint16_t load_u16(const unsigned char *p);
 static uint32_t load_u32(const unsigned char *p);
 static int read_sa_file_size(zfs_core_device_t *device,
-    const unsigned char *dnode, size_t bonus_offset, uint16_t bonus_length,
-    uint64_t *file_size);
+    uint64_t dataset_object, const unsigned char *dnode, size_t bonus_offset,
+    uint16_t bonus_length, uint64_t *file_size);
+static int read_default_dataset_info(zfs_core_device_t *device,
+    uint64_t *dsl_directory_object, zfs_core_dsl_dir_info_t *dataset_info);
 
 struct zfs_core_device {
     FILE *file;
@@ -73,6 +75,7 @@ struct zfs_core_dataset {
 
 struct zfs_core_object {
     zfs_core_device_t *device;
+    uint64_t dataset_object;
     uint64_t object_number;
     uint32_t type;
 };
@@ -659,7 +662,8 @@ static int read_dsl_dir_info(zfs_core_device_t *device, uint64_t object,
     }
     const unsigned char *dnode = dnode_block + (object % 32) * 512;
     size_t bonus_offset = 64 + (size_t)dnode[3] * 128;
-    int valid = dnode[0] == 12 /* DMU_OT_DSL_DIR */ && dnode[3] <= 3 &&
+    /* DSL directories can also be zapified; the bonus type remains stable. */
+    int valid = dnode[4] == 12 /* DMU_OT_DSL_DIR bonus */ && dnode[3] <= 3 &&
         bonus_offset + 256 <= 512;
     if (valid) {
         info->head_dataset_obj = load_u64(dnode + bonus_offset + 8);
@@ -707,6 +711,63 @@ static int lookup_mos_microzap(zfs_core_device_t *device, uint64_t object,
     return valid && *value != 0;
 }
 
+static int read_mos_microzap_block(zfs_core_device_t *device, uint64_t object,
+    uint8_t object_type, unsigned char *block, size_t capacity,
+    size_t *block_size)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
+    if (dnode_block == NULL || block == NULL || block_size == NULL ||
+        !read_mos_dnode_block_for_object(device, object, dnode_block,
+            16 * 1024)) {
+        free(dnode_block); return 0;
+    }
+    const unsigned char *dnode = dnode_block + (object % 32) * 512;
+    int valid = dnode[0] == object_type && dnode[2] == 1 &&
+        dnode[3] >= 1 && dnode[3] <= 3 &&
+        read_block_pointer(device, dnode + 64, block, capacity, block_size) &&
+        *block_size >= 64 && load_u64(block) == ZBT_MICRO;
+    free(dnode_block);
+    return valid;
+}
+
+static int read_dsl_dataset_metadata(zfs_core_device_t *device,
+    uint64_t dataset_object, uint64_t *snapnames_object,
+    uint64_t *creation_txg, uint64_t *guid)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
+    if (dnode_block == NULL || dataset_object == 0 ||
+        !read_mos_dnode_block_for_object(device, dataset_object,
+            dnode_block, 16 * 1024)) {
+        free(dnode_block); return 0;
+    }
+    const unsigned char *dnode = dnode_block + (dataset_object % 32) * 512;
+    size_t bonus_offset = 64 + (size_t)dnode[3] * 128;
+    /* Dataset objects can be zapified for per-dataset feature fields, which
+       changes dn_type while preserving the authoritative bonus type. */
+    int valid = dnode[4] == 16 /* DMU_OT_DSL_DATASET bonus */ &&
+        dnode[3] >= 1 && dnode[3] <= 3 &&
+        bonus_offset + 128 <= 512;
+    if (valid) {
+        if (snapnames_object != NULL)
+            *snapnames_object = load_u64(dnode + bonus_offset + 32);
+        if (creation_txg != NULL)
+            *creation_txg = load_u64(dnode + bonus_offset + 56);
+        if (guid != NULL) *guid = load_u64(dnode + bonus_offset + 112);
+    }
+    free(dnode_block);
+    return valid;
+}
+
+static int get_snapshot_map(zfs_core_device_t *device, uint64_t *map_object)
+{
+    zfs_core_dsl_dir_info_t info;
+    uint64_t directory_object = 0;
+    return map_object != NULL &&
+        read_default_dataset_info(device, &directory_object, &info) &&
+        read_dsl_dataset_metadata(device, info.head_dataset_obj,
+            map_object, NULL, NULL) && *map_object != 0;
+}
+
 static int read_dataset_objset_root(zfs_core_device_t *device,
     uint64_t dataset_object,
     unsigned char *destination, size_t capacity, size_t *logical_size_out)
@@ -752,13 +813,16 @@ static int read_root_dataset_objset_root(zfs_core_device_t *device,
 }
 
 static int read_filesystem_object_dnode_block(zfs_core_device_t *device,
-    uint64_t object, unsigned char *destination, size_t capacity,
+    uint64_t dataset_object, uint64_t object, unsigned char *destination, size_t capacity,
     size_t *logical_size_out)
 {
     unsigned char *objset_root = (unsigned char *)malloc(16 * 1024);
     unsigned char *level_block = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
     if (objset_root == NULL || level_block == NULL ||
-        !read_root_dataset_objset_root(device, objset_root, 16 * 1024, logical_size_out)) {
+        !((dataset_object == 0 ? read_root_dataset_objset_root(device,
+            objset_root, 16 * 1024, logical_size_out) :
+            read_dataset_objset_root(device, dataset_object, objset_root,
+                16 * 1024, logical_size_out)))) {
         free(level_block); free(objset_root); return 0;
     }
     const unsigned char *bp = objset_root + 64;
@@ -785,12 +849,13 @@ static int read_filesystem_object_dnode_block(zfs_core_device_t *device,
     return valid;
 }
 
-static int read_filesystem_object_zap(zfs_core_device_t *device, uint64_t object,
-    uint8_t object_type,
+static int read_filesystem_object_zap(zfs_core_device_t *device,
+    uint64_t dataset_object, uint64_t object, uint8_t object_type,
     unsigned char *destination, size_t capacity, size_t *logical_size_out)
 {
     unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
-    if (dnode_block == NULL || !read_filesystem_object_dnode_block(device, object,
+    if (dnode_block == NULL || !read_filesystem_object_dnode_block(device,
+        dataset_object, object,
         dnode_block, 16 * 1024, logical_size_out)) {
         free(dnode_block); return 0;
     }
@@ -804,8 +869,9 @@ static int read_filesystem_object_zap(zfs_core_device_t *device, uint64_t object
     return valid;
 }
 
-static int lookup_filesystem_microzap(zfs_core_device_t *device, uint64_t object,
-    uint8_t object_type, const char *name, uint64_t *value)
+static int lookup_filesystem_microzap(zfs_core_device_t *device,
+    uint64_t dataset_object, uint64_t object, uint8_t object_type,
+    const char *name, uint64_t *value)
 {
     if (name == NULL || value == NULL) return 0;
     *value = 0;
@@ -813,7 +879,7 @@ static int lookup_filesystem_microzap(zfs_core_device_t *device, uint64_t object
     if (name_length == 0 || name_length > 50) return 0;
     unsigned char *block = (unsigned char *)malloc(16 * 1024);
     size_t block_size = 0;
-    int valid = block != NULL && read_filesystem_object_zap(device, object,
+    int valid = block != NULL && read_filesystem_object_zap(device, dataset_object, object,
         object_type, block, 16 * 1024, &block_size) && block_size >= 64 &&
         load_u64(block) == ZBT_MICRO;
     if (valid) {
@@ -833,9 +899,10 @@ static int lookup_filesystem_microzap(zfs_core_device_t *device, uint64_t object
 }
 
 static int read_directory_microzap(zfs_core_device_t *device,
-    uint64_t directory, unsigned char *block, size_t *block_size)
+    uint64_t dataset_object, uint64_t directory, unsigned char *block,
+    size_t *block_size)
 {
-    return read_filesystem_object_zap(device, directory, 20, block,
+    return read_filesystem_object_zap(device, dataset_object, directory, 20, block,
         16 * 1024, block_size) && *block_size >= 64 &&
         load_u64(block) == ZBT_MICRO;
 }
@@ -868,12 +935,12 @@ static int block_pointer_is_hole(const unsigned char *bp)
     return 1;
 }
 
-static int get_root_file_size(zfs_core_device_t *device, uint64_t object,
-    uint64_t *file_size)
+static int get_root_file_size(zfs_core_device_t *device,
+    uint64_t dataset_object, uint64_t object, uint64_t *file_size)
 {
     unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
     if (dnode_block == NULL || file_size == NULL ||
-        !read_filesystem_object_dnode_block(device, object, dnode_block,
+        !read_filesystem_object_dnode_block(device, dataset_object, object, dnode_block,
             16 * 1024, NULL)) {
         free(dnode_block); return 0;
     }
@@ -883,14 +950,15 @@ static int get_root_file_size(zfs_core_device_t *device, uint64_t object,
     int valid = dnode[0] == 19 /* DMU_OT_PLAIN_FILE_CONTENTS */ &&
         dnode[2] >= 1 && dnode[2] <= 6 && dnode[3] >= 1 && dnode[3] <= 3 &&
         dnode[4] == 44 /* DMU_OT_SA */ && bonus_offset + bonus_length <= 512 &&
-        bonus_length >= 8 && read_sa_file_size(device, dnode, bonus_offset,
+        bonus_length >= 8 && read_sa_file_size(device, dataset_object, dnode, bonus_offset,
             bonus_length, file_size);
     free(dnode_block);
     return valid;
 }
 
-static int read_root_file_range(zfs_core_device_t *device, uint64_t object,
-    uint64_t file_offset, unsigned char *destination, size_t requested,
+static int read_root_file_range(zfs_core_device_t *device,
+    uint64_t dataset_object, uint64_t object, uint64_t file_offset,
+    unsigned char *destination, size_t requested,
     size_t *bytes_read_out)
 {
     unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
@@ -898,7 +966,7 @@ static int read_root_file_range(zfs_core_device_t *device, uint64_t object,
     unsigned char *indirect = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
     if (dnode_block == NULL || data_block == NULL || indirect == NULL || destination == NULL ||
         bytes_read_out == NULL || !read_filesystem_object_dnode_block(device,
-            object, dnode_block, 16 * 1024, NULL)) {
+            dataset_object, object, dnode_block, 16 * 1024, NULL)) {
         free(indirect); free(data_block); free(dnode_block); return 0;
     }
     const unsigned char *dnode = dnode_block + (object % 32) * 512;
@@ -909,7 +977,7 @@ static int read_root_file_range(zfs_core_device_t *device, uint64_t object,
         dnode[4] == 44 /* DMU_OT_SA */ && bonus_offset + bonus_length <= 512 &&
         bonus_length >= 8 && dnode[1] >= 8 && dnode[1] <= 24;
     uint64_t file_size = 0;
-    if (valid) valid = read_sa_file_size(device, dnode, bonus_offset,
+    if (valid) valid = read_sa_file_size(device, dataset_object, dnode, bonus_offset,
         bonus_length, &file_size);
     uint64_t data_block_size = (uint64_t)load_u16(dnode + 8) << 9;
     uint8_t fanout_bits = (uint8_t)(dnode[1] - 7);
@@ -972,13 +1040,14 @@ static int read_root_file_range(zfs_core_device_t *device, uint64_t object,
     return valid;
 }
 
-static int read_root_file(zfs_core_device_t *device, uint64_t object,
-    unsigned char *destination, size_t capacity, size_t *file_size_out)
+static int read_root_file(zfs_core_device_t *device, uint64_t dataset_object,
+    uint64_t object, unsigned char *destination, size_t capacity,
+    size_t *file_size_out)
 {
     uint64_t file_size = 0;
-    return get_root_file_size(device, object, &file_size) &&
+    return get_root_file_size(device, dataset_object, object, &file_size) &&
         file_size <= capacity && file_size <= SIZE_MAX &&
-        read_root_file_range(device, object, 0, destination,
+        read_root_file_range(device, dataset_object, object, 0, destination,
             (size_t)file_size, file_size_out);
 }
 
@@ -1077,14 +1146,14 @@ static int zap_find_uint16_array(const unsigned char *block,
 }
 
 static int lookup_filesystem_fatzap_uint16_array(zfs_core_device_t *device,
-    uint64_t object, uint8_t object_type, const char *name, uint16_t *values,
-    size_t capacity, size_t *count)
+    uint64_t dataset_object, uint64_t object, uint8_t object_type,
+    const char *name, uint16_t *values, size_t capacity, size_t *count)
 {
     unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
     unsigned char *zap_block = (unsigned char *)malloc(16 * 1024);
     if (dnode_block == NULL || zap_block == NULL || name == NULL ||
         values == NULL || count == NULL ||
-        !read_filesystem_object_dnode_block(device, object, dnode_block,
+        !read_filesystem_object_dnode_block(device, dataset_object, object, dnode_block,
             16 * 1024, NULL)) {
         free(zap_block); free(dnode_block); return 0;
     }
@@ -1114,8 +1183,8 @@ static uint16_t zpl_attribute_size(uint16_t attribute)
 }
 
 static int read_sa_file_size(zfs_core_device_t *device,
-    const unsigned char *dnode, size_t bonus_offset, uint16_t bonus_length,
-    uint64_t *file_size)
+    uint64_t dataset_object, const unsigned char *dnode, size_t bonus_offset,
+    uint16_t bonus_length, uint64_t *file_size)
 {
     const unsigned char *bonus = dnode + bonus_offset;
     if (load_u32(bonus) != UINT32_C(0x002f505a)) return 0;
@@ -1129,10 +1198,10 @@ static int read_sa_file_size(zfs_core_device_t *device,
     char layout_name[16];
     if (header_size < 8 || header_size > bonus_length ||
         sprintf_s(layout_name, sizeof(layout_name), "%u", layout_number) < 0 ||
-        !lookup_filesystem_microzap(device, 1, 21, "SA_ATTRS", &sa_master) ||
-        !lookup_filesystem_microzap(device, sa_master, 45, "LAYOUTS",
+        !lookup_filesystem_microzap(device, dataset_object, 1, 21, "SA_ATTRS", &sa_master) ||
+        !lookup_filesystem_microzap(device, dataset_object, sa_master, 45, "LAYOUTS",
             &layouts_object) ||
-        !lookup_filesystem_fatzap_uint16_array(device, layouts_object, 47,
+        !lookup_filesystem_fatzap_uint16_array(device, dataset_object, layouts_object, 47,
             layout_name, attributes,
             sizeof(attributes) / sizeof(attributes[0]), &attribute_count))
         return 0;
@@ -1485,7 +1554,7 @@ zfs_core_status_t zfs_core_read_root_filesystem_master_block(
     *bytes_read = 0;
     if (length < MOS_DNODE_BLOCK_SIZE) return ZFS_CORE_OUT_OF_RANGE;
     size_t logical_size = 0;
-    if (!read_filesystem_object_dnode_block((zfs_core_device_t *)device, 1,
+    if (!read_filesystem_object_dnode_block((zfs_core_device_t *)device, 0, 1,
         (unsigned char *)buffer, (size_t)length, &logical_size))
         return ZFS_CORE_CORRUPT_METADATA;
     *bytes_read = logical_size;
@@ -1497,7 +1566,7 @@ zfs_core_status_t zfs_core_lookup_root_filesystem_master(
 {
     if (device == NULL || name == NULL || value == NULL) return ZFS_CORE_INVALID_ARGUMENT;
     *value = 0;
-    return lookup_filesystem_microzap((zfs_core_device_t *)device, 1, 21,
+    return lookup_filesystem_microzap((zfs_core_device_t *)device, 0, 1, 21,
         name, value) ?
         ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
@@ -1510,7 +1579,7 @@ zfs_core_status_t zfs_core_read_root_filesystem_object_dnode_block(
     *bytes_read = 0;
     if (length < MOS_DNODE_BLOCK_SIZE) return ZFS_CORE_OUT_OF_RANGE;
     size_t logical_size = 0;
-    if (!read_filesystem_object_dnode_block((zfs_core_device_t *)device, object,
+    if (!read_filesystem_object_dnode_block((zfs_core_device_t *)device, 0, object,
         (unsigned char *)buffer, (size_t)length, &logical_size))
         return ZFS_CORE_CORRUPT_METADATA;
     *bytes_read = logical_size;
@@ -1525,7 +1594,7 @@ zfs_core_status_t zfs_core_read_root_directory_data_block(
     *bytes_read = 0;
     if (length < MOS_DNODE_BLOCK_SIZE) return ZFS_CORE_OUT_OF_RANGE;
     size_t logical_size = 0;
-    if (!read_filesystem_object_zap((zfs_core_device_t *)device, 34, 20,
+    if (!read_filesystem_object_zap((zfs_core_device_t *)device, 0, 34, 20,
         (unsigned char *)buffer, (size_t)length, &logical_size))
         return ZFS_CORE_CORRUPT_METADATA;
     *bytes_read = logical_size;
@@ -1546,14 +1615,15 @@ zfs_core_status_t zfs_core_lookup_directory(
         return ZFS_CORE_INVALID_ARGUMENT;
     uint64_t directory_entry = 0;
     *object = 0;
-    if (!lookup_filesystem_microzap((zfs_core_device_t *)device, directory, 20,
+    if (!lookup_filesystem_microzap((zfs_core_device_t *)device, 0, directory, 20,
         name, &directory_entry)) return ZFS_CORE_CORRUPT_METADATA;
     *object = directory_entry & UINT64_C(0x0000ffffffffffff);
     return *object != 0 ? ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
 
-zfs_core_status_t zfs_core_get_directory_entry_count(
-    const zfs_core_device_t *device, uint64_t directory, uint64_t *count)
+static zfs_core_status_t get_directory_entry_count(
+    const zfs_core_device_t *device, uint64_t dataset_object,
+    uint64_t directory, uint64_t *count)
 {
     if (device == NULL || directory == 0 || count == NULL)
         return ZFS_CORE_INVALID_ARGUMENT;
@@ -1561,7 +1631,7 @@ zfs_core_status_t zfs_core_get_directory_entry_count(
     unsigned char *block = (unsigned char *)malloc(16 * 1024);
     size_t block_size = 0;
     if (block == NULL || !read_directory_microzap((zfs_core_device_t *)device,
-            directory, block, &block_size)) {
+            dataset_object, directory, block, &block_size)) {
         free(block); return ZFS_CORE_CORRUPT_METADATA;
     }
     for (size_t offset = 64; offset + 64 <= block_size; offset += 64) {
@@ -1576,8 +1646,15 @@ zfs_core_status_t zfs_core_get_directory_entry_count(
     return ZFS_CORE_OK;
 }
 
-zfs_core_status_t zfs_core_get_directory_entry(
-    const zfs_core_device_t *device, uint64_t directory, uint64_t index,
+zfs_core_status_t zfs_core_get_directory_entry_count(
+    const zfs_core_device_t *device, uint64_t directory, uint64_t *count)
+{
+    return get_directory_entry_count(device, 0, directory, count);
+}
+
+static zfs_core_status_t get_directory_entry(
+    const zfs_core_device_t *device, uint64_t dataset_object,
+    uint64_t directory, uint64_t index,
     char *name, uint64_t name_capacity, uint64_t *name_bytes,
     uint64_t *object, uint32_t *type)
 {
@@ -1588,7 +1665,7 @@ zfs_core_status_t zfs_core_get_directory_entry(
     unsigned char *block = (unsigned char *)malloc(16 * 1024);
     size_t block_size = 0;
     if (block == NULL || !read_directory_microzap((zfs_core_device_t *)device,
-            directory, block, &block_size)) {
+            dataset_object, directory, block, &block_size)) {
         free(block); return ZFS_CORE_CORRUPT_METADATA;
     }
     const char *entry_name = NULL;
@@ -1610,6 +1687,15 @@ zfs_core_status_t zfs_core_get_directory_entry(
     return *object != 0 ? ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
 
+zfs_core_status_t zfs_core_get_directory_entry(
+    const zfs_core_device_t *device, uint64_t directory, uint64_t index,
+    char *name, uint64_t name_capacity, uint64_t *name_bytes,
+    uint64_t *object, uint32_t *type)
+{
+    return get_directory_entry(device, 0, directory, index, name,
+        name_capacity, name_bytes, object, type);
+}
+
 zfs_core_status_t zfs_core_read_root_file(
     const zfs_core_device_t *device, uint64_t object, void *buffer,
     uint64_t length, uint64_t *bytes_read)
@@ -1618,7 +1704,7 @@ zfs_core_status_t zfs_core_read_root_file(
         return ZFS_CORE_INVALID_ARGUMENT;
     *bytes_read = 0;
     size_t file_size = 0;
-    if (!read_root_file((zfs_core_device_t *)device, object,
+    if (!read_root_file((zfs_core_device_t *)device, 0, object,
         (unsigned char *)buffer, (size_t)length, &file_size))
         return ZFS_CORE_CORRUPT_METADATA;
     *bytes_read = file_size;
@@ -1633,7 +1719,7 @@ zfs_core_status_t zfs_core_read_root_file_range(
         length == 0 || length > SIZE_MAX) return ZFS_CORE_INVALID_ARGUMENT;
     *bytes_read = 0;
     size_t actual = 0;
-    if (!read_root_file_range((zfs_core_device_t *)device, object, file_offset,
+    if (!read_root_file_range((zfs_core_device_t *)device, 0, object, file_offset,
             (unsigned char *)buffer, (size_t)length, &actual))
         return ZFS_CORE_CORRUPT_METADATA;
     *bytes_read = actual;
@@ -1645,7 +1731,7 @@ zfs_core_status_t zfs_core_get_root_file_size(
 {
     if (device == NULL || size == NULL) return ZFS_CORE_INVALID_ARGUMENT;
     *size = 0;
-    return get_root_file_size((zfs_core_device_t *)device, object, size) ?
+    return get_root_file_size((zfs_core_device_t *)device, 0, object, size) ?
         ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
 
@@ -1667,6 +1753,92 @@ zfs_core_status_t zfs_core_open_default_dataset(
     return ZFS_CORE_OK;
 }
 
+zfs_core_status_t zfs_core_get_snapshot_count(
+    zfs_core_device_t *device, uint64_t *count)
+{
+    if (device == NULL || count == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *count = 0;
+    uint64_t map_object = 0;
+    unsigned char *block = (unsigned char *)malloc(16 * 1024);
+    size_t block_size = 0;
+    if (block == NULL || !get_snapshot_map(device, &map_object) ||
+        !read_mos_microzap_block(device, map_object, 14, block,
+            16 * 1024, &block_size)) {
+        free(block); return ZFS_CORE_CORRUPT_METADATA;
+    }
+    for (size_t offset = 64; offset + 64 <= block_size; offset += 64) {
+        const char *entry_name = (const char *)(block + offset + 14);
+        if (entry_name[0] == 0) continue;
+        if (memchr(entry_name, 0, 50) == NULL) {
+            free(block); return ZFS_CORE_CORRUPT_METADATA;
+        }
+        ++*count;
+    }
+    free(block);
+    return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_get_snapshot(
+    zfs_core_device_t *device, uint64_t index, char *name,
+    uint64_t name_capacity, uint64_t *name_bytes,
+    zfs_core_snapshot_info_t *info)
+{
+    if (device == NULL || name_bytes == NULL || info == NULL ||
+        name_capacity > SIZE_MAX) return ZFS_CORE_INVALID_ARGUMENT;
+    *name_bytes = 0;
+    memset(info, 0, sizeof(*info));
+    uint64_t map_object = 0;
+    unsigned char *block = (unsigned char *)malloc(16 * 1024);
+    size_t block_size = 0;
+    if (block == NULL || !get_snapshot_map(device, &map_object) ||
+        !read_mos_microzap_block(device, map_object, 14, block,
+            16 * 1024, &block_size)) {
+        free(block); return ZFS_CORE_CORRUPT_METADATA;
+    }
+    const char *entry_name = NULL;
+    size_t entry_length = 0;
+    uint64_t dataset_object = 0;
+    int found = microzap_entry(block, block_size, index, &entry_name,
+        &entry_length, &dataset_object);
+    if (found < 0) { free(block); return ZFS_CORE_CORRUPT_METADATA; }
+    if (found == 0) { free(block); return ZFS_CORE_OUT_OF_RANGE; }
+    *name_bytes = entry_length + 1;
+    info->dataset_object = dataset_object;
+    if (name == NULL || name_capacity < *name_bytes) {
+        free(block); return ZFS_CORE_OUT_OF_RANGE;
+    }
+    memcpy(name, entry_name, entry_length);
+    name[entry_length] = 0;
+    int valid = read_dsl_dataset_metadata(device, dataset_object, NULL,
+        &info->creation_txg, &info->guid);
+    free(block);
+    return valid ? ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
+}
+
+zfs_core_status_t zfs_core_open_snapshot_dataset(
+    zfs_core_device_t *device, const char *name,
+    zfs_core_dataset_t **dataset)
+{
+    if (device == NULL || name == NULL || dataset == NULL)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    *dataset = NULL;
+    uint64_t map_object = 0;
+    uint64_t dataset_object = 0;
+    if (!get_snapshot_map(device, &map_object) ||
+        !lookup_mos_microzap(device, map_object, 14, name, &dataset_object))
+        return ZFS_CORE_CORRUPT_METADATA;
+    uint64_t snapnames_object = UINT64_MAX;
+    if (!read_dsl_dataset_metadata(device, dataset_object,
+            &snapnames_object, NULL, NULL) || snapnames_object != 0)
+        return ZFS_CORE_CORRUPT_METADATA;
+    zfs_core_dataset_t *result = (zfs_core_dataset_t *)calloc(1, sizeof(*result));
+    if (result == NULL) return ZFS_CORE_IO_ERROR;
+    result->device = device;
+    result->head_dataset_object = dataset_object;
+    *dataset = result;
+    return ZFS_CORE_OK;
+}
+
 void zfs_core_close_dataset(zfs_core_dataset_t *dataset)
 {
     free(dataset);
@@ -1679,11 +1851,13 @@ zfs_core_status_t zfs_core_open_dataset_root(
         return ZFS_CORE_INVALID_ARGUMENT;
     *object = NULL;
     uint64_t root_object = 0;
-    if (!lookup_filesystem_microzap(dataset->device, 1, 21, "ROOT", &root_object))
+    if (!lookup_filesystem_microzap(dataset->device,
+            dataset->head_dataset_object, 1, 21, "ROOT", &root_object))
         return ZFS_CORE_CORRUPT_METADATA;
     zfs_core_object_t *result = (zfs_core_object_t *)calloc(1, sizeof(*result));
     if (result == NULL) return ZFS_CORE_IO_ERROR;
     result->device = dataset->device;
+    result->dataset_object = dataset->head_dataset_object;
     result->object_number = root_object;
     result->type = 4; /* DT_DIR */
     *object = result;
@@ -1698,11 +1872,13 @@ zfs_core_status_t zfs_core_open_child(
     *object = NULL;
     uint64_t directory_entry = 0;
     if (!lookup_filesystem_microzap(directory->device,
-            directory->object_number, 20, name, &directory_entry))
+            directory->dataset_object, directory->object_number, 20,
+            name, &directory_entry))
         return ZFS_CORE_CORRUPT_METADATA;
     zfs_core_object_t *result = (zfs_core_object_t *)calloc(1, sizeof(*result));
     if (result == NULL) return ZFS_CORE_IO_ERROR;
     result->device = directory->device;
+    result->dataset_object = directory->dataset_object;
     result->object_number = directory_entry & UINT64_C(0x0000ffffffffffff);
     result->type = (uint32_t)(directory_entry >> 60);
     if (result->object_number == 0) { free(result); return ZFS_CORE_CORRUPT_METADATA; }
@@ -1729,8 +1905,8 @@ zfs_core_status_t zfs_core_get_object_entry_count(
 {
     if (directory == NULL || directory->device == NULL || directory->type != 4)
         return ZFS_CORE_INVALID_ARGUMENT;
-    return zfs_core_get_directory_entry_count(directory->device,
-        directory->object_number, count);
+    return get_directory_entry_count(directory->device,
+        directory->dataset_object, directory->object_number, count);
 }
 
 zfs_core_status_t zfs_core_get_object_entry(
@@ -1740,7 +1916,7 @@ zfs_core_status_t zfs_core_get_object_entry(
 {
     if (directory == NULL || directory->device == NULL || directory->type != 4)
         return ZFS_CORE_INVALID_ARGUMENT;
-    return zfs_core_get_directory_entry(directory->device,
+    return get_directory_entry(directory->device, directory->dataset_object,
         directory->object_number, index, name, name_capacity, name_bytes,
         object, type);
 }
@@ -1750,8 +1926,9 @@ zfs_core_status_t zfs_core_get_object_file_size(
 {
     if (file == NULL || file->device == NULL || file->type != 8)
         return ZFS_CORE_INVALID_ARGUMENT;
-    return zfs_core_get_root_file_size(file->device,
-        file->object_number, size);
+    *size = 0;
+    return get_root_file_size(file->device, file->dataset_object,
+        file->object_number, size) ? ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
 
 zfs_core_status_t zfs_core_read_object_file(
@@ -1760,8 +1937,15 @@ zfs_core_status_t zfs_core_read_object_file(
 {
     if (file == NULL || file->device == NULL || file->type != 8)
         return ZFS_CORE_INVALID_ARGUMENT;
-    return zfs_core_read_root_file(file->device,
-        file->object_number, buffer, length, bytes_read);
+    if (buffer == NULL || bytes_read == NULL || length > SIZE_MAX)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    *bytes_read = 0;
+    size_t actual = 0;
+    if (!read_root_file(file->device, file->dataset_object,
+            file->object_number, (unsigned char *)buffer, (size_t)length,
+            &actual)) return ZFS_CORE_CORRUPT_METADATA;
+    *bytes_read = actual;
+    return ZFS_CORE_OK;
 }
 
 zfs_core_status_t zfs_core_read_object_file_range(
@@ -1770,7 +1954,14 @@ zfs_core_status_t zfs_core_read_object_file_range(
 {
     if (file == NULL || file->device == NULL || file->type != 8)
         return ZFS_CORE_INVALID_ARGUMENT;
-    return zfs_core_read_root_file_range(file->device, file->object_number,
-        file_offset, buffer, length, bytes_read);
+    if (buffer == NULL || bytes_read == NULL || length == 0 || length > SIZE_MAX)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    *bytes_read = 0;
+    size_t actual = 0;
+    if (!read_root_file_range(file->device, file->dataset_object,
+            file->object_number, file_offset, (unsigned char *)buffer,
+            (size_t)length, &actual)) return ZFS_CORE_CORRUPT_METADATA;
+    *bytes_read = actual;
+    return ZFS_CORE_OK;
 }
 

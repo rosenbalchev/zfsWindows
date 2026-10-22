@@ -1,0 +1,112 @@
+{
+  "pool": "zfswin_snapshots",
+  "poolGuid": 5191132601847408503,
+  "zfsVersion": "zfs-2.4.1-1ubuntu5.1",
+  "imageSizeBytes": 1073741824,
+  "imageSha256": "3353C5955CCCFDE6AAD1545F0029FF4BEEAF38DAFEA76A53B5BCA4CFF01283D1",
+  "reimportVerified": true,
+  "rollbackVerified": true,
+  "deletionVerified": true,
+  "current": {
+    "name": "current",
+    "directories": [
+      "/",
+      "/binary",
+      "/documents"
+    ],
+    "files": [
+      {
+        "path": "/binary/latest.bin",
+        "length": 2097152,
+        "sha256": "2E5EB4746BCA45C5647A5B946FEFC5628F182D0F5FA7884AEDD3F13FA76BD7D1"
+      },
+      {
+        "path": "/documents/intermediate.txt",
+        "length": 24,
+        "sha256": "7D83A8EBA4B1E603A33F2248D64F9B71D6A1DDA4C03A04F1DB81D117CED7510E"
+      },
+      {
+        "path": "/documents/report.txt",
+        "length": 26,
+        "sha256": "99039AC6CC5E61529DF270B03019775242A1E2CF540F1D725BEBCFBFCB8A1BF7"
+      }
+    ]
+  },
+  "snapshots": [
+    {
+      "name": "snapshot1",
+      "directories": [
+        "/",
+        "/binary",
+        "/documents"
+      ],
+      "files": [
+        {
+          "path": "/binary/data.bin",
+          "length": 4194304,
+          "sha256": "683ABBE8EB055A91E7EFEC3FC7519B34A9DD005566C52E0BBE35FA094E3BF94F"
+        },
+        {
+          "path": "/documents/config.json",
+          "length": 29,
+          "sha256": "56F39BDB88156F4392A30FC824C2CF827F0F02F13E65B1151B4A0C9DD8F34AEF"
+        },
+        {
+          "path": "/documents/report.txt",
+          "length": 17,
+          "sha256": "EB89D29CF8A77BB39BFC94224972AC060DF82754C6EDDE6F8531325D65E17238"
+        }
+      ]
+    },
+    {
+      "name": "snapshot2",
+      "directories": [
+        "/",
+        "/binary",
+        "/documents"
+      ],
+      "files": [
+        {
+          "path": "/documents/config.json",
+          "length": 30,
+          "sha256": "14066BAF935F3A9A59194BE4F2C4E08DA3B96E6D1E235D0FFA29304C7B6AA885"
+        },
+        {
+          "path": "/documents/intermediate.txt",
+          "length": 24,
+          "sha256": "7D83A8EBA4B1E603A33F2248D64F9B71D6A1DDA4C03A04F1DB81D117CED7510E"
+        },
+        {
+          "path": "/documents/report.txt",
+          "length": 32,
+          "sha256": "BE38D4DE46AAA9767DF6FB388E47C129428B1F308771F8DF939437CDC14FDF9F"
+        }
+      ]
+    },
+    {
+      "name": "snapshot3",
+      "directories": [
+        "/",
+        "/binary",
+        "/documents"
+      ],
+      "files": [
+        {
+          "path": "/binary/latest.bin",
+          "length": 2097152,
+          "sha256": "2E5EB4746BCA45C5647A5B946FEFC5628F182D0F5FA7884AEDD3F13FA76BD7D1"
+        },
+        {
+          "path": "/documents/intermediate.txt",
+          "length": 24,
+          "sha256": "7D83A8EBA4B1E603A33F2248D64F9B71D6A1DDA4C03A04F1DB81D117CED7510E"
+        },
+        {
+          "path": "/documents/report.txt",
+          "length": 26,
+          "sha256": "99039AC6CC5E61529DF270B03019775242A1E2CF540F1D725BEBCFBFCB8A1BF7"
+        }
+      ]
+    }
+  ]
+}

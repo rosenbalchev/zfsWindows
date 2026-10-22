@@ -6,7 +6,7 @@ unchanged and is treated as the on-disk format and algorithm reference.
 
 ## Current status
 
-Milestone M6 is complete. The repository now contains:
+Milestone M7 is complete. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
@@ -54,6 +54,15 @@ checksum-based fallback from a deliberately corrupted member. The validated
 case exercised 2,389 peer fallbacks with exact final hashes. This is read
 recovery only—no automatic repair or resilver is claimed.
 
+Snapshot discovery and historical reads are supported for the selected data
+dataset. The managed API enumerates snapshot names with dataset object,
+creation TXG, and GUID metadata and opens each snapshot as an independent
+read-only dataset. A genuine three-snapshot OpenZFS fixture verifies exact
+current and historical namespaces, including modified and deleted files and
+empty directories. Its generator also proves export/re-import, rollback, and
+snapshot deletion semantics on a disposable copy; the Windows reader itself
+performs no rollback or deletion.
+
 Read-only recognition validates OpenZFS SHA-256 checksums on labels and
 uberblocks and Fletcher-4 checksums on referenced non-embedded metadata before
 using it.
@@ -96,6 +105,10 @@ and `ZFS_COMPRESSION_MANIFESTS` to `tests/fixtures/compression` to run the
 compression matrix. Set `ZFS_MIRROR_DIRECTORY` to the two-member fixture
 directory and `ZFS_MIRROR_MANIFEST` to its committed manifest to run mirror
 recovery tests.
+
+Set `ZFS_SNAPSHOT_IMAGE` to the snapshot fixture image and
+`ZFS_SNAPSHOT_MANIFEST` to `tests/fixtures/snapshots/snapshots.json` to run the
+snapshot discovery and historical-read test.
 
 ## Safety
 

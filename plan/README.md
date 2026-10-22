@@ -49,8 +49,8 @@ verification and update the step rather than creating duplicate work.
 | 06 | `06-compression_completed.md` | Compression compatibility | complete |
 | 07 | `07-scale-stress-and-benchmarks_completed.md` | Small-file scale and measurement | complete |
 | 08 | `08-mirrors_completed.md` | Mirror reads, degradation, recovery | complete |
-| 09 | `09-snapshots.md` | Snapshot discovery and historical reads | in-progress |
-| 10 | `10-transactional-writes.md` | COW writes and persistence | planned |
+| 09 | `09-snapshots_completed.md` | Snapshot discovery and historical reads | complete |
+| 10 | `10-transactional-writes.md` | COW writes and persistence | in-progress |
 | 11 | `11-crash-recovery.md` | Failure injection and durability | planned |
 | 12 | `12-windows-driver.md` | WDK filesystem driver in VM | planned |
 | 13 | `13-userspace-tools-and-installer.md` | Administration tools and Windows setup package | planned |

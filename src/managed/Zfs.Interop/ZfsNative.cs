@@ -49,6 +49,17 @@ public struct ZfsObjectInfo
     public uint Type;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct ZfsSnapshotNativeInfo
+{
+    public ulong DatasetObject;
+    public ulong CreationTxg;
+    public ulong Guid;
+}
+
+public sealed record ZfsSnapshot(string Name, ulong DatasetObject,
+    ulong CreationTxg, ulong Guid);
+
 internal static partial class NativeMethods
 {
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_readonly", StringMarshalling = StringMarshalling.Utf8)]
@@ -123,6 +134,18 @@ internal static partial class NativeMethods
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_default_dataset")]
     internal static partial ZfsStatus OpenDefaultDataset(nint device, out nint dataset);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_snapshot_count")]
+    internal static partial ZfsStatus GetSnapshotCount(nint device, out ulong count);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_snapshot")]
+    internal static partial ZfsStatus GetSnapshot(nint device, ulong index,
+        nint name, ulong nameCapacity, out ulong nameBytes,
+        out ZfsSnapshotNativeInfo info);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_snapshot_dataset", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial ZfsStatus OpenSnapshotDataset(nint device, string name,
+        out nint dataset);
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_close_dataset")]
     internal static partial void CloseDataset(nint dataset);
@@ -411,6 +434,43 @@ public sealed class ZfsReadOnlyDevice : IDisposable
     {
         var status = NativeMethods.OpenDefaultDataset(_handle, out var dataset);
         if (status != ZfsStatus.Ok) throw new IOException($"Default dataset open failed: {status}");
+        return new ZfsDataset(this, dataset);
+    }
+
+    public IReadOnlyList<ZfsSnapshot> GetSnapshots()
+    {
+        ObjectDisposedException.ThrowIf(_handle == nint.Zero, this);
+        var status = NativeMethods.GetSnapshotCount(_handle, out var count);
+        if (status != ZfsStatus.Ok) throw new IOException($"Snapshot count failed: {status}");
+        if (count > int.MaxValue) throw new IOException("Dataset has too many snapshots.");
+        var snapshots = new List<ZfsSnapshot>((int)count);
+        var nameBuffer = new byte[256];
+        var pinned = GCHandle.Alloc(nameBuffer, GCHandleType.Pinned);
+        try
+        {
+            for (ulong index = 0; index < count; ++index)
+            {
+                status = NativeMethods.GetSnapshot(_handle, index,
+                    pinned.AddrOfPinnedObject(), (ulong)nameBuffer.Length,
+                    out var nameBytes, out var info);
+                if (status != ZfsStatus.Ok) throw new IOException($"Snapshot {index} failed: {status}");
+                if (nameBytes is 0 or > 256 || nameBuffer[(int)nameBytes - 1] != 0)
+                    throw new InvalidDataException("Native snapshot returned an invalid name.");
+                var name = new UTF8Encoding(false, true).GetString(nameBuffer, 0,
+                    (int)nameBytes - 1);
+                snapshots.Add(new(name, info.DatasetObject, info.CreationTxg, info.Guid));
+            }
+        }
+        finally { pinned.Free(); }
+        return snapshots;
+    }
+
+    public ZfsDataset OpenSnapshot(string name)
+    {
+        ObjectDisposedException.ThrowIf(_handle == nint.Zero, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var status = NativeMethods.OpenSnapshotDataset(_handle, name, out var dataset);
+        if (status != ZfsStatus.Ok) throw new IOException($"Snapshot open failed for '{name}': {status}");
         return new ZfsDataset(this, dataset);
     }
 
