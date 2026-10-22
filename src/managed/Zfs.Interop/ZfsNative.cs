@@ -71,6 +71,9 @@ internal static partial class NativeMethods
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_root_dataset_objset_root")]
     internal static partial ZfsStatus ReadRootDatasetObjsetRoot(nint device, nint buffer, ulong length, out ulong bytesRead);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_root_filesystem_master_block")]
+    internal static partial ZfsStatus ReadRootFilesystemMasterBlock(nint device, nint buffer, ulong length, out ulong bytesRead);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -179,6 +182,22 @@ public sealed class ZfsReadOnlyDevice : IDisposable
             var status = NativeMethods.ReadRootDatasetObjsetRoot(_handle,
                 pinned.AddrOfPinnedObject(), (ulong)buffer.Length, out var bytesRead);
             if (status != ZfsStatus.Ok) throw new IOException($"Dataset objset root read failed: {status}");
+            if (bytesRead == 0 || bytesRead > (ulong)buffer.Length) throw new EndOfStreamException();
+            return buffer[..(int)bytesRead];
+        }
+        finally { pinned.Free(); }
+    }
+
+    public byte[] ReadRootFilesystemMasterBlock()
+    {
+        const int capacity = 128 * 1024;
+        var buffer = new byte[capacity];
+        var pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            var status = NativeMethods.ReadRootFilesystemMasterBlock(_handle,
+                pinned.AddrOfPinnedObject(), (ulong)buffer.Length, out var bytesRead);
+            if (status != ZfsStatus.Ok) throw new IOException($"Filesystem master-node read failed: {status}");
             if (bytesRead == 0 || bytesRead > (ulong)buffer.Length) throw new EndOfStreamException();
             return buffer[..(int)bytesRead];
         }

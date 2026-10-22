@@ -75,4 +75,7 @@ ZFS_CORE_API zfs_core_status_t zfs_core_get_root_dataset_info(
 ZFS_CORE_API zfs_core_status_t zfs_core_read_root_dataset_objset_root(
     const zfs_core_device_t *device, void *buffer, uint64_t length,
     uint64_t *bytes_read);
+ZFS_CORE_API zfs_core_status_t zfs_core_read_root_filesystem_master_block(
+    const zfs_core_device_t *device, void *buffer, uint64_t length,
+    uint64_t *bytes_read);
 

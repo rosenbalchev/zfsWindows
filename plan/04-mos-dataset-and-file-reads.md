@@ -29,6 +29,11 @@ reads, and the final handle ABI. Object 32 DSL-directory decoding now resolves
 head dataset object 54, child-directory ZAP object 34, and properties ZAP object
 33. The head dataset object 54 is now decoded through its DSL dataset bonus
 and its child objset root block is read and validated as a dnode block.
+The dataset objset multi-level dnode chain now reaches the filesystem master
+node block (object 1), validated as a ZFS master-node dnode. The current Visual
+Studio installation is temporarily incomplete for CMake manifest linking
+(`rc.exe` is missing), so this checkpoint was additionally verified with the
+available MSVC compiler/linker directly.
 
 Commit: `native: read datasets directories and files`
 
