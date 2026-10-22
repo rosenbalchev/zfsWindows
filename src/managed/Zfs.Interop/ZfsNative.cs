@@ -17,6 +17,11 @@ public struct ZfsDeviceInfo
     public uint ReadOnly;
     public uint VdevLabelsFound;
     public uint UberblocksFound;
+    public uint ValidLabelsFound;
+    public uint UnsupportedFeatures;
+    public ulong PoolGuid;
+    public ulong VdevGuid;
+    public ulong Ashift;
     public ulong SelectedTxg;
     public ulong SelectedUberblockOffset;
 }

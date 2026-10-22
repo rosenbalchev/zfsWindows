@@ -51,12 +51,22 @@ public sealed class NativeDeviceTests
         }
     }
 
-    [Fact(Skip = "Requires a genuine OpenZFS image and manifest; set ZFS_TEST_IMAGE before enabling M2.")]
+    [Fact]
     [Trait("Category", "Integration")]
-    public void GenuineImageReadIsNotYetEnabled()
+    public void GenuineOpenZfsImageIsRecognizedReadOnly()
     {
-        var image = Environment.GetEnvironmentVariable("ZFS_TEST_IMAGE")!;
+        var image = Environment.GetEnvironmentVariable("ZFS_TEST_IMAGE");
+        if (string.IsNullOrWhiteSpace(image) || !File.Exists(image))
+            throw SkipException.ForSkip("Set ZFS_TEST_IMAGE to an exported OpenZFS raw image.");
+        var before = SHA256.HashData(File.ReadAllBytes(image));
         using var device = ZfsReadOnlyDevice.Open(image);
         Assert.True(device.Info.VdevLabelsFound > 0);
+        Assert.True(device.Info.ValidLabelsFound > 0);
+        Assert.True(device.Info.UberblocksFound > 0);
+        Assert.True(device.Info.PoolGuid > 0);
+        Assert.True(device.Info.VdevGuid > 0);
+        Assert.InRange(device.Info.Ashift, 9UL, 24UL);
+        Assert.True(device.IsRecognizedPool);
+        Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }
 }

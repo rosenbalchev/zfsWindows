@@ -31,6 +31,11 @@ typedef struct zfs_core_device_info {
     uint32_t read_only;
     uint32_t vdev_labels_found;
     uint32_t uberblocks_found;
+    uint32_t valid_labels_found;
+    uint32_t unsupported_features;
+    uint64_t pool_guid;
+    uint64_t vdev_guid;
+    uint64_t ashift;
     uint64_t selected_txg;
     uint64_t selected_uberblock_offset;
 } zfs_core_device_info_t;
