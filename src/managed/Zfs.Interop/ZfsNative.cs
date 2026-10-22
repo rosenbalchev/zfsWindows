@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Zfs.Interop;
 
@@ -91,6 +92,13 @@ internal static partial class NativeMethods
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_lookup_directory", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial ZfsStatus LookupDirectory(nint device, ulong directory, string name,
         out ulong objectNumber);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_directory_entry_count")]
+    internal static partial ZfsStatus GetDirectoryEntryCount(nint device, ulong directory, out ulong count);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_directory_entry")]
+    internal static partial ZfsStatus GetDirectoryEntry(nint device, ulong directory, ulong index,
+        nint name, ulong nameCapacity, out ulong nameBytes, out ulong objectNumber, out uint type);
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_root_file")]
     internal static partial ZfsStatus ReadRootFile(nint device, ulong objectNumber, nint buffer,
@@ -295,6 +303,35 @@ public sealed class ZfsReadOnlyDevice : IDisposable
         return current;
     }
 
+    public IReadOnlyList<ZfsDirectoryEntry> EnumerateDirectory(ulong directory)
+    {
+        var status = NativeMethods.GetDirectoryEntryCount(_handle, directory, out var count);
+        if (status != ZfsStatus.Ok) throw new IOException($"Directory count failed: {status}");
+        if (count > int.MaxValue) throw new IOException("Directory contains too many entries.");
+        var entries = new List<ZfsDirectoryEntry>((int)count);
+        var nameBuffer = new byte[51];
+        var pinned = GCHandle.Alloc(nameBuffer, GCHandleType.Pinned);
+        try
+        {
+            for (ulong index = 0; index < count; ++index)
+            {
+                status = NativeMethods.GetDirectoryEntry(_handle, directory, index,
+                    pinned.AddrOfPinnedObject(), (ulong)nameBuffer.Length, out var nameBytes,
+                    out var objectNumber, out var type);
+                if (status != ZfsStatus.Ok) throw new IOException($"Directory entry {index} failed: {status}");
+                if (nameBytes is 0 or > 51 || nameBuffer[(int)nameBytes - 1] != 0)
+                    throw new InvalidDataException("Native directory entry returned an invalid name.");
+                var name = new UTF8Encoding(false, true).GetString(nameBuffer, 0, (int)nameBytes - 1);
+                entries.Add(new(name, objectNumber, type));
+            }
+        }
+        finally { pinned.Free(); }
+        return entries;
+    }
+
+    public IReadOnlyList<ZfsDirectoryEntry> EnumerateDirectory(string path) =>
+        EnumerateDirectory(ResolvePath(path));
+
     public byte[] ReadFile(string path) => ReadRootFile(ResolvePath(path));
 
     public byte[] ReadRootFile(ulong objectNumber)
@@ -324,3 +361,5 @@ public sealed class ZfsReadOnlyDevice : IDisposable
         GC.SuppressFinalize(this);
     }
 }
+
+public readonly record struct ZfsDirectoryEntry(string Name, ulong ObjectNumber, uint Type);

@@ -87,7 +87,11 @@ directory object, and the managed wrapper resolves slash-separated paths from
 the filesystem `ROOT`. `/nested/nested.txt` resolves through directory object 3
 to file object 256 and reads with SHA-256
 `9316BCDAEBF6D62525D6FAF5E446CDA3A712EC32A7308307C2BB44C74A287902`.
-Directory enumeration and the final handle ABI remain unfinished.
+The native enumeration ABI counts and returns bounded micro-ZAP entries with
+their UTF-8 name bytes, 48-bit object number, and ZFS directory-entry type. The
+Step 04 root enumerates exactly the four unique names `fixture.txt`,
+`multi.bin`, `nested`, and `sparse.bin`; `/nested` enumerates `nested.txt` as
+regular-file type 8. The final object-handle ABI remains unfinished.
 
 Commit: `native: read datasets directories and files`
 

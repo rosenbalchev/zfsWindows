@@ -139,6 +139,13 @@ public sealed class NativeDeviceTests
         Assert.Equal("nested-zfs-file\n", Encoding.UTF8.GetString(nested));
         Assert.Equal("9316BCDAEBF6D62525D6FAF5E446CDA3A712EC32A7308307C2BB44C74A287902",
             Convert.ToHexString(SHA256.HashData(nested)));
+        var rootEntries = device.EnumerateDirectory("/");
+        Assert.Equal(4, rootEntries.Count);
+        Assert.Equal(new[] { "fixture.txt", "multi.bin", "nested", "sparse.bin" },
+            rootEntries.Select(entry => entry.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(rootEntries.Count, rootEntries.Select(entry => entry.Name).Distinct().Count());
+        var nestedEntry = Assert.Single(device.EnumerateDirectory("/nested"));
+        Assert.Equal(new ZfsDirectoryEntry("nested.txt", 256, 8), nestedEntry);
         Assert.Throws<ArgumentException>(() => device.ResolvePath("../nested/nested.txt"));
 
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));

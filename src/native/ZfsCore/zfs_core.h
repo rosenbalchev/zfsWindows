@@ -91,6 +91,12 @@ ZFS_CORE_API zfs_core_status_t zfs_core_lookup_root_directory(
 ZFS_CORE_API zfs_core_status_t zfs_core_lookup_directory(
     const zfs_core_device_t *device, uint64_t directory, const char *name,
     uint64_t *object);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_directory_entry_count(
+    const zfs_core_device_t *device, uint64_t directory, uint64_t *count);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_directory_entry(
+    const zfs_core_device_t *device, uint64_t directory, uint64_t index,
+    char *name, uint64_t name_capacity, uint64_t *name_bytes,
+    uint64_t *object, uint32_t *type);
 ZFS_CORE_API zfs_core_status_t zfs_core_read_root_file(
     const zfs_core_device_t *device, uint64_t object, void *buffer,
     uint64_t length, uint64_t *bytes_read);

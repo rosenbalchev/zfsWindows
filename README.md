@@ -21,7 +21,8 @@ dataset and return exact file bytes through C# using dnodes, metadata-driven SA
 sizes, indirect block pointers, embedded or non-embedded LZ4 data, and sparse
 hole expansion. The current fixture verifies both a 300,000-byte multi-block
 file and a 300,000-byte sparse file. Managed path traversal resolves nested
-micro-ZAP directories and reads `/nested/nested.txt` exactly.
+micro-ZAP directories, enumerates typed directory entries, and reads
+`/nested/nested.txt` exactly.
 Compatibility claims are made only for behavior exercised against a genuine
 OpenZFS-generated image.
 

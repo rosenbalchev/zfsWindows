@@ -25,6 +25,7 @@
 #define ZEC_MAGIC UINT64_C(0x0210da7ab10c7a11)
 #define DMU_OT_DNODE 10U
 #define MOS_DNODE_BLOCK_SIZE (128ULL * 1024ULL)
+#define ZBT_MICRO UINT64_C(0x8000000000000003)
 
 int LZ4_uncompress_unknownOutputSize(const char *source, char *destination,
     int source_length, int destination_length);
@@ -676,7 +677,8 @@ static int lookup_filesystem_microzap(zfs_core_device_t *device, uint64_t object
     unsigned char *block = (unsigned char *)malloc(16 * 1024);
     size_t block_size = 0;
     int valid = block != NULL && read_filesystem_object_zap(device, object,
-        object_type, block, 16 * 1024, &block_size) && block_size >= 64 && block[0] == 3;
+        object_type, block, 16 * 1024, &block_size) && block_size >= 64 &&
+        load_u64(block) == ZBT_MICRO;
     if (valid) {
         for (size_t offset = 64; offset + 64 <= block_size; offset += 64) {
             const char *entry_name = (const char *)(block + offset + 14);
@@ -691,6 +693,33 @@ static int lookup_filesystem_microzap(zfs_core_device_t *device, uint64_t object
     }
     free(block);
     return valid && *value != 0;
+}
+
+static int read_directory_microzap(zfs_core_device_t *device,
+    uint64_t directory, unsigned char *block, size_t *block_size)
+{
+    return read_filesystem_object_zap(device, directory, 20, block,
+        16 * 1024, block_size) && *block_size >= 64 &&
+        load_u64(block) == ZBT_MICRO;
+}
+
+static int microzap_entry(const unsigned char *block, size_t block_size,
+    uint64_t wanted_index, const char **name, size_t *name_length,
+    uint64_t *directory_entry)
+{
+    uint64_t current_index = 0;
+    for (size_t offset = 64; offset + 64 <= block_size; offset += 64) {
+        const char *entry_name = (const char *)(block + offset + 14);
+        if (entry_name[0] == 0) continue;
+        const char *terminator = (const char *)memchr(entry_name, 0, 50);
+        if (terminator == NULL) return -1;
+        if (current_index++ != wanted_index) continue;
+        *name = entry_name;
+        *name_length = (size_t)(terminator - entry_name);
+        *directory_entry = load_u64(block + offset);
+        return 1;
+    }
+    return 0;
 }
 
 static int block_pointer_is_hole(const unsigned char *bp)
@@ -1318,6 +1347,64 @@ zfs_core_status_t zfs_core_lookup_directory(
     if (!lookup_filesystem_microzap((zfs_core_device_t *)device, directory, 20,
         name, &directory_entry)) return ZFS_CORE_CORRUPT_METADATA;
     *object = directory_entry & UINT64_C(0x0000ffffffffffff);
+    return *object != 0 ? ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
+}
+
+zfs_core_status_t zfs_core_get_directory_entry_count(
+    const zfs_core_device_t *device, uint64_t directory, uint64_t *count)
+{
+    if (device == NULL || directory == 0 || count == NULL)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    *count = 0;
+    unsigned char *block = (unsigned char *)malloc(16 * 1024);
+    size_t block_size = 0;
+    if (block == NULL || !read_directory_microzap((zfs_core_device_t *)device,
+            directory, block, &block_size)) {
+        free(block); return ZFS_CORE_CORRUPT_METADATA;
+    }
+    for (size_t offset = 64; offset + 64 <= block_size; offset += 64) {
+        const char *entry_name = (const char *)(block + offset + 14);
+        if (entry_name[0] == 0) continue;
+        if (memchr(entry_name, 0, 50) == NULL) {
+            free(block); return ZFS_CORE_CORRUPT_METADATA;
+        }
+        ++*count;
+    }
+    free(block);
+    return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_get_directory_entry(
+    const zfs_core_device_t *device, uint64_t directory, uint64_t index,
+    char *name, uint64_t name_capacity, uint64_t *name_bytes,
+    uint64_t *object, uint32_t *type)
+{
+    if (device == NULL || directory == 0 || name_bytes == NULL ||
+        object == NULL || type == NULL || name_capacity > SIZE_MAX)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    *name_bytes = 0; *object = 0; *type = 0;
+    unsigned char *block = (unsigned char *)malloc(16 * 1024);
+    size_t block_size = 0;
+    if (block == NULL || !read_directory_microzap((zfs_core_device_t *)device,
+            directory, block, &block_size)) {
+        free(block); return ZFS_CORE_CORRUPT_METADATA;
+    }
+    const char *entry_name = NULL;
+    size_t entry_name_length = 0;
+    uint64_t directory_entry = 0;
+    int found = microzap_entry(block, block_size, index, &entry_name,
+        &entry_name_length, &directory_entry);
+    if (found < 0) { free(block); return ZFS_CORE_CORRUPT_METADATA; }
+    if (found == 0) { free(block); return ZFS_CORE_OUT_OF_RANGE; }
+    *name_bytes = entry_name_length + 1;
+    *object = directory_entry & UINT64_C(0x0000ffffffffffff);
+    *type = (uint32_t)(directory_entry >> 60);
+    if (name == NULL || name_capacity < *name_bytes) {
+        free(block); return ZFS_CORE_OUT_OF_RANGE;
+    }
+    memcpy(name, entry_name, entry_name_length);
+    name[entry_name_length] = 0;
+    free(block);
     return *object != 0 ? ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
 
