@@ -306,6 +306,25 @@ static int read_mos_first_dnode_block(zfs_core_device_t *device,
     return valid;
 }
 
+static int read_mos_object_directory_block(zfs_core_device_t *device,
+    unsigned char *destination, size_t capacity, size_t *logical_size_out)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
+    size_t dnode_size = 0;
+    int valid = dnode_block != NULL && read_mos_first_dnode_block(device,
+        dnode_block, MOS_DNODE_BLOCK_SIZE, &dnode_size) && dnode_size >= 1024;
+    if (valid) {
+        /* Object 1 is the MOS object directory and uses a direct ZAP block. */
+        const unsigned char *dnode = dnode_block + 512;
+        valid = dnode[0] == 1 /* DMU_OT_OBJECT_DIRECTORY */ && dnode[2] == 1 &&
+            dnode[3] >= 1 && dnode[3] <= 3 &&
+            read_block_pointer(device, dnode + 64, destination, capacity,
+                logical_size_out);
+    }
+    free(dnode_block);
+    return valid;
+}
+
 static int seek_u64(FILE *file, uint64_t offset)
 {
 #if defined(_WIN32)
@@ -492,6 +511,21 @@ zfs_core_status_t zfs_core_read_mos_first_dnode_block(
     if (length < MOS_DNODE_BLOCK_SIZE) return ZFS_CORE_OUT_OF_RANGE;
     size_t logical_size = 0;
     if (!read_mos_first_dnode_block((zfs_core_device_t *)device,
+        (unsigned char *)buffer, (size_t)length, &logical_size))
+        return ZFS_CORE_NOT_SUPPORTED;
+    *bytes_read = logical_size;
+    return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_read_mos_object_directory_block(
+    const zfs_core_device_t *device, void *buffer, uint64_t length,
+    uint64_t *bytes_read)
+{
+    if (device == NULL || buffer == NULL || bytes_read == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *bytes_read = 0;
+    if (length < MOS_DNODE_BLOCK_SIZE) return ZFS_CORE_OUT_OF_RANGE;
+    size_t logical_size = 0;
+    if (!read_mos_object_directory_block((zfs_core_device_t *)device,
         (unsigned char *)buffer, (size_t)length, &logical_size))
         return ZFS_CORE_NOT_SUPPORTED;
     *bytes_read = logical_size;

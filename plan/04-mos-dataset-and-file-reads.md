@@ -20,9 +20,10 @@ with exact lengths and SHA-256 hashes from C#.
 
 Progress: the native read-only layer now validates the MOS root, resolves the
 meta-dnode's first indirect block, supports ZLE and OpenZFS LZ4 framing, and
-returns the first 16 KiB MOS dnode data block through the C ABI and C# wrapper.
-The fixture test confirms the expected empty object-0 dnode and object-directory
-dnode at object 1. Remaining work is checksum verification, full dnode/DSL/ZAP
+returns the first 16 KiB MOS dnode data block through the C ABI and C# wrapper,
+then resolves object 1 to its first 16 KiB object-directory ZAP block. The
+fixture test confirms the expected empty object-0 dnode, object-directory dnode,
+and ZAP magic. Remaining work is checksum verification, full ZAP/dataset
 traversal, sparse and regular-file reads, and the final handle ABI.
 
 Commit: `native: read datasets directories and files`
