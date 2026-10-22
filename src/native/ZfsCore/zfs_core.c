@@ -669,6 +669,10 @@ static int read_filesystem_object_zap(zfs_core_device_t *device, uint64_t object
 static int lookup_filesystem_microzap(zfs_core_device_t *device, uint64_t object,
     uint8_t object_type, const char *name, uint64_t *value)
 {
+    if (name == NULL || value == NULL) return 0;
+    *value = 0;
+    size_t name_length = strlen(name);
+    if (name_length == 0 || name_length > 50) return 0;
     unsigned char *block = (unsigned char *)malloc(16 * 1024);
     size_t block_size = 0;
     int valid = block != NULL && read_filesystem_object_zap(device, object,
@@ -679,7 +683,7 @@ static int lookup_filesystem_microzap(zfs_core_device_t *device, uint64_t object
             if (entry_name[0] == 0 || strncmp(entry_name, name, 50) != 0) continue;
             size_t entry_length = 0;
             while (entry_length < 50 && entry_name[entry_length] != 0) ++entry_length;
-            if (strlen(name) != entry_length) continue;
+            if (name_length != entry_length) continue;
             *value = load_u64(block + offset);
             valid = 1;
             break;
@@ -1300,10 +1304,18 @@ zfs_core_status_t zfs_core_read_root_directory_data_block(
 zfs_core_status_t zfs_core_lookup_root_directory(
     const zfs_core_device_t *device, const char *name, uint64_t *object)
 {
-    if (device == NULL || name == NULL || object == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    return zfs_core_lookup_directory(device, 34, name, object);
+}
+
+zfs_core_status_t zfs_core_lookup_directory(
+    const zfs_core_device_t *device, uint64_t directory, const char *name,
+    uint64_t *object)
+{
+    if (device == NULL || directory == 0 || name == NULL || object == NULL)
+        return ZFS_CORE_INVALID_ARGUMENT;
     uint64_t directory_entry = 0;
     *object = 0;
-    if (!lookup_filesystem_microzap((zfs_core_device_t *)device, 34, 20,
+    if (!lookup_filesystem_microzap((zfs_core_device_t *)device, directory, 20,
         name, &directory_entry)) return ZFS_CORE_CORRUPT_METADATA;
     *object = directory_entry & UINT64_C(0x0000ffffffffffff);
     return *object != 0 ? ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;

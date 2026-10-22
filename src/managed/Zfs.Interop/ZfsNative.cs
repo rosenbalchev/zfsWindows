@@ -88,6 +88,10 @@ internal static partial class NativeMethods
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_lookup_root_directory", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial ZfsStatus LookupRootDirectory(nint device, string name, out ulong objectNumber);
 
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_lookup_directory", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial ZfsStatus LookupDirectory(nint device, ulong directory, string name,
+        out ulong objectNumber);
+
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_root_file")]
     internal static partial ZfsStatus ReadRootFile(nint device, ulong objectNumber, nint buffer,
         ulong length, out ulong bytesRead);
@@ -268,6 +272,30 @@ public sealed class ZfsReadOnlyDevice : IDisposable
         if (status != ZfsStatus.Ok) throw new IOException($"Root directory lookup failed: {status}");
         return objectNumber;
     }
+
+    public ulong LookupDirectory(ulong directory, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var status = NativeMethods.LookupDirectory(_handle, directory, name, out var objectNumber);
+        if (status != ZfsStatus.Ok) throw new IOException($"Directory lookup failed for '{name}': {status}");
+        return objectNumber;
+    }
+
+    public ulong ResolvePath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var current = LookupRootFilesystemMaster("ROOT");
+        foreach (var component in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (component == ".") continue;
+            if (component == "..")
+                throw new ArgumentException("Parent path components are not supported.", nameof(path));
+            current = LookupDirectory(current, component);
+        }
+        return current;
+    }
+
+    public byte[] ReadFile(string path) => ReadRootFile(ResolvePath(path));
 
     public byte[] ReadRootFile(ulong objectNumber)
     {

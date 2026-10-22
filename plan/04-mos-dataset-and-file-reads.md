@@ -82,8 +82,12 @@ its 300,000-byte `sparse.bin` expands the middle 128 KiB hole and reads with
 SHA-256
 `D8989B12168EF493193A84C62328C99825CCB5E5F616814F33FD5AB2D867EA40`.
 All four Windows tests pass against the Step 03 and Step 04 images while both
-image hashes remain unchanged. General path traversal, directory enumeration,
-and the final handle ABI remain unfinished.
+image hashes remain unchanged. The directory lookup ABI now accepts any
+directory object, and the managed wrapper resolves slash-separated paths from
+the filesystem `ROOT`. `/nested/nested.txt` resolves through directory object 3
+to file object 256 and reads with SHA-256
+`9316BCDAEBF6D62525D6FAF5E446CDA3A712EC32A7308307C2BB44C74A287902`.
+Directory enumeration and the final handle ABI remain unfinished.
 
 Commit: `native: read datasets directories and files`
 
