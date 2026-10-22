@@ -419,6 +419,47 @@ static int read_filesystem_object_dnode_block(zfs_core_device_t *device,
     return valid;
 }
 
+static int read_filesystem_master_zap(zfs_core_device_t *device,
+    unsigned char *destination, size_t capacity, size_t *logical_size_out)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
+    if (dnode_block == NULL || !read_filesystem_object_dnode_block(device, 1,
+        dnode_block, 16 * 1024, logical_size_out)) {
+        free(dnode_block); return 0;
+    }
+    const unsigned char *dnode = dnode_block + 512;
+    int valid = dnode[0] == 21 /* DMU_OT_MASTER_NODE */ && dnode[3] >= 1 && dnode[3] <= 3;
+    size_t data_size = 0;
+    if (valid) valid = read_block_pointer(device, dnode + 64, destination,
+        capacity, &data_size);
+    if (valid && logical_size_out != NULL) *logical_size_out = data_size;
+    free(dnode_block);
+    return valid;
+}
+
+static int lookup_master_microzap(zfs_core_device_t *device,
+    const char *name, uint64_t *value)
+{
+    unsigned char *block = (unsigned char *)malloc(16 * 1024);
+    size_t block_size = 0;
+    int valid = block != NULL && read_filesystem_master_zap(device, block,
+        16 * 1024, &block_size) && block_size >= 64 && block[0] == 3;
+    if (valid) {
+        for (size_t offset = 64; offset + 64 <= block_size; offset += 64) {
+            const char *entry_name = (const char *)(block + offset + 14);
+            if (entry_name[0] == 0 || strncmp(entry_name, name, 50) != 0) continue;
+            size_t entry_length = 0;
+            while (entry_length < 50 && entry_name[entry_length] != 0) ++entry_length;
+            if (strlen(name) != entry_length) continue;
+            *value = load_u64(block + offset);
+            valid = 1;
+            break;
+        }
+    }
+    free(block);
+    return valid && *value != 0;
+}
+
 static uint16_t load_u16(const unsigned char *p)
 {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
@@ -759,5 +800,14 @@ zfs_core_status_t zfs_core_read_root_filesystem_master_block(
         return ZFS_CORE_CORRUPT_METADATA;
     *bytes_read = logical_size;
     return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_lookup_root_filesystem_master(
+    const zfs_core_device_t *device, const char *name, uint64_t *value)
+{
+    if (device == NULL || name == NULL || value == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *value = 0;
+    return lookup_master_microzap((zfs_core_device_t *)device, name, value) ?
+        ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
 

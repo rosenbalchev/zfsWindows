@@ -33,7 +33,8 @@ The dataset objset multi-level dnode chain now reaches the filesystem master
 node block (object 1), validated as a ZFS master-node dnode. The current Visual
 Studio installation is temporarily incomplete for CMake manifest linking
 (`rc.exe` is missing), so this checkpoint was additionally verified with the
-available MSVC compiler/linker directly.
+available MSVC compiler/linker directly. The master-node micro-ZAP now resolves
+`ROOT` to object 34.
 
 Commit: `native: read datasets directories and files`
 

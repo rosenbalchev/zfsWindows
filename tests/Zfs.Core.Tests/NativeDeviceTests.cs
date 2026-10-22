@@ -89,6 +89,7 @@ public sealed class NativeDeviceTests
         var masterDnodeBlock = device.ReadRootFilesystemMasterBlock();
         Assert.Equal(16 * 1024, masterDnodeBlock.Length);
         Assert.Equal(21, masterDnodeBlock[512]);
+        Assert.Equal(34UL, device.LookupRootFilesystemMaster("ROOT"));
         Assert.True(device.IsRecognizedPool);
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }

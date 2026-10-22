@@ -74,6 +74,9 @@ internal static partial class NativeMethods
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_root_filesystem_master_block")]
     internal static partial ZfsStatus ReadRootFilesystemMasterBlock(nint device, nint buffer, ulong length, out ulong bytesRead);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_lookup_root_filesystem_master", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial ZfsStatus LookupRootFilesystemMaster(nint device, string name, out ulong value);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -202,6 +205,13 @@ public sealed class ZfsReadOnlyDevice : IDisposable
             return buffer[..(int)bytesRead];
         }
         finally { pinned.Free(); }
+    }
+
+    public ulong LookupRootFilesystemMaster(string name)
+    {
+        var status = NativeMethods.LookupRootFilesystemMaster(_handle, name, out var value);
+        if (status != ZfsStatus.Ok) throw new IOException($"Filesystem master lookup failed: {status}");
+        return value;
     }
 
     public void Dispose()
