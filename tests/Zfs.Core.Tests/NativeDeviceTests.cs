@@ -146,6 +146,17 @@ public sealed class NativeDeviceTests
         Assert.Equal(rootEntries.Count, rootEntries.Select(entry => entry.Name).Distinct().Count());
         var nestedEntry = Assert.Single(device.EnumerateDirectory("/nested"));
         Assert.Equal(new ZfsDirectoryEntry("nested.txt", 256, 8), nestedEntry);
+
+        using var dataset = device.OpenDefaultDataset();
+        using var rootHandle = dataset.OpenRoot();
+        Assert.Equal(34UL, rootHandle.Info.ObjectNumber);
+        Assert.Equal(4U, rootHandle.Info.Type);
+        Assert.Equal(4, rootHandle.Enumerate().Count);
+        using var nestedDirectoryHandle = rootHandle.OpenChild("nested");
+        Assert.Equal(4U, nestedDirectoryHandle.Info.Type);
+        using var nestedFileHandle = nestedDirectoryHandle.OpenChild("nested.txt");
+        Assert.Equal(256UL, nestedFileHandle.Info.ObjectNumber);
+        Assert.Equal(nested, nestedFileHandle.ReadAllBytes());
         Assert.Throws<ArgumentException>(() => device.ResolvePath("../nested/nested.txt"));
 
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));

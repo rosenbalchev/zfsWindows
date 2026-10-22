@@ -13,12 +13,19 @@
 #endif
 
 typedef struct zfs_core_device zfs_core_device_t;
+typedef struct zfs_core_dataset zfs_core_dataset_t;
+typedef struct zfs_core_object zfs_core_object_t;
 
 typedef struct zfs_core_dsl_dir_info {
     uint64_t head_dataset_obj;
     uint64_t child_dir_zap_obj;
     uint64_t props_zap_obj;
 } zfs_core_dsl_dir_info_t;
+
+typedef struct zfs_core_object_info {
+    uint64_t object_number;
+    uint32_t type;
+} zfs_core_object_info_t;
 
 typedef enum zfs_core_status {
     ZFS_CORE_OK = 0,
@@ -102,4 +109,25 @@ ZFS_CORE_API zfs_core_status_t zfs_core_read_root_file(
     uint64_t length, uint64_t *bytes_read);
 ZFS_CORE_API zfs_core_status_t zfs_core_get_root_file_size(
     const zfs_core_device_t *device, uint64_t object, uint64_t *size);
+ZFS_CORE_API zfs_core_status_t zfs_core_open_default_dataset(
+    zfs_core_device_t *device, zfs_core_dataset_t **dataset);
+ZFS_CORE_API void zfs_core_close_dataset(zfs_core_dataset_t *dataset);
+ZFS_CORE_API zfs_core_status_t zfs_core_open_dataset_root(
+    zfs_core_dataset_t *dataset, zfs_core_object_t **object);
+ZFS_CORE_API zfs_core_status_t zfs_core_open_child(
+    zfs_core_object_t *directory, const char *name, zfs_core_object_t **object);
+ZFS_CORE_API void zfs_core_close_object(zfs_core_object_t *object);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_object_info(
+    const zfs_core_object_t *object, zfs_core_object_info_t *info);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_object_entry_count(
+    const zfs_core_object_t *directory, uint64_t *count);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_object_entry(
+    const zfs_core_object_t *directory, uint64_t index, char *name,
+    uint64_t name_capacity, uint64_t *name_bytes, uint64_t *object,
+    uint32_t *type);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_object_file_size(
+    const zfs_core_object_t *file, uint64_t *size);
+ZFS_CORE_API zfs_core_status_t zfs_core_read_object_file(
+    const zfs_core_object_t *file, void *buffer, uint64_t length,
+    uint64_t *bytes_read);
 

@@ -54,6 +54,18 @@ struct zfs_core_device {
     uint64_t selected_uberblock_offset;
 };
 
+struct zfs_core_dataset {
+    zfs_core_device_t *device;
+    uint64_t dsl_directory_object;
+    uint64_t head_dataset_object;
+};
+
+struct zfs_core_object {
+    zfs_core_device_t *device;
+    uint64_t object_number;
+    uint32_t type;
+};
+
 static int seek_u64(FILE *file, uint64_t offset);
 static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp,
     unsigned char *destination, size_t capacity, size_t *logical_size_out);
@@ -600,17 +612,28 @@ static int read_dataset_objset_root(zfs_core_device_t *device,
     return valid;
 }
 
+static int read_default_dataset_info(zfs_core_device_t *device,
+    uint64_t *dsl_directory_object, zfs_core_dsl_dir_info_t *dataset_info)
+{
+    zfs_core_dsl_dir_info_t root_info;
+    uint64_t child_dir_object = 0;
+    int valid = dsl_directory_object != NULL && dataset_info != NULL &&
+        read_root_dataset_info(device, &root_info) &&
+        lookup_mos_microzap(device, root_info.child_dir_zap_obj, 13,
+            "data", &child_dir_object) &&
+        read_dsl_dir_info(device, child_dir_object, dataset_info);
+    if (valid) *dsl_directory_object = child_dir_object;
+    return valid;
+}
+
 static int read_root_dataset_objset_root(zfs_core_device_t *device,
     unsigned char *destination, size_t capacity, size_t *logical_size_out)
 {
-    zfs_core_dsl_dir_info_t root_info;
-    zfs_core_dsl_dir_info_t child_info;
-    uint64_t child_dir_object = 0;
-    return read_root_dataset_info(device, &root_info) &&
-        lookup_mos_microzap(device, root_info.child_dir_zap_obj, 13,
-            "data", &child_dir_object) &&
-        read_dsl_dir_info(device, child_dir_object, &child_info) &&
-        read_dataset_objset_root(device, child_info.head_dataset_obj,
+    zfs_core_dsl_dir_info_t dataset_info;
+    uint64_t dsl_directory_object = 0;
+    return read_default_dataset_info(device, &dsl_directory_object,
+            &dataset_info) &&
+        read_dataset_objset_root(device, dataset_info.head_dataset_obj,
             destination, capacity, logical_size_out);
 }
 
@@ -1430,5 +1453,120 @@ zfs_core_status_t zfs_core_get_root_file_size(
     *size = 0;
     return get_root_file_size((zfs_core_device_t *)device, object, size) ?
         ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
+}
+
+zfs_core_status_t zfs_core_open_default_dataset(
+    zfs_core_device_t *device, zfs_core_dataset_t **dataset)
+{
+    if (device == NULL || dataset == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *dataset = NULL;
+    zfs_core_dsl_dir_info_t info;
+    uint64_t dsl_directory_object = 0;
+    if (!read_default_dataset_info(device, &dsl_directory_object, &info))
+        return ZFS_CORE_CORRUPT_METADATA;
+    zfs_core_dataset_t *result = (zfs_core_dataset_t *)calloc(1, sizeof(*result));
+    if (result == NULL) return ZFS_CORE_IO_ERROR;
+    result->device = device;
+    result->dsl_directory_object = dsl_directory_object;
+    result->head_dataset_object = info.head_dataset_obj;
+    *dataset = result;
+    return ZFS_CORE_OK;
+}
+
+void zfs_core_close_dataset(zfs_core_dataset_t *dataset)
+{
+    free(dataset);
+}
+
+zfs_core_status_t zfs_core_open_dataset_root(
+    zfs_core_dataset_t *dataset, zfs_core_object_t **object)
+{
+    if (dataset == NULL || dataset->device == NULL || object == NULL)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    *object = NULL;
+    uint64_t root_object = 0;
+    if (!lookup_filesystem_microzap(dataset->device, 1, 21, "ROOT", &root_object))
+        return ZFS_CORE_CORRUPT_METADATA;
+    zfs_core_object_t *result = (zfs_core_object_t *)calloc(1, sizeof(*result));
+    if (result == NULL) return ZFS_CORE_IO_ERROR;
+    result->device = dataset->device;
+    result->object_number = root_object;
+    result->type = 4; /* DT_DIR */
+    *object = result;
+    return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_open_child(
+    zfs_core_object_t *directory, const char *name, zfs_core_object_t **object)
+{
+    if (directory == NULL || directory->device == NULL || directory->type != 4 ||
+        name == NULL || object == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *object = NULL;
+    uint64_t directory_entry = 0;
+    if (!lookup_filesystem_microzap(directory->device,
+            directory->object_number, 20, name, &directory_entry))
+        return ZFS_CORE_CORRUPT_METADATA;
+    zfs_core_object_t *result = (zfs_core_object_t *)calloc(1, sizeof(*result));
+    if (result == NULL) return ZFS_CORE_IO_ERROR;
+    result->device = directory->device;
+    result->object_number = directory_entry & UINT64_C(0x0000ffffffffffff);
+    result->type = (uint32_t)(directory_entry >> 60);
+    if (result->object_number == 0) { free(result); return ZFS_CORE_CORRUPT_METADATA; }
+    *object = result;
+    return ZFS_CORE_OK;
+}
+
+void zfs_core_close_object(zfs_core_object_t *object)
+{
+    free(object);
+}
+
+zfs_core_status_t zfs_core_get_object_info(
+    const zfs_core_object_t *object, zfs_core_object_info_t *info)
+{
+    if (object == NULL || info == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    info->object_number = object->object_number;
+    info->type = object->type;
+    return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_get_object_entry_count(
+    const zfs_core_object_t *directory, uint64_t *count)
+{
+    if (directory == NULL || directory->device == NULL || directory->type != 4)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    return zfs_core_get_directory_entry_count(directory->device,
+        directory->object_number, count);
+}
+
+zfs_core_status_t zfs_core_get_object_entry(
+    const zfs_core_object_t *directory, uint64_t index, char *name,
+    uint64_t name_capacity, uint64_t *name_bytes, uint64_t *object,
+    uint32_t *type)
+{
+    if (directory == NULL || directory->device == NULL || directory->type != 4)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    return zfs_core_get_directory_entry(directory->device,
+        directory->object_number, index, name, name_capacity, name_bytes,
+        object, type);
+}
+
+zfs_core_status_t zfs_core_get_object_file_size(
+    const zfs_core_object_t *file, uint64_t *size)
+{
+    if (file == NULL || file->device == NULL || file->type != 8)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    return zfs_core_get_root_file_size(file->device,
+        file->object_number, size);
+}
+
+zfs_core_status_t zfs_core_read_object_file(
+    const zfs_core_object_t *file, void *buffer, uint64_t length,
+    uint64_t *bytes_read)
+{
+    if (file == NULL || file->device == NULL || file->type != 8)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    return zfs_core_read_root_file(file->device,
+        file->object_number, buffer, length, bytes_read);
 }
 

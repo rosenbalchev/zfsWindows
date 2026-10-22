@@ -38,6 +38,13 @@ public struct ZfsDslDirInfo
     public ulong PropsZapObject;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct ZfsObjectInfo
+{
+    public ulong ObjectNumber;
+    public uint Type;
+}
+
 internal static partial class NativeMethods
 {
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_readonly", StringMarshalling = StringMarshalling.Utf8)]
@@ -106,6 +113,38 @@ internal static partial class NativeMethods
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_root_file_size")]
     internal static partial ZfsStatus GetRootFileSize(nint device, ulong objectNumber, out ulong size);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_default_dataset")]
+    internal static partial ZfsStatus OpenDefaultDataset(nint device, out nint dataset);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_close_dataset")]
+    internal static partial void CloseDataset(nint dataset);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_dataset_root")]
+    internal static partial ZfsStatus OpenDatasetRoot(nint dataset, out nint objectHandle);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_child", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial ZfsStatus OpenChild(nint directory, string name, out nint objectHandle);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_close_object")]
+    internal static partial void CloseObject(nint objectHandle);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_object_info")]
+    internal static partial ZfsStatus GetObjectInfo(nint objectHandle, out ZfsObjectInfo info);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_object_entry_count")]
+    internal static partial ZfsStatus GetObjectEntryCount(nint directory, out ulong count);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_object_entry")]
+    internal static partial ZfsStatus GetObjectEntry(nint directory, ulong index, nint name,
+        ulong nameCapacity, out ulong nameBytes, out ulong objectNumber, out uint type);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_object_file_size")]
+    internal static partial ZfsStatus GetObjectFileSize(nint file, out ulong size);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_object_file")]
+    internal static partial ZfsStatus ReadObjectFile(nint file, nint buffer, ulong length,
+        out ulong bytesRead);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -334,6 +373,13 @@ public sealed class ZfsReadOnlyDevice : IDisposable
 
     public byte[] ReadFile(string path) => ReadRootFile(ResolvePath(path));
 
+    public ZfsDataset OpenDefaultDataset()
+    {
+        var status = NativeMethods.OpenDefaultDataset(_handle, out var dataset);
+        if (status != ZfsStatus.Ok) throw new IOException($"Default dataset open failed: {status}");
+        return new ZfsDataset(this, dataset);
+    }
+
     public byte[] ReadRootFile(ulong objectNumber)
     {
         var status = NativeMethods.GetRootFileSize(_handle, objectNumber, out var size);
@@ -363,3 +409,118 @@ public sealed class ZfsReadOnlyDevice : IDisposable
 }
 
 public readonly record struct ZfsDirectoryEntry(string Name, ulong ObjectNumber, uint Type);
+
+public sealed class ZfsDataset : IDisposable
+{
+    private readonly ZfsReadOnlyDevice _owner;
+    private nint _handle;
+
+    internal ZfsDataset(ZfsReadOnlyDevice owner, nint handle)
+    {
+        _owner = owner;
+        _handle = handle;
+    }
+
+    public ZfsObject OpenRoot()
+    {
+        ObjectDisposedException.ThrowIf(_handle == nint.Zero, this);
+        var status = NativeMethods.OpenDatasetRoot(_handle, out var objectHandle);
+        if (status != ZfsStatus.Ok) throw new IOException($"Dataset root open failed: {status}");
+        return new ZfsObject(this, objectHandle);
+    }
+
+    public void Dispose()
+    {
+        if (_handle == nint.Zero) return;
+        NativeMethods.CloseDataset(_handle);
+        _handle = nint.Zero;
+        GC.KeepAlive(_owner);
+        GC.SuppressFinalize(this);
+    }
+}
+
+public sealed class ZfsObject : IDisposable
+{
+    private readonly ZfsDataset _owner;
+    private nint _handle;
+
+    internal ZfsObject(ZfsDataset owner, nint handle)
+    {
+        _owner = owner;
+        _handle = handle;
+        var status = NativeMethods.GetObjectInfo(_handle, out var info);
+        if (status != ZfsStatus.Ok)
+        {
+            NativeMethods.CloseObject(_handle);
+            _handle = nint.Zero;
+            throw new IOException($"Object info failed: {status}");
+        }
+        Info = info;
+    }
+
+    public ZfsObjectInfo Info { get; }
+
+    public ZfsObject OpenChild(string name)
+    {
+        ObjectDisposedException.ThrowIf(_handle == nint.Zero, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var status = NativeMethods.OpenChild(_handle, name, out var child);
+        if (status != ZfsStatus.Ok) throw new IOException($"Child open failed for '{name}': {status}");
+        return new ZfsObject(_owner, child);
+    }
+
+    public IReadOnlyList<ZfsDirectoryEntry> Enumerate()
+    {
+        ObjectDisposedException.ThrowIf(_handle == nint.Zero, this);
+        var status = NativeMethods.GetObjectEntryCount(_handle, out var count);
+        if (status != ZfsStatus.Ok) throw new IOException($"Directory count failed: {status}");
+        if (count > int.MaxValue) throw new IOException("Directory contains too many entries.");
+        var entries = new List<ZfsDirectoryEntry>((int)count);
+        var nameBuffer = new byte[51];
+        var pinned = GCHandle.Alloc(nameBuffer, GCHandleType.Pinned);
+        try
+        {
+            for (ulong index = 0; index < count; ++index)
+            {
+                status = NativeMethods.GetObjectEntry(_handle, index, pinned.AddrOfPinnedObject(),
+                    (ulong)nameBuffer.Length, out var nameBytes, out var objectNumber, out var type);
+                if (status != ZfsStatus.Ok) throw new IOException($"Directory entry {index} failed: {status}");
+                if (nameBytes is 0 or > 51 || nameBuffer[(int)nameBytes - 1] != 0)
+                    throw new InvalidDataException("Native directory entry returned an invalid name.");
+                var name = new UTF8Encoding(false, true).GetString(nameBuffer, 0, (int)nameBytes - 1);
+                entries.Add(new(name, objectNumber, type));
+            }
+        }
+        finally { pinned.Free(); }
+        return entries;
+    }
+
+    public byte[] ReadAllBytes()
+    {
+        ObjectDisposedException.ThrowIf(_handle == nint.Zero, this);
+        var status = NativeMethods.GetObjectFileSize(_handle, out var size);
+        if (status != ZfsStatus.Ok) throw new IOException($"File size read failed: {status}");
+        if (size > int.MaxValue) throw new IOException("File is too large for a single managed buffer.");
+        if (size == 0) return Array.Empty<byte>();
+        var buffer = new byte[(int)size];
+        var pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            status = NativeMethods.ReadObjectFile(_handle, pinned.AddrOfPinnedObject(), size,
+                out var bytesRead);
+            if (status != ZfsStatus.Ok) throw new IOException($"File read failed: {status}");
+            if (bytesRead != size) throw new EndOfStreamException();
+            return buffer;
+        }
+        finally { pinned.Free(); }
+    }
+
+    public void Dispose()
+    {
+        if (_handle == nint.Zero) return;
+        NativeMethods.CloseObject(_handle);
+        _handle = nint.Zero;
+        GC.KeepAlive(_owner);
+        GC.SuppressFinalize(this);
+    }
+}

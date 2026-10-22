@@ -6,7 +6,7 @@ unchanged and is treated as the on-disk format and algorithm reference.
 
 ## Current status
 
-Milestone M1 is in progress. The repository now contains:
+Milestone M2 is complete. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
