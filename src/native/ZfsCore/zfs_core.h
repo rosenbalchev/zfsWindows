@@ -36,6 +36,9 @@ typedef struct zfs_core_device_info {
     uint64_t pool_guid;
     uint64_t vdev_guid;
     uint64_t ashift;
+    uint32_t mos_root_valid;
+    uint64_t mos_root_offset;
+    uint64_t mos_root_size;
     uint64_t selected_txg;
     uint64_t selected_uberblock_offset;
 } zfs_core_device_info_t;

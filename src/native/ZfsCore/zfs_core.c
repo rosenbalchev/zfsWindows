@@ -8,6 +8,7 @@
 #define VDEV_LABEL_COUNT 4U
 #define VDEV_LABEL_START_SIZE (2ULL * VDEV_LABEL_SIZE)
 #define VDEV_LABEL_END_SIZE (2ULL * VDEV_LABEL_SIZE)
+#define VDEV_LABEL_START_SIZE_FULL (4ULL * 1024ULL * 1024ULL)
 #define VDEV_SKIP_SIZE (16ULL * 1024ULL)
 #define VDEV_PHYS_SIZE (112ULL * 1024ULL)
 #define VDEV_UBERBLOCK_RING_OFFSET (128ULL * 1024ULL)
@@ -26,6 +27,9 @@ struct zfs_core_device {
     uint64_t pool_guid;
     uint64_t vdev_guid;
     uint64_t ashift;
+    uint32_t mos_root_valid;
+    uint64_t mos_root_offset;
+    uint64_t mos_root_size;
     uint64_t selected_txg;
     uint64_t selected_uberblock_offset;
 };
@@ -201,6 +205,17 @@ static void scan_uberblocks(zfs_core_device_t *device, uint64_t label)
         if (txg >= device->selected_txg) {
             device->selected_txg = txg;
             device->selected_uberblock_offset = offset;
+            uint64_t dva_word = 0;
+            uint64_t prop = 0;
+            memcpy(&dva_word, fields + 40, sizeof(dva_word));
+            memcpy(&prop, fields + 88, sizeof(prop));
+            uint64_t dva_offset = (dva_word & UINT64_C(0x7fffffffffffffff)) << 9;
+            uint64_t logical_size = (((prop >> 0) & UINT64_C(0xffff)) + 1) << 9;
+            device->mos_root_offset = VDEV_LABEL_START_SIZE_FULL + dva_offset;
+            device->mos_root_size = logical_size;
+            device->mos_root_valid = logical_size >= 512 && logical_size <= 16 * 1024 * 1024 &&
+                device->mos_root_offset <= device->size_bytes &&
+                logical_size <= device->size_bytes - device->mos_root_offset;
         }
     }
 }
@@ -269,6 +284,9 @@ zfs_core_status_t zfs_core_get_info(const zfs_core_device_t *device, zfs_core_de
     info->pool_guid = device->pool_guid;
     info->vdev_guid = device->vdev_guid;
     info->ashift = device->ashift;
+    info->mos_root_valid = device->mos_root_valid;
+    info->mos_root_offset = device->mos_root_offset;
+    info->mos_root_size = device->mos_root_size;
     info->selected_txg = device->selected_txg;
     info->selected_uberblock_offset = device->selected_uberblock_offset;
     return ZFS_CORE_OK;

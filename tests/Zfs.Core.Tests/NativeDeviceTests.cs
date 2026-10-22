@@ -66,6 +66,8 @@ public sealed class NativeDeviceTests
         Assert.True(device.Info.PoolGuid > 0);
         Assert.True(device.Info.VdevGuid > 0);
         Assert.InRange(device.Info.Ashift, 9UL, 24UL);
+        Assert.Equal(1U, device.Info.MosRootValid);
+        Assert.True(device.Info.MosRootSize >= 512);
         Assert.True(device.IsRecognizedPool);
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }

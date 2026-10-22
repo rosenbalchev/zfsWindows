@@ -22,6 +22,9 @@ public struct ZfsDeviceInfo
     public ulong PoolGuid;
     public ulong VdevGuid;
     public ulong Ashift;
+    public uint MosRootValid;
+    public ulong MosRootOffset;
+    public ulong MosRootSize;
     public ulong SelectedTxg;
     public ulong SelectedUberblockOffset;
 }
