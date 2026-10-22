@@ -17,6 +17,7 @@
 #define UBERBLOCK_MAGIC UINT64_C(0x00bab10c)
 #define ZEC_MAGIC UINT64_C(0x0210da7ab10c7a11)
 #define DMU_OT_DNODE 10U
+#define MOS_DNODE_BLOCK_SIZE (128ULL * 1024ULL)
 
 struct zfs_core_device {
     FILE *file;
@@ -161,6 +162,147 @@ static int validate_mos_root(zfs_core_device_t *device)
     int valid = block[0] == DMU_OT_DNODE && block[2] >= 1 && block[2] <= 5 &&
         block[3] >= 1 && block[3] <= 16 && (length % 512U) == 0;
     free(block);
+    return valid;
+}
+
+static uint64_t load_u64(const unsigned char *p)
+{
+    uint64_t value = 0;
+    memcpy(&value, p, sizeof(value));
+    return value;
+}
+
+static int zle_decompress(const unsigned char *source, size_t source_length,
+    unsigned char *destination, size_t destination_length)
+{
+    size_t source_offset = 0;
+    size_t destination_offset = 0;
+    const size_t parameter = 64;
+    while (source_offset < source_length && destination_offset < destination_length) {
+        unsigned int length = (unsigned int)source[source_offset++] + 1U;
+        if (length <= parameter) {
+            if (length > source_length - source_offset ||
+                length > destination_length - destination_offset) return 0;
+            memcpy(destination + destination_offset, source + source_offset, length);
+            source_offset += length;
+            destination_offset += length;
+        } else {
+            length -= (unsigned int)parameter;
+            if (length > destination_length - destination_offset) return 0;
+            memset(destination + destination_offset, 0, length);
+            destination_offset += length;
+        }
+    }
+    return source_offset == source_length && destination_offset == destination_length;
+}
+
+static int lz4_decompress(const unsigned char *source, size_t source_length,
+    unsigned char *destination, size_t destination_length)
+{
+    if (source_length < 4) return 0;
+    size_t encoded_length = be32(source);
+    if (encoded_length > source_length - 4) return 0;
+    size_t source_offset = 4;
+    size_t source_end = source_offset + encoded_length;
+    size_t destination_offset = 0;
+    while (source_offset < source_end) {
+        unsigned int token = source[source_offset++];
+        size_t literal_length = token >> 4;
+        size_t match_length = token & 0x0fU;
+        if (literal_length == 15) {
+            unsigned int extension = 255;
+            while (extension == 255) {
+                if (source_offset >= source_end) return 0;
+                extension = source[source_offset++];
+                literal_length += extension;
+            }
+        }
+        if (literal_length > source_end - source_offset ||
+            literal_length > destination_length - destination_offset) return 0;
+        memcpy(destination + destination_offset, source + source_offset, literal_length);
+        source_offset += literal_length;
+        destination_offset += literal_length;
+        if (source_offset == source_end) break;
+        if (source_end - source_offset < 2) return 0;
+        size_t match_offset = source[source_offset] |
+            ((size_t)source[source_offset + 1] << 8);
+        source_offset += 2;
+        if (match_offset == 0 || match_offset > destination_offset) return 0;
+        if (match_length == 15) {
+            unsigned int extension = 255;
+            while (extension == 255) {
+                if (source_offset >= source_end) return 0;
+                extension = source[source_offset++];
+                match_length += extension;
+            }
+        }
+        match_length += 4;
+        if (match_length > destination_length - destination_offset) return 0;
+        size_t match_start = destination_offset - match_offset;
+        for (size_t i = 0; i < match_length; ++i)
+            destination[destination_offset++] = destination[match_start + i];
+    }
+    return destination_offset == destination_length;
+}
+
+static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp,
+    unsigned char *destination, size_t capacity, size_t *logical_size_out)
+{
+    uint64_t dva_word = load_u64(bp + 8);
+    uint64_t prop = load_u64(bp + 48);
+    uint64_t physical_size = (((prop >> 16) & UINT64_C(0xffff)) + 1) << 9;
+    uint64_t logical_size = ((prop & UINT64_C(0xffff)) + 1) << 9;
+    uint64_t compression = (prop >> 32) & UINT64_C(0x7f);
+    uint64_t offset = VDEV_LABEL_START_SIZE_FULL +
+        ((dva_word & UINT64_C(0x7fffffffffffffff)) << 9);
+    int valid = physical_size >= 512 && physical_size <= logical_size &&
+        (compression == 2 /* uncompressed */ || compression == 14 /* ZLE */ ||
+        compression == 15 /* LZ4 */);
+    if (!valid || logical_size > capacity || offset > device->size_bytes ||
+        physical_size > device->size_bytes - offset ||
+        logical_size > SIZE_MAX) {
+        return 0;
+    }
+    unsigned char *compressed = (unsigned char *)malloc((size_t)physical_size);
+    if (compressed == NULL || seek_u64(device->file, offset) != 0 ||
+        fread(compressed, 1, (size_t)physical_size, device->file) != physical_size) {
+        free(compressed); return 0;
+    }
+    int decoded = compression == 2 ?
+        (physical_size == logical_size && (memcpy(destination, compressed,
+            (size_t)logical_size), 1)) :
+        compression == 14 ? zle_decompress(compressed, (size_t)physical_size,
+            destination, (size_t)logical_size) :
+        lz4_decompress(compressed, (size_t)physical_size, destination,
+            (size_t)logical_size);
+    free(compressed);
+    if (decoded && logical_size_out != NULL) *logical_size_out = (size_t)logical_size;
+    return decoded;
+}
+
+static int read_mos_first_dnode_block(zfs_core_device_t *device,
+    unsigned char *destination, size_t capacity, size_t *logical_size_out)
+{
+    if (!device->mos_root_valid || device->mos_root_size < 512 ||
+        device->mos_root_size > SIZE_MAX || destination == NULL) return 0;
+    size_t root_length = (size_t)device->mos_root_size;
+    unsigned char *root = (unsigned char *)malloc(root_length);
+    if (root == NULL || seek_u64(device->file, device->mos_root_offset) != 0 ||
+        fread(root, 1, root_length, device->file) != root_length) {
+        free(root); return 0;
+    }
+    /* The first dnode in the MOS objset is the meta-dnode. Its level-one
+     * block is an indirect array of block pointers to dnode data blocks. */
+    if (root[0] != DMU_OT_DNODE || root[1] > 24 || root[2] < 2 || root[2] > 5) {
+        free(root); return 0;
+    }
+    unsigned char *indirect = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
+    size_t indirect_size = 0;
+    int valid = indirect != NULL && read_block_pointer(device, root + 64, indirect,
+        MOS_DNODE_BLOCK_SIZE, &indirect_size) && indirect_size == MOS_DNODE_BLOCK_SIZE &&
+        read_block_pointer(device, indirect, destination, capacity, logical_size_out);
+    free(indirect);
+    free(root);
     return valid;
 }
 
@@ -339,5 +481,20 @@ zfs_core_status_t zfs_core_read_mos_root(const zfs_core_device_t *device,
         return ZFS_CORE_OUT_OF_RANGE;
     return zfs_core_read(device, device->mos_root_offset, buffer,
         device->mos_root_size, bytes_read);
+}
+
+zfs_core_status_t zfs_core_read_mos_first_dnode_block(
+    const zfs_core_device_t *device, void *buffer, uint64_t length,
+    uint64_t *bytes_read)
+{
+    if (device == NULL || buffer == NULL || bytes_read == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *bytes_read = 0;
+    if (length < MOS_DNODE_BLOCK_SIZE) return ZFS_CORE_OUT_OF_RANGE;
+    size_t logical_size = 0;
+    if (!read_mos_first_dnode_block((zfs_core_device_t *)device,
+        (unsigned char *)buffer, (size_t)length, &logical_size))
+        return ZFS_CORE_NOT_SUPPORTED;
+    *bytes_read = logical_size;
+    return ZFS_CORE_OK;
 }
 

@@ -1,6 +1,6 @@
 # Step 04 — MOS, datasets, directories, and file reads
 
-Status: `planned`
+Status: `in progress`
 
 Objective: read actual filesystem content through ZFS metadata and block
 pointers.
@@ -9,6 +9,7 @@ Implementation:
 
 - read and validate the MOS root;
 - implement block-pointer checksum and compression dispatch;
+- traverse the MOS meta-dnode's indirect block and decode ZFS LZ4 blocks;
 - traverse DSL datasets and ZAP directory objects;
 - enumerate directories and resolve UTF-8 names;
 - read regular files with overflow and sparse-file handling;
@@ -16,6 +17,13 @@ Implementation:
 
 Exit evidence: a genuine upstream fixture can be opened, enumerated, and read
 with exact lengths and SHA-256 hashes from C#.
+
+Progress: the native read-only layer now validates the MOS root, resolves the
+meta-dnode's first indirect block, supports ZLE and OpenZFS LZ4 framing, and
+returns the first 16 KiB MOS dnode data block through the C ABI and C# wrapper.
+The fixture test confirms the expected empty object-0 dnode and object-directory
+dnode at object 1. Remaining work is checksum verification, full dnode/DSL/ZAP
+traversal, sparse and regular-file reads, and the final handle ABI.
 
 Commit: `native: read datasets directories and files`
 

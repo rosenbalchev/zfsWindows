@@ -69,6 +69,11 @@ public sealed class NativeDeviceTests
         Assert.Equal(1U, device.Info.MosRootValid);
         Assert.True(device.Info.MosRootSize >= 512);
         Assert.Equal(10, device.ReadMosRoot()[0]);
+        var dnodeBlock = device.ReadMosFirstDnodeBlock();
+        Assert.Equal(16 * 1024, dnodeBlock.Length);
+        Assert.Equal(0, dnodeBlock[0]);
+        Assert.Equal(1, dnodeBlock[512]);
+        Assert.Equal(17, dnodeBlock[513]);
         Assert.True(device.IsRecognizedPool);
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }

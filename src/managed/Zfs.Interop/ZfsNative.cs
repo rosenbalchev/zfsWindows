@@ -48,6 +48,9 @@ internal static partial class NativeMethods
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_mos_root")]
     internal static partial ZfsStatus ReadMosRoot(nint device, nint buffer, ulong length, out ulong bytesRead);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_mos_first_dnode_block")]
+    internal static partial ZfsStatus ReadMosFirstDnodeBlock(nint device, nint buffer, ulong length, out ulong bytesRead);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -96,6 +99,22 @@ public sealed class ZfsReadOnlyDevice : IDisposable
             if (status != ZfsStatus.Ok) throw new IOException($"MOS root read failed: {status}");
             if (bytesRead != (ulong)buffer.Length) throw new EndOfStreamException();
             return buffer;
+        }
+        finally { pinned.Free(); }
+    }
+
+    public byte[] ReadMosFirstDnodeBlock()
+    {
+        const int length = 128 * 1024;
+        var buffer = new byte[length];
+        var pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            var status = NativeMethods.ReadMosFirstDnodeBlock(_handle, pinned.AddrOfPinnedObject(),
+                (ulong)buffer.Length, out var bytesRead);
+            if (status != ZfsStatus.Ok) throw new IOException($"MOS dnode block read failed: {status}");
+            if (bytesRead == 0 || bytesRead > (ulong)buffer.Length) throw new EndOfStreamException();
+            return buffer[..(int)bytesRead];
         }
         finally { pinned.Free(); }
     }
