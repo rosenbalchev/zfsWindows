@@ -10,8 +10,11 @@ with a commit boundary. The implementation agent must:
 3. Implement only the step's scope.
 4. Run every listed verification command.
 5. Record actual results, counts, and blockers in the step file.
-6. Commit the step using the prescribed commit message.
-7. Continue only when the step is complete, or stop and mark it blocked.
+6. When the step is complete, rename its file with the `_completed` suffix
+   (for example, `07-scale-stress-and-benchmarks_completed.md`). An unsuffixed
+   file is unfinished even if its internal status was edited accidentally.
+7. Commit the step using the prescribed commit message.
+8. Continue only when the step is complete, or stop and mark it blocked.
 
 The status vocabulary is:
 
@@ -27,7 +30,8 @@ upstream compatibility are required where specified.
 ## Recovery after interruption
 
 When resumed, inspect `git log --oneline`, `git status`, and this directory.
-The first plan file whose status is not `complete` is the continuation point.
+The first numbered plan file without the `_completed` suffix is the
+continuation point; confirm its internal status before proceeding.
 Do not repeat a completed commit unless verification proves it is missing or
 invalid. If a commit exists but its step is still `in-progress`, rerun the
 verification and update the step rather than creating duplicate work.
@@ -36,17 +40,18 @@ verification and update the step rather than creating duplicate work.
 
 | Step | File | Scope | Initial status |
 |---|---|---|---|
-| 00 | `00-workflow.md` | Planning and commit workflow | complete |
-| 01 | `01-build-and-interop.md` | VS/MSBuild, C ABI, C# tests | complete |
-| 02 | `02-block-device-and-labels.md` | Safe read-only device and labels | complete |
-| 03 | `03-uberblocks-and-pool-recognition.md` | Label nvlist and uberblocks | complete |
-| 04 | `04-mos-dataset-and-file-reads.md` | MOS, datasets, directories, files | complete |
-| 05 | `05-genuine-single-disk-fixture.md` | 5 GiB fixture and hashes | complete |
-| 06 | `06-compression.md` | Compression compatibility | complete |
-| 07 | `07-scale-stress-and-benchmarks.md` | Small-file scale and measurement | in-progress |
-| 08 | `08-mirrors.md` | Mirror reads, degradation, recovery | planned |
+| 00 | `00-workflow_completed.md` | Planning and commit workflow | complete |
+| 01 | `01-build-and-interop_completed.md` | VS/MSBuild, C ABI, C# tests | complete |
+| 02 | `02-block-device-and-labels_completed.md` | Safe read-only device and labels | complete |
+| 03 | `03-uberblocks-and-pool-recognition_completed.md` | Label nvlist and uberblocks | complete |
+| 04 | `04-mos-dataset-and-file-reads_completed.md` | MOS, datasets, directories, files | complete |
+| 05 | `05-genuine-single-disk-fixture_completed.md` | 5 GiB fixture and hashes | complete |
+| 06 | `06-compression_completed.md` | Compression compatibility | complete |
+| 07 | `07-scale-stress-and-benchmarks_completed.md` | Small-file scale and measurement | complete |
+| 08 | `08-mirrors.md` | Mirror reads, degradation, recovery | in-progress |
 | 09 | `09-snapshots.md` | Snapshot discovery and historical reads | planned |
 | 10 | `10-transactional-writes.md` | COW writes and persistence | planned |
 | 11 | `11-crash-recovery.md` | Failure injection and durability | planned |
 | 12 | `12-windows-driver.md` | WDK filesystem driver in VM | planned |
+| 13 | `13-userspace-tools-and-installer.md` | Administration tools and Windows setup package | planned |
 

@@ -6,7 +6,7 @@ unchanged and is treated as the on-disk format and algorithm reference.
 
 ## Current status
 
-Milestone M4 is complete. The repository now contains:
+Milestone M5 is complete. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
@@ -38,6 +38,15 @@ Zstandard. Tests stream and hash 448 MiB of file content, cover a compression
 property change, report per-algorithm throughput, and prove every image remains
 byte-for-byte unchanged.
 
+The scalable small-file suite provides 5K, 50K, 500K, and 5M profiles with
+streaming manifests and configurable fan-out/depth. The completed milestone
+exhaustively validated the 5K and 50K profiles after Linux export/re-import,
+including every file hash and size, exact recursive enumeration, repeated
+random opens, concurrent enumeration, resource/latency reporting, and image
+identity. The 500K and 5M profiles are opt-in dedicated-host workloads.
+BenchmarkDotNet microbenchmarks and separate end-to-end stress runners keep
+warm-cache measurements distinct from initial traversal results.
+
 Read-only recognition validates OpenZFS SHA-256 checksums on labels and
 uberblocks and Fletcher-4 checksums on referenced non-embedded metadata before
 using it.
@@ -47,8 +56,9 @@ using it.
 The implementation is executed as ordered steps documented in [`plan/`](plan/).
 Each step has a dedicated Markdown file containing its objective, dependencies,
 implementation tasks, verification commands, evidence requirements, and the
-commit boundary. Work is committed after each independently reviewable step;
-the plan file is updated with the actual result and any blockers.
+commit boundary. A completed step's filename ends in `_completed`; unsuffixed
+step files are unfinished. Work is committed after each independently
+reviewable step; the plan file is updated with the actual result and blockers.
 
 If work is interrupted, call Codex again and say: “Continue the ZFS Windows
 plan.” Codex should inspect `plan/README.md`, the last committed step, the

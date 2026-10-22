@@ -1,0 +1,21 @@
+{
+  "profile": "Small",
+  "fileCount": 5000,
+  "fanout": 10,
+  "depth": 3,
+  "directoryCount": 1110,
+  "emptyFileCount": 313,
+  "logicalBytes": 304235,
+  "allocatedBytes": 12820480,
+  "imageSizeBytes": 536870912,
+  "imageSha256": "383D300EBA8D6AEE9C4CD97AD477C2B5D8FD1D76D307D9DCB70C0AF284A01673",
+  "pool": "zs_small",
+  "poolGuid": 14822492742754209490,
+  "zfsVersion": "zfs-2.4.1-1ubuntu5.1",
+  "reimportVerified": true,
+  "createSeconds": 0.5100322,
+  "verifySeconds": 0.9313082,
+  "createOperationsPerSecond": 9803.302615011366,
+  "verifyOperationsPerSecond": 5368.791985295523,
+  "peakWorkingSetBytes": 64024576
+}
