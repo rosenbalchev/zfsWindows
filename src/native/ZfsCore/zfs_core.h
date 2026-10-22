@@ -14,6 +14,12 @@
 
 typedef struct zfs_core_device zfs_core_device_t;
 
+typedef struct zfs_core_dsl_dir_info {
+    uint64_t head_dataset_obj;
+    uint64_t child_dir_zap_obj;
+    uint64_t props_zap_obj;
+} zfs_core_dsl_dir_info_t;
+
 typedef enum zfs_core_status {
     ZFS_CORE_OK = 0,
     ZFS_CORE_INVALID_ARGUMENT = 1,
@@ -64,4 +70,6 @@ ZFS_CORE_API zfs_core_status_t zfs_core_read_mos_object_directory_block(
     uint64_t *bytes_read);
 ZFS_CORE_API zfs_core_status_t zfs_core_lookup_mos_object_directory(
     const zfs_core_device_t *device, const char *name, uint64_t *value);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_root_dataset_info(
+    const zfs_core_device_t *device, zfs_core_dsl_dir_info_t *info);
 

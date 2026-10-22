@@ -325,6 +325,52 @@ static int read_mos_object_directory_block(zfs_core_device_t *device,
     return valid;
 }
 
+static int read_mos_dnode_block_for_object(zfs_core_device_t *device,
+    uint64_t object, unsigned char *destination, size_t capacity)
+{
+    unsigned char *root = (unsigned char *)malloc((size_t)device->mos_root_size);
+    unsigned char *indirect = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
+    if (root == NULL || indirect == NULL || device->mos_root_size > SIZE_MAX ||
+        seek_u64(device->file, device->mos_root_offset) != 0 ||
+        fread(root, 1, (size_t)device->mos_root_size, device->file) != device->mos_root_size ||
+        root[0] != DMU_OT_DNODE) {
+        free(indirect); free(root); return 0;
+    }
+    size_t indirect_size = 0;
+    int valid = read_block_pointer(device, root + 64, indirect,
+        MOS_DNODE_BLOCK_SIZE, &indirect_size) && indirect_size == MOS_DNODE_BLOCK_SIZE;
+    uint64_t block = object / 32;
+    if (valid && block >= MOS_DNODE_BLOCK_SIZE / 128) valid = 0;
+    size_t dnode_size = 0;
+    if (valid) valid = read_block_pointer(device, indirect + block * 128,
+        destination, capacity, &dnode_size) && dnode_size == 16 * 1024;
+    free(indirect);
+    free(root);
+    return valid;
+}
+
+static int read_root_dataset_info(zfs_core_device_t *device,
+    zfs_core_dsl_dir_info_t *info)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
+    if (dnode_block == NULL || !read_mos_dnode_block_for_object(device, 32,
+        dnode_block, 16 * 1024)) {
+        free(dnode_block); return 0;
+    }
+    const unsigned char *dnode = dnode_block;
+    size_t bonus_offset = 64 + (size_t)dnode[3] * 128;
+    int valid = dnode[0] == 12 /* DMU_OT_DSL_DIR */ && dnode[3] <= 3 &&
+        bonus_offset + 256 <= 16 * 1024;
+    if (valid) {
+        info->head_dataset_obj = load_u64(dnode_block + bonus_offset + 8);
+        info->child_dir_zap_obj = load_u64(dnode_block + bonus_offset + 32);
+        info->props_zap_obj = load_u64(dnode_block + bonus_offset + 80);
+        valid = info->head_dataset_obj != 0 && info->child_dir_zap_obj != 0;
+    }
+    free(dnode_block);
+    return valid;
+}
+
 static uint16_t load_u16(const unsigned char *p)
 {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
@@ -625,6 +671,15 @@ zfs_core_status_t zfs_core_lookup_mos_object_directory(
     if (device == NULL || name == NULL || value == NULL) return ZFS_CORE_INVALID_ARGUMENT;
     *value = 0;
     return lookup_mos_object_directory((zfs_core_device_t *)device, name, value) ?
+        ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
+}
+
+zfs_core_status_t zfs_core_get_root_dataset_info(
+    const zfs_core_device_t *device, zfs_core_dsl_dir_info_t *info)
+{
+    if (device == NULL || info == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    memset(info, 0, sizeof(*info));
+    return read_root_dataset_info((zfs_core_device_t *)device, info) ?
         ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
 

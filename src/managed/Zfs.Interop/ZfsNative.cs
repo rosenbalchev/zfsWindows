@@ -29,6 +29,14 @@ public struct ZfsDeviceInfo
     public ulong SelectedUberblockOffset;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct ZfsDslDirInfo
+{
+    public ulong HeadDatasetObject;
+    public ulong ChildDirZapObject;
+    public ulong PropsZapObject;
+}
+
 internal static partial class NativeMethods
 {
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_readonly", StringMarshalling = StringMarshalling.Utf8)]
@@ -57,6 +65,9 @@ internal static partial class NativeMethods
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_lookup_mos_object_directory", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial ZfsStatus LookupMosObjectDirectory(nint device, string name, out ulong value);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_root_dataset_info")]
+    internal static partial ZfsStatus GetRootDatasetInfo(nint device, out ZfsDslDirInfo info);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -146,6 +157,13 @@ public sealed class ZfsReadOnlyDevice : IDisposable
         var status = NativeMethods.LookupMosObjectDirectory(_handle, name, out var value);
         if (status != ZfsStatus.Ok) throw new IOException($"MOS object-directory lookup failed: {status}");
         return value;
+    }
+
+    public ZfsDslDirInfo GetRootDatasetInfo()
+    {
+        var status = NativeMethods.GetRootDatasetInfo(_handle, out var info);
+        if (status != ZfsStatus.Ok) throw new IOException($"Root dataset read failed: {status}");
+        return info;
     }
 
     public void Dispose()
