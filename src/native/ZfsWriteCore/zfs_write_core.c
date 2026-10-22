@@ -21,6 +21,7 @@
 #include <sys/dmu.h>
 #include <sys/dmu_objset.h>
 #include <sys/dmu_tx.h>
+#include <sys/dnode.h>
 #include <sys/sa.h>
 #include <sys/spa.h>
 #include <sys/txg.h>
@@ -142,6 +143,92 @@ write_object(write_context_t *context, uint64_t object, uint64_t offset,
 }
 
 static int
+create_file(write_context_t *context, const char *name, uint64_t *object_out)
+{
+    dmu_tx_t *tx = NULL;
+    dmu_buf_t *db = NULL;
+    sa_handle_t *handle = NULL;
+    sa_bulk_attr_t attrs[12];
+    uint64_t root = 0, object, mode, size = 0, generation;
+    uint64_t uid = 0, gid = 0, parent, flags = ZFS_ACL_TRIVIAL;
+    uint64_t links = 1, times[2] = { 0, 0 }, dirent;
+    int count = 0;
+    int error;
+
+    error = zap_lookup(context->os, MASTER_NODE_OBJ, ZFS_ROOT_OBJ,
+        sizeof (root), 1, &root);
+    if (error != 0)
+        return (error);
+    if (name[0] == '\0' || strchr(name, '/') != NULL)
+        return (EINVAL);
+
+    mode = S_IFREG | 0644;
+    parent = root;
+    generation = 0;
+    tx = dmu_tx_create(context->os);
+    dmu_tx_hold_sa_create(tx, DN_BONUS_SIZE(dmu_objset_dnodesize(
+        context->os)));
+    dmu_tx_hold_zap(tx, root, TRUE, name);
+    error = dmu_tx_assign(tx, DMU_TX_WAIT);
+    if (error != 0) {
+        dmu_tx_abort(tx);
+        return (error);
+    }
+
+    object = dmu_object_alloc_dnsize(context->os, DMU_OT_PLAIN_FILE_CONTENTS,
+        0, DMU_OT_SA, DN_BONUS_SIZE(dmu_objset_dnodesize(context->os)),
+        dmu_objset_dnodesize(context->os), tx);
+    error = sa_buf_hold(context->os, object, NULL, &db);
+    if (error == 0)
+        error = sa_handle_get_from_db(context->os, db, NULL, SA_HDL_SHARED,
+            &handle);
+    if (error == 0) {
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_MODE], NULL,
+            &mode, sizeof (mode));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_SIZE], NULL,
+            &size, sizeof (size));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_GEN], NULL,
+            &generation, sizeof (generation));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_UID], NULL,
+            &uid, sizeof (uid));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_GID], NULL,
+            &gid, sizeof (gid));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_PARENT], NULL,
+            &parent, sizeof (parent));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_FLAGS], NULL,
+            &flags, sizeof (flags));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_ATIME], NULL,
+            times, sizeof (times));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_MTIME], NULL,
+            times, sizeof (times));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_CTIME], NULL,
+            times, sizeof (times));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_CRTIME], NULL,
+            times, sizeof (times));
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_LINKS], NULL,
+            &links, sizeof (links));
+        error = sa_bulk_update(handle, attrs, count, tx);
+    }
+    if (error == 0) {
+        dirent = object | ((uint64_t)IFTODT(S_IFREG) << 60);
+        error = zap_add(context->os, root, name, sizeof (dirent), 1,
+            &dirent, tx);
+    }
+    if (handle != NULL)
+        sa_handle_destroy(handle);
+    if (db != NULL)
+        sa_buf_rele(db, NULL);
+    if (error == 0) {
+        dmu_tx_commit(tx);
+        txg_wait_synced(dmu_objset_pool(context->os), 0);
+        *object_out = object;
+    } else {
+        dmu_tx_abort(tx);
+    }
+    return (error);
+}
+
+static int
 open_context(write_context_t *context)
 {
     importargs_t args = { 0 };
@@ -227,8 +314,8 @@ static void
 usage(const char *program)
 {
     (void) fprintf(stderr,
-        "Usage: %s <probe|sync|write-object> <image-directory> "
-        "<pool> <dataset> [object offset payload-file]\n",
+        "Usage: %s <probe|sync|create-file|write-object> "
+        "<image-directory> <pool> <dataset> [name|object offset payload-file]\n",
         program);
 }
 
@@ -239,12 +326,15 @@ main(int argc, char **argv)
     uint64_t root_object = 0;
     int error;
 
-    if ((argc != 5 && argc != 8) ||
+    if ((argc != 5 && argc != 6 && argc != 8) ||
         (strcmp(argv[1], "probe") != 0 &&
         strcmp(argv[1], "sync") != 0 &&
+        strcmp(argv[1], "create-file") != 0 &&
         strcmp(argv[1], "write-object") != 0) ||
         (strcmp(argv[1], "write-object") == 0 && argc != 8) ||
-        (strcmp(argv[1], "write-object") != 0 && argc != 5)) {
+        (strcmp(argv[1], "create-file") == 0 && argc != 6) ||
+        (strcmp(argv[1], "probe") != 0 && strcmp(argv[1], "sync") != 0 &&
+        strcmp(argv[1], "create-file") != 0 && argc != 5)) {
         usage(argv[0]);
         return (2);
     }
@@ -255,7 +345,17 @@ main(int argc, char **argv)
 
     error = open_context(&context);
     if (error == 0) {
-        if (strcmp(argv[1], "write-object") == 0) {
+        if (strcmp(argv[1], "create-file") == 0) {
+            uint64_t object = 0;
+
+            error = create_file(&context, argv[5], &object);
+            if (error == 0)
+                (void) printf("pool=%s dataset=%s name=%s object=%llu\n",
+                    context.pool_name, context.dataset_name, argv[5],
+                    (unsigned long long)object);
+            else
+                print_error("create file", error);
+        } else if (strcmp(argv[1], "write-object") == 0) {
             uint64_t object = 0;
             uint64_t offset = 0;
 

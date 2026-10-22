@@ -41,3 +41,10 @@ transaction, calls `dmu_write`, commits it, and waits for the resulting TXG.
 This is deliberately object-addressed while pathname namespace creation is
 being built on top of the same transaction machinery.
 
+The adapter also now exposes `create-file <image-directory> <pool>
+<dataset> <name>`.  It allocates a `DMU_OT_PLAIN_FILE_CONTENTS` object with
+SA bonus metadata and inserts a regular-file dirent into the dataset root in
+the same transaction.  This checkpoint is compile-verified; cross-platform
+image verification is still pending because the configured Ubuntu VM is not
+currently accepting the available SSH key.
+
