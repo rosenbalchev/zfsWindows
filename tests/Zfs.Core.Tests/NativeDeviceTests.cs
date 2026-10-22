@@ -1,6 +1,7 @@
 using Zfs.Interop;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using Xunit;
 using Xunit.Sdk;
 
@@ -90,11 +91,14 @@ public sealed class NativeDeviceTests
         Assert.Equal(16 * 1024, masterDnodeBlock.Length);
         Assert.Equal(21, masterDnodeBlock[512]);
         Assert.Equal(34UL, device.LookupRootFilesystemMaster("ROOT"));
+        var fileDnodeBlock = device.ReadRootFilesystemObjectDnodeBlock(2);
+        Assert.Equal(19, fileDnodeBlock[2 * 512]);
         var rootDirectoryDnodeBlock = device.ReadRootFilesystemObjectDnodeBlock(34);
         Assert.Equal(20, rootDirectoryDnodeBlock[34 % 32 * 512]);
         var rootDirectoryData = device.ReadRootDirectoryDataBlock();
         Assert.Equal(512, rootDirectoryData.Length);
         Assert.Equal(0x8000000000000003UL, BitConverter.ToUInt64(rootDirectoryData, 0));
+        Assert.Contains("fixture.txt", Encoding.UTF8.GetString(rootDirectoryData));
         Assert.True(device.IsRecognizedPool);
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }

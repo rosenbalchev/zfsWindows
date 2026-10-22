@@ -8,6 +8,7 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF)
 add_library(ZfsCore SHARED
     ZfsCore/zfs_core.c
     ZfsCore/zfs_core.h
+    ../../OpenZFS/module/zfs/lz4.c
 )
 target_compile_definitions(ZfsCore PRIVATE ZFS_CORE_BUILD)
 target_include_directories(ZfsCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ZfsCore)

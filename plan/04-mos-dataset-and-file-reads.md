@@ -38,11 +38,18 @@ available MSVC compiler/linker directly. The master-node micro-ZAP now resolves
 1, and object 34's directory dnode and embedded LZ4 data block can be read
 through the native ABI and C# wrapper. The genuine fixture confirms the
 directory dnode type, a 512-byte logical block, and the `ZBT_MICRO` header.
-Directory-entry lookup remains a follow-up because the decoded embedded block
-does not yet expose the `fixture.txt` entry expected from `zdb`; no unverified
-lookup behavior is included in this checkpoint. The filesystem dnode walker
-also now uses the OpenZFS 128-pointer indirect-block fanout (7 index bits per
-level), which is required once object numbers cross the first zero-index path.
+The pool-root child map is now decoded from its embedded LZ4 micro-ZAP and
+resolves `data` to DSL directory object 385 and head dataset object 388. The
+walker therefore opens the populated `zfstest/data` objset instead of the empty
+pool-root filesystem. Its directory block contains the expected `fixture.txt`
+entry and object 2 is validated as a plain-file dnode. Embedded block-pointer
+payload extraction follows OpenZFS by excluding the property and logical-birth
+words. LZ4 decompression now calls the vendored OpenZFS implementation rather
+than a local decoder. The filesystem dnode walker uses the 128 KiB indirect
+block's 1024 block pointers (10 index bits per level). Directory-entry lookup,
+regular-file byte reads, checksums, sparse files, and the final handle ABI
+remain follow-up work. This checkpoint passes all 3 Windows tests against the
+genuine fixture while preserving its SHA-256 hash.
 
 Commit: `native: read datasets directories and files`
 

@@ -19,6 +19,9 @@
 #define DMU_OT_DNODE 10U
 #define MOS_DNODE_BLOCK_SIZE (128ULL * 1024ULL)
 
+int LZ4_uncompress_unknownOutputSize(const char *source, char *destination,
+    int source_length, int destination_length);
+
 struct zfs_core_device {
     FILE *file;
     uint64_t size_bytes;
@@ -199,50 +202,13 @@ static int zle_decompress(const unsigned char *source, size_t source_length,
 static int lz4_decompress(const unsigned char *source, size_t source_length,
     unsigned char *destination, size_t destination_length)
 {
-    if (source_length < 4) return 0;
+    if (source_length < 4 || source_length > INT_MAX ||
+        destination_length > INT_MAX) return 0;
     size_t encoded_length = be32(source);
-    if (encoded_length > source_length - 4) return 0;
-    size_t source_offset = 4;
-    size_t source_end = source_offset + encoded_length;
-    size_t destination_offset = 0;
-    while (source_offset < source_end) {
-        unsigned int token = source[source_offset++];
-        size_t literal_length = token >> 4;
-        size_t match_length = token & 0x0fU;
-        if (literal_length == 15) {
-            unsigned int extension = 255;
-            while (extension == 255) {
-                if (source_offset >= source_end) return 0;
-                extension = source[source_offset++];
-                literal_length += extension;
-            }
-        }
-        if (literal_length > source_end - source_offset ||
-            literal_length > destination_length - destination_offset) return 0;
-        memcpy(destination + destination_offset, source + source_offset, literal_length);
-        source_offset += literal_length;
-        destination_offset += literal_length;
-        if (source_offset == source_end) break;
-        if (source_end - source_offset < 2) return 0;
-        size_t match_offset = source[source_offset] |
-            ((size_t)source[source_offset + 1] << 8);
-        source_offset += 2;
-        if (match_offset == 0 || match_offset > destination_offset) return 0;
-        if (match_length == 15) {
-            unsigned int extension = 255;
-            while (extension == 255) {
-                if (source_offset >= source_end) return 0;
-                extension = source[source_offset++];
-                match_length += extension;
-            }
-        }
-        match_length += 4;
-        if (match_length > destination_length - destination_offset) return 0;
-        size_t match_start = destination_offset - match_offset;
-        for (size_t i = 0; i < match_length; ++i)
-            destination[destination_offset++] = destination[match_start + i];
-    }
-    return destination_offset == destination_length;
+    if (encoded_length > source_length - 4 || encoded_length > INT_MAX) return 0;
+    int decoded = LZ4_uncompress_unknownOutputSize((const char *)source + 4,
+        (char *)destination, (int)encoded_length, (int)destination_length);
+    return decoded == (int)destination_length;
 }
 
 static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp,
@@ -257,7 +223,7 @@ static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp
         unsigned char payload[112];
         size_t payload_offset = 0;
         for (size_t word = 0; word < 16 && payload_offset < sizeof(payload); ++word) {
-            if (word == 6 || word == 15) continue;
+            if (word == 6 || word == 10) continue;
             size_t remaining = sizeof(payload) - payload_offset;
             size_t copy_length = remaining < 8 ? remaining : 8;
             memcpy(payload + payload_offset, bp + word * 8, copy_length);
@@ -374,24 +340,79 @@ static int read_mos_dnode_block_for_object(zfs_core_device_t *device,
     return valid;
 }
 
-static int read_root_dataset_info(zfs_core_device_t *device,
+static int read_dsl_dir_info(zfs_core_device_t *device, uint64_t object,
     zfs_core_dsl_dir_info_t *info)
 {
     unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
-    if (dnode_block == NULL || !read_mos_dnode_block_for_object(device, 32,
+    if (dnode_block == NULL || !read_mos_dnode_block_for_object(device, object,
         dnode_block, 16 * 1024)) {
         free(dnode_block); return 0;
     }
-    const unsigned char *dnode = dnode_block;
+    const unsigned char *dnode = dnode_block + (object % 32) * 512;
     size_t bonus_offset = 64 + (size_t)dnode[3] * 128;
     int valid = dnode[0] == 12 /* DMU_OT_DSL_DIR */ && dnode[3] <= 3 &&
-        bonus_offset + 256 <= 16 * 1024;
+        bonus_offset + 256 <= 512;
     if (valid) {
-        info->head_dataset_obj = load_u64(dnode_block + bonus_offset + 8);
-        info->child_dir_zap_obj = load_u64(dnode_block + bonus_offset + 32);
-        info->props_zap_obj = load_u64(dnode_block + bonus_offset + 80);
+        info->head_dataset_obj = load_u64(dnode + bonus_offset + 8);
+        info->child_dir_zap_obj = load_u64(dnode + bonus_offset + 32);
+        info->props_zap_obj = load_u64(dnode + bonus_offset + 80);
         valid = info->head_dataset_obj != 0 && info->child_dir_zap_obj != 0;
     }
+    free(dnode_block);
+    return valid;
+}
+
+static int read_root_dataset_info(zfs_core_device_t *device,
+    zfs_core_dsl_dir_info_t *info)
+{
+    return read_dsl_dir_info(device, 32, info);
+}
+
+static int lookup_mos_microzap(zfs_core_device_t *device, uint64_t object,
+    uint8_t object_type, const char *name, uint64_t *value)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
+    unsigned char block[16 * 1024];
+    if (dnode_block == NULL || name == NULL || value == NULL ||
+        !read_mos_dnode_block_for_object(device, object, dnode_block, 16 * 1024)) {
+        free(dnode_block); return 0;
+    }
+    const unsigned char *dnode = dnode_block + (object % 32) * 512;
+    size_t block_size = 0;
+    int valid = dnode[0] == object_type && dnode[2] == 1 && dnode[3] >= 1 &&
+        dnode[3] <= 3 && read_block_pointer(device, dnode + 64, block,
+            sizeof(block), &block_size) && block_size >= 64 && block[0] == 3;
+    if (valid) {
+        for (size_t offset = 64; offset + 64 <= block_size; offset += 64) {
+            const char *entry_name = (const char *)(block + offset + 14);
+            size_t entry_length = 0;
+            while (entry_length < 50 && entry_name[entry_length] != 0) ++entry_length;
+            if (entry_length == 0 || entry_length == 50 ||
+                strlen(name) != entry_length || memcmp(entry_name, name, entry_length) != 0)
+                continue;
+            *value = load_u64(block + offset);
+            break;
+        }
+    }
+    free(dnode_block);
+    return valid && *value != 0;
+}
+
+static int read_dataset_objset_root(zfs_core_device_t *device,
+    uint64_t dataset_object,
+    unsigned char *destination, size_t capacity, size_t *logical_size_out)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
+    if (dnode_block == NULL || !read_mos_dnode_block_for_object(device, dataset_object,
+        dnode_block, 16 * 1024)) {
+        free(dnode_block); return 0;
+    }
+    const unsigned char *dnode = dnode_block + (dataset_object % 32) * 512;
+    size_t bonus_offset = 64 + (size_t)dnode[3] * 128;
+    int valid = dnode[4] == 16 /* DMU_OT_DSL_DATASET bonus */ && dnode[3] <= 3 &&
+        bonus_offset + 176 <= 512;
+    if (valid) valid = read_block_pointer(device, dnode + bonus_offset + 128,
+        destination, capacity, logical_size_out);
     free(dnode_block);
     return valid;
 }
@@ -399,19 +420,15 @@ static int read_root_dataset_info(zfs_core_device_t *device,
 static int read_root_dataset_objset_root(zfs_core_device_t *device,
     unsigned char *destination, size_t capacity, size_t *logical_size_out)
 {
-    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
-    if (dnode_block == NULL || !read_mos_dnode_block_for_object(device, 54,
-        dnode_block, 16 * 1024)) {
-        free(dnode_block); return 0;
-    }
-    const unsigned char *dnode = dnode_block + (54 % 32) * 512;
-    size_t bonus_offset = 64 + (size_t)dnode[3] * 128;
-    int valid = dnode[0] == 16 /* DMU_OT_DSL_DATASET */ && dnode[3] <= 3 &&
-        bonus_offset + 176 <= 16 * 1024;
-    if (valid) valid = read_block_pointer(device, dnode + bonus_offset + 128,
-        destination, capacity, logical_size_out);
-    free(dnode_block);
-    return valid;
+    zfs_core_dsl_dir_info_t root_info;
+    zfs_core_dsl_dir_info_t child_info;
+    uint64_t child_dir_object = 0;
+    return read_root_dataset_info(device, &root_info) &&
+        lookup_mos_microzap(device, root_info.child_dir_zap_obj, 13,
+            "data", &child_dir_object) &&
+        read_dsl_dir_info(device, child_dir_object, &child_info) &&
+        read_dataset_objset_root(device, child_info.head_dataset_obj,
+            destination, capacity, logical_size_out);
 }
 
 static int read_filesystem_object_dnode_block(zfs_core_device_t *device,
@@ -438,8 +455,8 @@ static int read_filesystem_object_dnode_block(zfs_core_device_t *device,
         valid = read_block_pointer(device, bp, level_block, MOS_DNODE_BLOCK_SIZE, &block_size) &&
             block_size == MOS_DNODE_BLOCK_SIZE;
         if (valid) {
-            uint64_t shift = (level - 1) * 7;
-            uint64_t index = (block_id >> shift) & UINT64_C(0x7f);
+            uint64_t shift = (level - 1) * 10;
+            uint64_t index = (block_id >> shift) & UINT64_C(0x3ff);
             bp = level_block + index * 128;
         }
     }

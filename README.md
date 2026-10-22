@@ -10,14 +10,16 @@ Milestone M1 is in progress. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
-- a small exported C ABI for opening an image, probing vdev labels, and bounded
-  block reads;
+- a small exported C ABI for opening an image, probing vdev labels, bounded
+  block reads, and initial MOS/dataset/directory traversal;
 - a .NET 10 interop project and xUnit test project;
 - PowerShell build/test entry points;
 - a fixture manifest contract and an implementation specification.
 
-The native layer does **not** yet read datasets or files. No functionality is
-claimed until it is exercised against a genuine OpenZFS-generated image.
+The native layer can traverse the genuine fixture into its populated child
+dataset and decode its root directory and file dnodes. General path lookup and
+regular-file byte reads are not implemented yet. Compatibility claims are made
+only for behavior exercised against a genuine OpenZFS-generated image.
 
 ## Development approach and resume flow
 
