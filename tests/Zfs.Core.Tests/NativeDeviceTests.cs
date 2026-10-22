@@ -83,6 +83,9 @@ public sealed class NativeDeviceTests
         Assert.Equal(54UL, rootDataset.HeadDatasetObject);
         Assert.Equal(34UL, rootDataset.ChildDirZapObject);
         Assert.Equal(33UL, rootDataset.PropsZapObject);
+        var datasetObjsetRoot = device.ReadRootDatasetObjsetRoot();
+        Assert.True(datasetObjsetRoot.Length >= 512);
+        Assert.Equal(10, datasetObjsetRoot[0]);
         Assert.True(device.IsRecognizedPool);
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }

@@ -371,6 +371,24 @@ static int read_root_dataset_info(zfs_core_device_t *device,
     return valid;
 }
 
+static int read_root_dataset_objset_root(zfs_core_device_t *device,
+    unsigned char *destination, size_t capacity, size_t *logical_size_out)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
+    if (dnode_block == NULL || !read_mos_dnode_block_for_object(device, 54,
+        dnode_block, 16 * 1024)) {
+        free(dnode_block); return 0;
+    }
+    const unsigned char *dnode = dnode_block + (54 % 32) * 512;
+    size_t bonus_offset = 64 + (size_t)dnode[3] * 128;
+    int valid = dnode[0] == 16 /* DMU_OT_DSL_DATASET */ && dnode[3] <= 3 &&
+        bonus_offset + 176 <= 16 * 1024;
+    if (valid) valid = read_block_pointer(device, dnode + bonus_offset + 128,
+        destination, capacity, logical_size_out);
+    free(dnode_block);
+    return valid;
+}
+
 static uint16_t load_u16(const unsigned char *p)
 {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
@@ -681,5 +699,20 @@ zfs_core_status_t zfs_core_get_root_dataset_info(
     memset(info, 0, sizeof(*info));
     return read_root_dataset_info((zfs_core_device_t *)device, info) ?
         ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
+}
+
+zfs_core_status_t zfs_core_read_root_dataset_objset_root(
+    const zfs_core_device_t *device, void *buffer, uint64_t length,
+    uint64_t *bytes_read)
+{
+    if (device == NULL || buffer == NULL || bytes_read == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *bytes_read = 0;
+    if (length < MOS_DNODE_BLOCK_SIZE) return ZFS_CORE_OUT_OF_RANGE;
+    size_t logical_size = 0;
+    if (!read_root_dataset_objset_root((zfs_core_device_t *)device,
+        (unsigned char *)buffer, (size_t)length, &logical_size))
+        return ZFS_CORE_CORRUPT_METADATA;
+    *bytes_read = logical_size;
+    return ZFS_CORE_OK;
 }
 

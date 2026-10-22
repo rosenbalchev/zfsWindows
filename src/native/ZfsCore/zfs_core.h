@@ -72,4 +72,7 @@ ZFS_CORE_API zfs_core_status_t zfs_core_lookup_mos_object_directory(
     const zfs_core_device_t *device, const char *name, uint64_t *value);
 ZFS_CORE_API zfs_core_status_t zfs_core_get_root_dataset_info(
     const zfs_core_device_t *device, zfs_core_dsl_dir_info_t *info);
+ZFS_CORE_API zfs_core_status_t zfs_core_read_root_dataset_objset_root(
+    const zfs_core_device_t *device, void *buffer, uint64_t length,
+    uint64_t *bytes_read);
 

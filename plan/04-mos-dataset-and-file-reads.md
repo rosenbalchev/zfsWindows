@@ -27,7 +27,8 @@ ZAP magic, and a fat-ZAP lookup of `root_dataset` to object 32. Remaining work
 is checksum verification, full ZAP/dataset traversal, sparse and regular-file
 reads, and the final handle ABI. Object 32 DSL-directory decoding now resolves
 head dataset object 54, child-directory ZAP object 34, and properties ZAP object
-33.
+33. The head dataset object 54 is now decoded through its DSL dataset bonus
+and its child objset root block is read and validated as a dnode block.
 
 Commit: `native: read datasets directories and files`
 
