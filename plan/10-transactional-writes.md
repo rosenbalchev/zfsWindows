@@ -48,3 +48,10 @@ the same transaction.  This checkpoint is compile-verified; cross-platform
 image verification is still pending because the configured Ubuntu VM is not
 currently accepting the available SSH key.
 
+Live testing is now possible with the project SSH key.  The first disposable
+fixture test currently stops in the OpenZFS debug invariant at
+`dnode_sync.c:683` (`DNODE_FLAG_USERUSED_ACCOUNTED`) during object creation.
+The image copy was disposable and the failed implementation is not being
+promoted to a completed step; accounting/ownership initialization must be
+fixed before proceeding to additional mutation operations.
+
