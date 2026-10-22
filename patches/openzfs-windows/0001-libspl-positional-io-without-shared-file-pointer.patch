@@ -1,0 +1,109 @@
+diff --git a/lib/libspl/os/windows/posix.c b/lib/libspl/os/windows/posix.c
+index 8602bc637..953127f56 100644
+--- a/lib/libspl/os/windows/posix.c
++++ b/lib/libspl/os/windows/posix.c
+@@ -1685,35 +1685,33 @@ wosix_fstat_blk(int fd, struct _stat64 *st)
+ 	return (-1); // errno?
+ }
+ 
++/*
++ * Positional I/O must not go through the shared file pointer: libzpool
++ * issues concurrent vdev_file reads and writes from taskq threads, and a
++ * seek/ReadFile/WriteFile sequence lets another thread move the pointer in
++ * between, landing data at the wrong offset.  On a synchronous handle an
++ * OVERLAPPED offset makes the position part of the single I/O request.
++ */
++static void
++overlapped_at(OVERLAPPED *ov, off_t offset)
++{
++	memset(ov, 0, sizeof (*ov));
++	ov->Offset = (DWORD)((uint64_t)offset & 0xffffffffULL);
++	ov->OffsetHigh = (DWORD)((uint64_t)offset >> 32);
++}
++
+ // os specific files can call this directly.
+ int
+ pread_win(HANDLE h, void *buf, size_t nbyte, off_t offset)
+ {
+-	DWORD red;
+-	int total_red = 0;
+-	LARGE_INTEGER large;
+-	LARGE_INTEGER lnew;
+-	// This code does all seeks based on "current" so we can
+-	// pre-seek to offset start
+-
+-	// Find current position
+-	large.QuadPart = 0;
+-	SetFilePointerEx(h, large, &lnew, FILE_CURRENT);
+-
+-	// Seek to place to read
+-	large.QuadPart = offset;
+-	SetFilePointerEx(h, large, NULL, FILE_BEGIN);
+-
+-	boolean_t ok;
+-
+-	ok = ReadFile(h, buf, nbyte, &red, NULL);
+-
+-	if (!ok || red == 0)
+-		red = -GetLastError();
+-
+-	// Restore position
+-	SetFilePointerEx(h, lnew, NULL, FILE_BEGIN);
++	DWORD red = 0;
++	OVERLAPPED ov;
+ 
++	overlapped_at(&ov, offset);
++	if (!ReadFile(h, buf, nbyte, &red, &ov) || red == 0) {
++		errno = EIO;
++		return (-(int)GetLastError());
++	}
+ 	return (red);
+ }
+ 
+@@ -1726,38 +1724,21 @@ wosix_pread(int fd, void *buf, size_t nbyte, off_t offset)
+ int
+ wosix_pwrite(int fd, const void *buf, size_t nbyte, off_t offset)
+ {
+-	HANDLE h = ITOH(fd);
+-	DWORD wrote;
+-	LARGE_INTEGER large;
+-	LARGE_INTEGER lnew;
+-
+-	// This code does all seeks based on "current" so we can
+-	// pre-seek to offset start
+-
+-	// Find current position
+-	large.QuadPart = 0;
+-	SetFilePointerEx(h, large, &lnew, FILE_CURRENT);
+-
+-	// Seek to place to read
+-	large.QuadPart = offset;
+-	SetFilePointerEx(h, large, NULL, FILE_BEGIN);
+-
+-	// Write
+-	if (!WriteFile(h, buf, nbyte, &wrote, NULL))
+-		wrote = -GetLastError();
+-
+-	// Restore position
+-	SetFilePointerEx(h, lnew, NULL, FILE_BEGIN);
++	DWORD wrote = 0;
++	OVERLAPPED ov;
+ 
++	overlapped_at(&ov, offset);
++	if (!WriteFile(ITOH(fd), buf, nbyte, &wrote, &ov)) {
++		errno = EIO;
++		return (-(int)GetLastError());
++	}
+ 	return (wrote);
+ }
+ 
+ int
+ wosix_fdatasync(int fd)
+ {
+-	// if (fcntl(fd, F_FULLFSYNC) == -1)
+-	//	return -1;
+-	return (0);
++	return (wosix_fsync(fd));
+ }
+ 
+ int
