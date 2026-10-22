@@ -23,10 +23,16 @@ the disposable Ubuntu Hyper-V VM with official `zpool` tools, exported, copied
 to `TestVolumes/step03-pool.raw`, and verified unchanged by SHA-256 during the
 Windows integration test. Plain raw files remain rejected.
 
+Label and uberblock slots are now accepted only after their OpenZFS embedded
+SHA-256 checksum validates with the physical-offset verifier. Uberblock slot
+size follows the OpenZFS `max(ashift, 10)` rule (capped at 8 KiB), and the
+fixture selects TXG 19, matching independent `zdb -ul` output. The selected
+uberblock's MOS root block pointer is retained and its Fletcher-4 checksum is
+verified before the pool is recognized.
+
 Remaining work before completion: recursively decode `vdev_tree`, validate
-actual nested `ashift` and topology, enumerate supported/unsupported feature
-flags, and verify the selected uberblock's root block pointer/checksum rather
-than relying on its magic and nonzero TXG.
+actual nested `ashift` and topology, and enumerate supported/unsupported
+feature flags.
 
 Commit: `native: recognize pools and validate uberblocks`
 

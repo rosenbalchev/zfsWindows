@@ -46,15 +46,22 @@ entry and object 2 is validated as a plain-file dnode. Embedded block-pointer
 payload extraction follows OpenZFS by excluding the property and logical-birth
 words. LZ4 decompression now calls the vendored OpenZFS implementation rather
 than a local decoder. The filesystem dnode walker uses the 128 KiB indirect
-block's 1024 block pointers (10 index bits per level). Directory-entry lookup,
+block's 1024 block pointers (10 index bits per level).
+
 The root-directory micro-ZAP lookup now decodes the ZFS directory-entry object
 number, resolving `fixture.txt` to object 2. The initial regular-file reader
 validates its plain-file dnode and system-attribute bonus, extracts the exact
 27-byte size from the fixture's OpenZFS SA layout 2, and decodes the embedded
 LZ4 data block through the C ABI and managed wrapper. General SA layout-table
-resolution, multi-block and sparse files, checksums, path traversal, and the
-final handle ABI remain follow-up work. This checkpoint passes all 3 Windows
+resolution, multi-block and sparse files, path traversal, and the final handle
+ABI remain follow-up work. This checkpoint passes all 3 Windows
 tests against the genuine fixture while preserving its SHA-256 hash.
+
+All non-embedded blocks reached through the current reader now validate their
+OpenZFS Fletcher-4 checksum before decompression. Checksum coverage includes
+the MOS root selected by the uberblock, MOS and dataset indirect blocks,
+dnode blocks, ZAP blocks, and non-embedded file data. Multi-block and sparse
+file behavior, general SA layouts, and path traversal remain unfinished.
 
 Commit: `native: read datasets directories and files`
 

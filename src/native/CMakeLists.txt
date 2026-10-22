@@ -12,6 +12,7 @@ add_library(ZfsCore SHARED
 )
 target_compile_definitions(ZfsCore PRIVATE ZFS_CORE_BUILD)
 target_include_directories(ZfsCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ZfsCore)
+target_link_libraries(ZfsCore PRIVATE bcrypt)
 if (MSVC)
     target_compile_options(ZfsCore PRIVATE /W4 /WX)
 else()

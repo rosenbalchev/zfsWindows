@@ -23,6 +23,10 @@ path traversal and multi-block/sparse file reads are not implemented yet.
 Compatibility claims are made only for behavior exercised against a genuine
 OpenZFS-generated image.
 
+Read-only recognition validates OpenZFS SHA-256 checksums on labels and
+uberblocks and Fletcher-4 checksums on referenced non-embedded metadata before
+using it.
+
 ## Development approach and resume flow
 
 The implementation is executed as ordered steps documented in [`plan/`](plan/).

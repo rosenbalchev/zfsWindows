@@ -4,6 +4,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#endif
+
 #define VDEV_LABEL_SIZE (256ULL * 1024ULL)
 #define VDEV_LABEL_COUNT 4U
 #define VDEV_LABEL_START_SIZE (2ULL * VDEV_LABEL_SIZE)
@@ -13,7 +19,8 @@
 #define VDEV_PHYS_SIZE (112ULL * 1024ULL)
 #define VDEV_UBERBLOCK_RING_OFFSET (128ULL * 1024ULL)
 #define VDEV_UBERBLOCK_RING_SIZE (128ULL * 1024ULL)
-#define VDEV_UBERBLOCK_SLOT_SIZE (1ULL * 1024ULL)
+#define UBERBLOCK_MIN_SHIFT 10U
+#define UBERBLOCK_MAX_SHIFT 13U
 #define UBERBLOCK_MAGIC UINT64_C(0x00bab10c)
 #define ZEC_MAGIC UINT64_C(0x0210da7ab10c7a11)
 #define DMU_OT_DNODE 10U
@@ -38,11 +45,14 @@ struct zfs_core_device {
     uint32_t mos_root_valid;
     uint64_t mos_root_offset;
     uint64_t mos_root_size;
+    unsigned char mos_root_bp[128];
     uint64_t selected_txg;
     uint64_t selected_uberblock_offset;
 };
 
 static int seek_u64(FILE *file, uint64_t offset);
+static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp,
+    unsigned char *destination, size_t capacity, size_t *logical_size_out);
 
 static uint64_t swap_u64(uint64_t value)
 {
@@ -56,6 +66,14 @@ static uint64_t swap_u64(uint64_t value)
         ((value & UINT64_C(0xff00000000000000)) >> 56);
 }
 
+static uint32_t swap_u32(uint32_t value)
+{
+    return ((value & UINT32_C(0x000000ff)) << 24) |
+        ((value & UINT32_C(0x0000ff00)) << 8) |
+        ((value & UINT32_C(0x00ff0000)) >> 8) |
+        ((value & UINT32_C(0xff000000)) >> 24);
+}
+
 static uint32_t be32(const unsigned char *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
@@ -67,15 +85,22 @@ static uint64_t be64(const unsigned char *p)
     return ((uint64_t)be32(p) << 32) | be32(p + 4);
 }
 
-static void fletcher4(const unsigned char *data, size_t length, uint64_t out[4])
+static int sha256(const unsigned char *data, size_t length,
+    unsigned char digest[32])
 {
-    uint64_t a = 0, b = 0, c = 0, d = 0;
-    for (size_t i = 0; i + sizeof(uint32_t) <= length; i += sizeof(uint32_t)) {
-        uint32_t word = 0;
-        memcpy(&word, data + i, sizeof(word));
-        a += word; b += a; c += b; d += c;
-    }
-    out[0] = a; out[1] = b; out[2] = c; out[3] = d;
+#if defined(_WIN32)
+    if (length > ULONG_MAX) return 0;
+    BCRYPT_ALG_HANDLE algorithm = NULL;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&algorithm,
+        BCRYPT_SHA256_ALGORITHM, NULL, 0);
+    if (status >= 0) status = BCryptHash(algorithm, NULL, 0,
+        (PUCHAR)data, (ULONG)length, digest, 32);
+    if (algorithm != NULL) BCryptCloseAlgorithmProvider(algorithm, 0);
+    return status >= 0;
+#else
+    (void)data; (void)length; (void)digest;
+    return 0;
+#endif
 }
 
 static int embedded_checksum_valid(const unsigned char *block, size_t length, uint64_t verifier)
@@ -90,13 +115,15 @@ static int embedded_checksum_valid(const unsigned char *block, size_t length, ui
     memcpy(copy, block, length);
     memset(copy + length - 32, 0, 32);
     memcpy(copy + length - 32, &verifier, sizeof(verifier));
-    uint64_t calculated[4];
-    fletcher4(copy, length, calculated);
+    unsigned char digest[32];
+    int hashed = sha256(copy, length, digest);
     free(copy);
+    if (!hashed) return 0;
     for (size_t i = 0; i < 4; ++i) {
         uint64_t stored = 0;
         memcpy(&stored, eck + 8 + i * 8, sizeof(stored));
-        if (stored != calculated[i] && stored != swap_u64(calculated[i])) return 0;
+        uint64_t calculated = be64(digest + i * sizeof(uint64_t));
+        if (stored != calculated && stored != swap_u64(calculated)) return 0;
     }
     return 1;
 }
@@ -138,7 +165,9 @@ static int decode_label(zfs_core_device_t *device, uint64_t label)
         free(buffer); return 0;
     }
     uint64_t pool_guid = 0, vdev_guid = 0, ashift = 0, state = 0;
-    int valid = nvlist_has_key(buffer, VDEV_PHYS_SIZE - 40, "pool_guid", &pool_guid) &&
+    int valid = embedded_checksum_valid(buffer, VDEV_PHYS_SIZE,
+            label + VDEV_SKIP_SIZE) &&
+        nvlist_has_key(buffer, VDEV_PHYS_SIZE - 40, "pool_guid", &pool_guid) &&
         nvlist_has_key(buffer, VDEV_PHYS_SIZE - 40, "guid", &vdev_guid) &&
         nvlist_has_key(buffer, VDEV_PHYS_SIZE - 40, "vdev_tree", &ashift) &&
         nvlist_has_key(buffer, VDEV_PHYS_SIZE - 40, "state", &state) &&
@@ -160,8 +189,9 @@ static int validate_mos_root(zfs_core_device_t *device)
         device->mos_root_size > SIZE_MAX) return 0;
     size_t length = (size_t)device->mos_root_size;
     unsigned char *block = (unsigned char *)malloc(length);
-    if (block == NULL || seek_u64(device->file, device->mos_root_offset) != 0 ||
-        fread(block, 1, length, device->file) != length) {
+    size_t logical_size = 0;
+    if (block == NULL || !read_block_pointer(device, device->mos_root_bp,
+        block, length, &logical_size) || logical_size != length) {
         free(block); return 0;
     }
     /* The MOS root block is a dnode block. Each legacy dnode is 512 bytes. */
@@ -176,6 +206,32 @@ static uint64_t load_u64(const unsigned char *p)
     uint64_t value = 0;
     memcpy(&value, p, sizeof(value));
     return value;
+}
+
+static int block_pointer_checksum_valid(const unsigned char *bp,
+    const unsigned char *data, size_t length)
+{
+    uint64_t prop = load_u64(bp + 48);
+    uint64_t checksum = (prop >> 40) & UINT64_C(0xff);
+    if (checksum != 7 /* ZIO_CHECKSUM_FLETCHER_4 */ ||
+        (length & (sizeof(uint32_t) - 1)) != 0) return 0;
+    int byteswap = ((prop >> 63) & UINT64_C(1)) == 0;
+    uint64_t calculated[4] = { 0, 0, 0, 0 };
+    for (size_t offset = 0; offset < length; offset += sizeof(uint32_t)) {
+        uint32_t word = 0;
+        memcpy(&word, data + offset, sizeof(word));
+        if (byteswap) word = swap_u32(word);
+        calculated[0] += word;
+        calculated[1] += calculated[0];
+        calculated[2] += calculated[1];
+        calculated[3] += calculated[2];
+    }
+    for (size_t word = 0; word < 4; ++word) {
+        uint64_t stored = load_u64(bp + 96 + word * sizeof(uint64_t));
+        if (byteswap) stored = swap_u64(stored);
+        if (stored != calculated[word]) return 0;
+    }
+    return 1;
 }
 
 static int zle_decompress(const unsigned char *source, size_t source_length,
@@ -260,6 +316,9 @@ static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp
     unsigned char *compressed = (unsigned char *)malloc((size_t)physical_size);
     if (compressed == NULL || seek_u64(device->file, offset) != 0 ||
         fread(compressed, 1, (size_t)physical_size, device->file) != physical_size) {
+        free(compressed); return 0;
+    }
+    if (!block_pointer_checksum_valid(bp, compressed, (size_t)physical_size)) {
         free(compressed); return 0;
     }
     int decoded = compression == 2 ?
@@ -671,11 +730,16 @@ static int label_has_payload(FILE *file, uint64_t offset)
 
 static void scan_uberblocks(zfs_core_device_t *device, uint64_t label)
 {
-    for (uint64_t slot = 0; slot < VDEV_UBERBLOCK_RING_SIZE / VDEV_UBERBLOCK_SLOT_SIZE; ++slot) {
-        uint64_t offset = label + VDEV_UBERBLOCK_RING_OFFSET + slot * VDEV_UBERBLOCK_SLOT_SIZE;
-        unsigned char fields[1024];
-        if (offset > device->size_bytes || sizeof(fields) > device->size_bytes - offset ||
-            seek_u64(device->file, offset) != 0 || fread(fields, 1, sizeof(fields), device->file) != sizeof(fields)) {
+    uint64_t shift = device->ashift;
+    if (shift < UBERBLOCK_MIN_SHIFT) shift = UBERBLOCK_MIN_SHIFT;
+    if (shift > UBERBLOCK_MAX_SHIFT) shift = UBERBLOCK_MAX_SHIFT;
+    size_t slot_size = (size_t)UINT64_C(1) << shift;
+    unsigned char fields[1U << UBERBLOCK_MAX_SHIFT];
+    for (uint64_t slot = 0; slot < VDEV_UBERBLOCK_RING_SIZE / slot_size; ++slot) {
+        uint64_t offset = label + VDEV_UBERBLOCK_RING_OFFSET + slot * slot_size;
+        if (offset > device->size_bytes || slot_size > device->size_bytes - offset ||
+            seek_u64(device->file, offset) != 0 ||
+            fread(fields, 1, slot_size, device->file) != slot_size) {
             continue;
         }
         uint64_t magic = 0;
@@ -689,14 +753,13 @@ static void scan_uberblocks(zfs_core_device_t *device, uint64_t label)
         } else {
             continue;
         }
-        /* Uberblocks are fixed-size records; their embedded root block pointer
-         * carries the metadata checksum. Full blkptr verification is handled
-         * by the MOS reader in the next implementation stage. */
-        if (txg == 0) continue;
+        if (txg == 0 || !embedded_checksum_valid(fields, slot_size, offset))
+            continue;
         ++device->uberblocks_found;
         if (txg >= device->selected_txg) {
             device->selected_txg = txg;
             device->selected_uberblock_offset = offset;
+            memcpy(device->mos_root_bp, fields + 40, sizeof(device->mos_root_bp));
             uint64_t dva_word = 0;
             uint64_t prop = 0;
             /* DVA word 1 contains the sector offset; word 0 is asize/vdev. */
@@ -789,7 +852,8 @@ zfs_core_status_t zfs_core_get_info(const zfs_core_device_t *device, zfs_core_de
 zfs_core_status_t zfs_core_probe_pool(const zfs_core_device_t *device)
 {
     if (device == NULL) return ZFS_CORE_INVALID_ARGUMENT;
-    return device->valid_labels_found > 0 && device->uberblocks_found > 0 ? ZFS_CORE_OK : ZFS_CORE_NOT_A_ZFS_DEVICE;
+    return device->valid_labels_found > 0 && device->uberblocks_found > 0 &&
+        device->mos_root_valid ? ZFS_CORE_OK : ZFS_CORE_NOT_A_ZFS_DEVICE;
 }
 
 zfs_core_status_t zfs_core_read(const zfs_core_device_t *device, uint64_t offset,

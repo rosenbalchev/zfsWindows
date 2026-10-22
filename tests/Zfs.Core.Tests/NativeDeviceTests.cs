@@ -64,6 +64,8 @@ public sealed class NativeDeviceTests
         Assert.True(device.Info.VdevLabelsFound > 0);
         Assert.True(device.Info.ValidLabelsFound > 0);
         Assert.True(device.Info.UberblocksFound > 0);
+        Assert.Equal(19UL, device.Info.SelectedTxg);
+        Assert.True(device.Info.SelectedUberblockOffset > 0);
         Assert.True(device.Info.PoolGuid > 0);
         Assert.True(device.Info.VdevGuid > 0);
         Assert.InRange(device.Info.Ashift, 9UL, 24UL);
