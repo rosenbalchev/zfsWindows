@@ -38,9 +38,9 @@ verification and update the step rather than creating duplicate work.
 |---|---|---|---|
 | 00 | `00-workflow.md` | Planning and commit workflow | complete |
 | 01 | `01-build-and-interop.md` | VS/MSBuild, C ABI, C# tests | complete |
-| 02 | `02-block-device-and-labels.md` | Safe read-only device and labels | in-progress |
-| 03 | `03-uberblocks-and-pool-recognition.md` | Label nvlist and uberblocks | planned |
-| 04 | `04-mos-dataset-and-file-reads.md` | MOS, datasets, directories, files | planned |
+| 02 | `02-block-device-and-labels.md` | Safe read-only device and labels | complete |
+| 03 | `03-uberblocks-and-pool-recognition.md` | Label nvlist and uberblocks | complete |
+| 04 | `04-mos-dataset-and-file-reads.md` | MOS, datasets, directories, files | in-progress |
 | 05 | `05-genuine-single-disk-fixture.md` | 5 GiB fixture and hashes | planned |
 | 06 | `06-compression.md` | Compression compatibility | planned |
 | 07 | `07-scale-stress-and-benchmarks.md` | Small-file scale and measurement | planned |

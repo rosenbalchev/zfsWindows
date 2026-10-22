@@ -109,4 +109,30 @@ public sealed class NativeDeviceTests
         Assert.True(device.IsRecognizedPool);
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public void MultiBlockAndSparseFilesAreReadExactly()
+    {
+        var image = Environment.GetEnvironmentVariable("ZFS_STEP04_IMAGE");
+        if (string.IsNullOrWhiteSpace(image) || !File.Exists(image))
+            throw SkipException.ForSkip("Set ZFS_STEP04_IMAGE to the Step 04 OpenZFS fixture.");
+        var before = SHA256.HashData(File.ReadAllBytes(image));
+        using var device = ZfsReadOnlyDevice.Open(image);
+
+        var multi = device.ReadRootFile(device.LookupRootDirectory("multi.bin"));
+        Assert.Equal(300_000, multi.Length);
+        Assert.Equal("4D10D520EC99C6FAFADD95BEE19D13AB272F132B47D5B5FFE252BC7498006463",
+            Convert.ToHexString(SHA256.HashData(multi)));
+
+        var sparse = device.ReadRootFile(device.LookupRootDirectory("sparse.bin"));
+        Assert.Equal(300_000, sparse.Length);
+        Assert.Equal("BEGIN", Encoding.ASCII.GetString(sparse, 0, 5));
+        Assert.All(sparse[(128 * 1024)..(256 * 1024)], value => Assert.Equal(0, value));
+        Assert.Equal("END", Encoding.ASCII.GetString(sparse, sparse.Length - 3, 3));
+        Assert.Equal("D8989B12168EF493193A84C62328C99825CCB5E5F616814F33FD5AB2D867EA40",
+            Convert.ToHexString(SHA256.HashData(sparse)));
+
+        Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
+    }
 }

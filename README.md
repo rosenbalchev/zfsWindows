@@ -17,9 +17,11 @@ Milestone M1 is in progress. The repository now contains:
 - a fixture manifest contract and an implementation specification.
 
 The native layer can traverse the genuine fixture into its populated child
-dataset, resolve `fixture.txt` in its root directory, and return that file's
-exact bytes through C# using its dnode, SA size, and embedded LZ4 block. General
-path traversal and multi-block/sparse file reads are not implemented yet.
+dataset and return exact file bytes through C# using dnodes, metadata-driven SA
+sizes, indirect block pointers, embedded or non-embedded LZ4 data, and sparse
+hole expansion. The current fixture verifies both a 300,000-byte multi-block
+file and a 300,000-byte sparse file. General path traversal is not implemented
+yet.
 Compatibility claims are made only for behavior exercised against a genuine
 OpenZFS-generated image.
 
@@ -56,8 +58,8 @@ dotnet test ZfsWindows.sln
 ```
 
 The default managed tests do not require a driver, administrator rights, or
-real disk writes. Genuine-image tests are enabled only by setting
-`ZFS_TEST_IMAGE` and `ZFS_TEST_MANIFEST`.
+real disk writes. Genuine-image tests are enabled by setting `ZFS_TEST_IMAGE`
+and, for the Step 04 multi-block fixture, `ZFS_STEP04_IMAGE`.
 
 ## Safety
 

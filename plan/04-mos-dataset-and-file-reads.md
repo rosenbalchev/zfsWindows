@@ -68,8 +68,22 @@ from the filesystem master node, resolves the `LAYOUTS` fat ZAP from the SA
 master node, decodes the layout's uint16 attribute array, applies OpenZFS's
 8-byte SA attribute alignment and variable-length table, and locates
 `ZPL_SIZE`. The existing fixture read continues to return exactly 27 bytes
-through this metadata-driven path. Multi-block and sparse data traversal and
-general path traversal remain unfinished.
+through this metadata-driven path.
+
+Regular-file reads now derive the data-block size and indirect fanout from the
+dnode, walk up to six block-pointer levels, select among top-level dnode block
+pointers, and expand hole block pointers as zero-filled ranges. The managed
+wrapper first queries the exact SA file size, avoiding the former fixed 128 KiB
+buffer. The separate Step 04 fixture has image SHA-256
+`FD36A1527F1E2E5E8905314769C5F5FCDB1788FBDA3848ECA4765FBB658254C0`.
+Its 300,000-byte `multi.bin` reads with SHA-256
+`4D10D520EC99C6FAFADD95BEE19D13AB272F132B47D5B5FFE252BC7498006463`;
+its 300,000-byte `sparse.bin` expands the middle 128 KiB hole and reads with
+SHA-256
+`D8989B12168EF493193A84C62328C99825CCB5E5F616814F33FD5AB2D867EA40`.
+All four Windows tests pass against the Step 03 and Step 04 images while both
+image hashes remain unchanged. General path traversal, directory enumeration,
+and the final handle ABI remain unfinished.
 
 Commit: `native: read datasets directories and files`
 

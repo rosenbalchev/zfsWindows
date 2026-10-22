@@ -160,7 +160,7 @@ static int nvlist_next_pair(const unsigned char *buffer, size_t length,
     size_t type_offset = name_offset + name_bytes;
     size_t pair_end = *offset + encoded;
     if (type_offset > pair_end || pair_end - type_offset < 8 ||
-        buffer[name_offset + name_length - 1] != 0) return -1;
+        memchr(buffer + name_offset, 0, name_length) != NULL) return -1;
     pair->name = buffer + name_offset;
     pair->name_length = name_length;
     pair->type = be32(buffer + type_offset);
@@ -192,7 +192,7 @@ static int nvlist_find(const unsigned char *buffer, size_t length,
         nvpair_view_t pair;
         int next = nvlist_next_pair(buffer, length, &offset, &pair);
         if (next <= 0) return 0;
-        size_t wanted_length = strlen(wanted) + 1;
+        size_t wanted_length = strlen(wanted);
         if (wanted_length == pair.name_length &&
             memcmp(pair.name, wanted, wanted_length) == 0) {
             *result = pair;
@@ -214,9 +214,8 @@ static int nvpair_string_equals(const nvpair_view_t *pair, const char *wanted)
     if (pair->type != DATA_TYPE_STRING || pair->elements != 1 ||
         pair->value_length < 4) return 0;
     uint32_t string_length = be32(pair->value);
-    return string_length == strlen(wanted) + 1 &&
+    return string_length == strlen(wanted) &&
         string_length <= pair->value_length - 4 &&
-        pair->value[4 + string_length - 1] == 0 &&
         memcmp(pair->value + 4, wanted, string_length) == 0;
 }
 
@@ -228,7 +227,7 @@ static int feature_is_supported(const unsigned char *name, size_t length)
         "com.klarasystems:vdev_zaps_v2"
     };
     for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) {
-        if (length == strlen(supported[i]) + 1 &&
+        if (length == strlen(supported[i]) &&
             memcmp(name, supported[i], length) == 0) return 1;
     }
     return 0;
@@ -690,34 +689,106 @@ static int lookup_filesystem_microzap(zfs_core_device_t *device, uint64_t object
     return valid && *value != 0;
 }
 
-static int read_root_file(zfs_core_device_t *device, uint64_t object,
-    unsigned char *destination, size_t capacity, size_t *file_size_out)
+static int block_pointer_is_hole(const unsigned char *bp)
+{
+    if ((load_u64(bp + 48) >> 39) & UINT64_C(1)) return 0;
+    for (size_t offset = 0; offset < 48; offset += sizeof(uint64_t)) {
+        if (load_u64(bp + offset) != 0) return 0;
+    }
+    return 1;
+}
+
+static int get_root_file_size(zfs_core_device_t *device, uint64_t object,
+    uint64_t *file_size)
 {
     unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
-    unsigned char *data_block = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
-    if (dnode_block == NULL || data_block == NULL || destination == NULL ||
-        file_size_out == NULL || !read_filesystem_object_dnode_block(device,
-            object, dnode_block, 16 * 1024, NULL)) {
-        free(data_block); free(dnode_block); return 0;
+    if (dnode_block == NULL || file_size == NULL ||
+        !read_filesystem_object_dnode_block(device, object, dnode_block,
+            16 * 1024, NULL)) {
+        free(dnode_block); return 0;
     }
     const unsigned char *dnode = dnode_block + (object % 32) * 512;
     size_t bonus_offset = 64 + (size_t)dnode[3] * 128;
     uint16_t bonus_length = load_u16(dnode + 10);
     int valid = dnode[0] == 19 /* DMU_OT_PLAIN_FILE_CONTENTS */ &&
-        dnode[2] == 1 && dnode[3] >= 1 && dnode[3] <= 3 &&
+        dnode[2] >= 1 && dnode[2] <= 6 && dnode[3] >= 1 && dnode[3] <= 3 &&
         dnode[4] == 44 /* DMU_OT_SA */ && bonus_offset + bonus_length <= 512 &&
-        bonus_length >= 24;
+        bonus_length >= 8 && read_sa_file_size(device, dnode, bonus_offset,
+            bonus_length, file_size);
+    free(dnode_block);
+    return valid;
+}
+
+static int read_root_file(zfs_core_device_t *device, uint64_t object,
+    unsigned char *destination, size_t capacity, size_t *file_size_out)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
+    unsigned char *data_block = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
+    unsigned char *indirect = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
+    if (dnode_block == NULL || data_block == NULL || indirect == NULL || destination == NULL ||
+        file_size_out == NULL || !read_filesystem_object_dnode_block(device,
+            object, dnode_block, 16 * 1024, NULL)) {
+        free(indirect); free(data_block); free(dnode_block); return 0;
+    }
+    const unsigned char *dnode = dnode_block + (object % 32) * 512;
+    size_t bonus_offset = 64 + (size_t)dnode[3] * 128;
+    uint16_t bonus_length = load_u16(dnode + 10);
+    int valid = dnode[0] == 19 /* DMU_OT_PLAIN_FILE_CONTENTS */ &&
+        dnode[2] >= 1 && dnode[2] <= 6 && dnode[3] >= 1 && dnode[3] <= 3 &&
+        dnode[4] == 44 /* DMU_OT_SA */ && bonus_offset + bonus_length <= 512 &&
+        bonus_length >= 8 && dnode[1] >= 8 && dnode[1] <= 24;
     uint64_t file_size = 0;
     if (valid) valid = read_sa_file_size(device, dnode, bonus_offset,
         bonus_length, &file_size);
-    size_t block_size = 0;
-    if (valid) valid = file_size <= capacity && file_size <= MOS_DNODE_BLOCK_SIZE &&
-        read_block_pointer(device, dnode + 64, data_block, MOS_DNODE_BLOCK_SIZE,
-            &block_size) && file_size <= block_size;
-    if (valid) {
-        memcpy(destination, data_block, (size_t)file_size);
-        *file_size_out = (size_t)file_size;
+    uint64_t data_block_size = (uint64_t)load_u16(dnode + 8) << 9;
+    uint8_t fanout_bits = (uint8_t)(dnode[1] - 7);
+    uint64_t fanout = UINT64_C(1) << fanout_bits;
+    uint64_t top_span = 1;
+    for (uint8_t level = 1; valid && level < dnode[2]; ++level) {
+        if (top_span > UINT64_MAX / fanout) valid = 0;
+        else top_span *= fanout;
     }
+    uint64_t block_count = data_block_size == 0 || file_size == 0 ? 0 :
+        1 + (file_size - 1) / data_block_size;
+    if (valid) valid = file_size <= capacity && file_size <= SIZE_MAX &&
+        data_block_size >= 512 && data_block_size <= MOS_DNODE_BLOCK_SIZE &&
+        (block_count == 0 || block_count - 1 <= load_u64(dnode + 16));
+    size_t copied = 0;
+    for (uint64_t block_id = 0; valid && block_id < block_count; ++block_id) {
+        uint64_t top_index = block_id / top_span;
+        uint64_t relative = block_id % top_span;
+        if (top_index >= dnode[3]) { valid = 0; break; }
+        const unsigned char *bp = dnode + 64 + top_index * 128;
+        int hole = 0;
+        for (uint8_t level = (uint8_t)(dnode[2] - 1); level > 0; --level) {
+            if (block_pointer_is_hole(bp)) { hole = 1; break; }
+            size_t indirect_size = 0;
+            if (!read_block_pointer(device, bp, indirect, MOS_DNODE_BLOCK_SIZE,
+                    &indirect_size) || indirect_size != MOS_DNODE_BLOCK_SIZE) {
+                valid = 0; break;
+            }
+            uint64_t shift = (uint64_t)(level - 1) * fanout_bits;
+            uint64_t index = (relative >> shift) & (fanout - 1);
+            bp = indirect + index * 128;
+        }
+        size_t wanted = (size_t)(file_size - copied);
+        if (wanted > data_block_size) wanted = (size_t)data_block_size;
+        if (!valid) break;
+        if (hole || block_pointer_is_hole(bp)) {
+            memset(destination + copied, 0, wanted);
+        } else {
+            size_t logical_size = 0;
+            if (!read_block_pointer(device, bp, data_block,
+                    (size_t)data_block_size, &logical_size) ||
+                logical_size != data_block_size) {
+                valid = 0; break;
+            }
+            memcpy(destination + copied, data_block, wanted);
+        }
+        copied += wanted;
+    }
+    if (valid) *file_size_out = copied;
+    free(indirect);
     free(data_block);
     free(dnode_block);
     return valid;
@@ -1251,5 +1322,14 @@ zfs_core_status_t zfs_core_read_root_file(
         return ZFS_CORE_CORRUPT_METADATA;
     *bytes_read = file_size;
     return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_get_root_file_size(
+    const zfs_core_device_t *device, uint64_t object, uint64_t *size)
+{
+    if (device == NULL || size == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *size = 0;
+    return get_root_file_size((zfs_core_device_t *)device, object, size) ?
+        ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
 

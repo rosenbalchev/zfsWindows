@@ -13,6 +13,6 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="../../../out/native-nmake/ZfsCore.dll" Link="ZfsCore.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('../../../out/native-nmake/ZfsCore.dll')" />
+    <Content Include="../../out/native-nmake/ZfsCore.dll" Link="ZfsCore.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('../../out/native-nmake/ZfsCore.dll')" />
   </ItemGroup>
 </Project>

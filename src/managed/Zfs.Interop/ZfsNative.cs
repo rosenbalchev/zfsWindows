@@ -91,6 +91,9 @@ internal static partial class NativeMethods
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_root_file")]
     internal static partial ZfsStatus ReadRootFile(nint device, ulong objectNumber, nint buffer,
         ulong length, out ulong bytesRead);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_get_root_file_size")]
+    internal static partial ZfsStatus GetRootFileSize(nint device, ulong objectNumber, out ulong size);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -268,12 +271,15 @@ public sealed class ZfsReadOnlyDevice : IDisposable
 
     public byte[] ReadRootFile(ulong objectNumber)
     {
-        const int capacity = 128 * 1024;
-        var buffer = new byte[capacity];
+        var status = NativeMethods.GetRootFileSize(_handle, objectNumber, out var size);
+        if (status != ZfsStatus.Ok) throw new IOException($"Root file size read failed: {status}");
+        if (size > int.MaxValue) throw new IOException("File is too large for a single managed buffer.");
+        if (size == 0) return Array.Empty<byte>();
+        var buffer = new byte[(int)size];
         var pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
         try
         {
-            var status = NativeMethods.ReadRootFile(_handle, objectNumber,
+            status = NativeMethods.ReadRootFile(_handle, objectNumber,
                 pinned.AddrOfPinnedObject(), (ulong)buffer.Length, out var bytesRead);
             if (status != ZfsStatus.Ok) throw new IOException($"Root file read failed: {status}");
             if (bytesRead > (ulong)buffer.Length) throw new EndOfStreamException();

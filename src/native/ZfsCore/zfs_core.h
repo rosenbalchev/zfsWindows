@@ -91,4 +91,6 @@ ZFS_CORE_API zfs_core_status_t zfs_core_lookup_root_directory(
 ZFS_CORE_API zfs_core_status_t zfs_core_read_root_file(
     const zfs_core_device_t *device, uint64_t object, void *buffer,
     uint64_t length, uint64_t *bytes_read);
+ZFS_CORE_API zfs_core_status_t zfs_core_get_root_file_size(
+    const zfs_core_device_t *device, uint64_t object, uint64_t *size);
 
