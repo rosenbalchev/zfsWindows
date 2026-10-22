@@ -35,3 +35,9 @@ sources are part of the KMDF kernel target and are not linkable into this
 user-mode adapter.  No host filesystem staging is acceptable as a substitute:
 the test must verify the resulting image with upstream Linux OpenZFS.
 
+The next low-level primitive is now implemented as `write-object`: it reads a
+bounded payload, validates the target object, holds and assigns a DMU
+transaction, calls `dmu_write`, commits it, and waits for the resulting TXG.
+This is deliberately object-addressed while pathname namespace creation is
+being built on top of the same transaction machinery.
+

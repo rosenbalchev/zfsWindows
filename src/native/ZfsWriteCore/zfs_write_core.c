@@ -9,6 +9,8 @@
  */
 
 #include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +44,101 @@ print_error(const char *operation, int error)
 {
     (void) fprintf(stderr, "%s: %s (%d)\n", operation,
         strerror(error), error);
+}
+
+static int
+parse_u64(const char *text, uint64_t *value)
+{
+    char *end = NULL;
+    unsigned long long parsed;
+
+    errno = 0;
+    parsed = strtoull(text, &end, 0);
+    if (errno != 0 || end == text || *end != '\0')
+        return (EINVAL);
+    *value = (uint64_t)parsed;
+    return (0);
+}
+
+static int
+read_payload(const char *path, void **data, uint64_t *size)
+{
+    FILE *file = NULL;
+    long length;
+    void *buffer = NULL;
+
+    file = fopen(path, "rb");
+    if (file == NULL)
+        return (errno);
+    if (fseek(file, 0, SEEK_END) != 0 ||
+        (length = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return (EIO);
+    }
+    if ((uint64_t)length > INT_MAX) {
+        fclose(file);
+        return (EFBIG);
+    }
+    if (length != 0) {
+        buffer = malloc((size_t)length);
+        if (buffer == NULL) {
+            fclose(file);
+            return (ENOMEM);
+        }
+        if (fread(buffer, 1, (size_t)length, file) != (size_t)length) {
+            free(buffer);
+            fclose(file);
+            return (EIO);
+        }
+    }
+    fclose(file);
+    *data = buffer;
+    *size = (uint64_t)length;
+    return (0);
+}
+
+static int
+write_object(write_context_t *context, uint64_t object, uint64_t offset,
+    const char *payload_path)
+{
+    dmu_object_info_t info = { 0 };
+    dmu_tx_t *tx = NULL;
+    void *payload = NULL;
+    uint64_t size = 0;
+    int error;
+
+    if ((error = read_payload(payload_path, &payload, &size)) != 0)
+        return (error);
+    if (size == 0) {
+        free(payload);
+        return (EINVAL);
+    }
+    if (offset > UINT64_MAX - size) {
+        free(payload);
+        return (EOVERFLOW);
+    }
+    if ((error = dmu_object_info(context->os, object, &info)) != 0) {
+        free(payload);
+        return (error);
+    }
+    if (info.doi_type == DMU_OT_NONE) {
+        free(payload);
+        return (ENOENT);
+    }
+
+    tx = dmu_tx_create(context->os);
+    dmu_tx_hold_write(tx, object, offset, (int)size);
+    error = dmu_tx_assign(tx, DMU_TX_WAIT);
+    if (error != 0) {
+        dmu_tx_abort(tx);
+        free(payload);
+        return (error);
+    }
+    dmu_write(context->os, object, offset, size, payload, tx, 0);
+    dmu_tx_commit(tx);
+    txg_wait_synced(dmu_objset_pool(context->os), 0);
+    free(payload);
+    return (0);
 }
 
 static int
@@ -130,7 +227,8 @@ static void
 usage(const char *program)
 {
     (void) fprintf(stderr,
-        "Usage: %s <probe|sync> <image-directory> <pool> <dataset>\n",
+        "Usage: %s <probe|sync|write-object> <image-directory> "
+        "<pool> <dataset> [object offset payload-file]\n",
         program);
 }
 
@@ -141,8 +239,12 @@ main(int argc, char **argv)
     uint64_t root_object = 0;
     int error;
 
-    if (argc != 5 || (strcmp(argv[1], "probe") != 0 &&
-        strcmp(argv[1], "sync") != 0)) {
+    if ((argc != 5 && argc != 8) ||
+        (strcmp(argv[1], "probe") != 0 &&
+        strcmp(argv[1], "sync") != 0 &&
+        strcmp(argv[1], "write-object") != 0) ||
+        (strcmp(argv[1], "write-object") == 0 && argc != 8) ||
+        (strcmp(argv[1], "write-object") != 0 && argc != 5)) {
         usage(argv[0]);
         return (2);
     }
@@ -153,7 +255,23 @@ main(int argc, char **argv)
 
     error = open_context(&context);
     if (error == 0) {
-        if (strcmp(argv[1], "sync") == 0) {
+        if (strcmp(argv[1], "write-object") == 0) {
+            uint64_t object = 0;
+            uint64_t offset = 0;
+
+            error = parse_u64(argv[5], &object);
+            if (error == 0)
+                error = parse_u64(argv[6], &offset);
+            if (error == 0)
+                error = write_object(&context, object, offset, argv[7]);
+            if (error == 0)
+                (void) printf("pool=%s dataset=%s object=%llu offset=%llu "
+                    "written=%s\n", context.pool_name,
+                    context.dataset_name, (unsigned long long)object,
+                    (unsigned long long)offset, argv[7]);
+            else
+                print_error("write object", error);
+        } else if (strcmp(argv[1], "sync") == 0) {
             txg_wait_synced(dmu_objset_pool(context.os), 0);
             (void) printf("pool=%s dataset=%s synced\n",
                 context.pool_name, context.dataset_name);
