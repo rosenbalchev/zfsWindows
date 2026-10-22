@@ -31,6 +31,9 @@ int LZ4_uncompress_unknownOutputSize(const char *source, char *destination,
 
 static uint16_t load_u16(const unsigned char *p);
 static uint32_t load_u32(const unsigned char *p);
+static int read_sa_file_size(zfs_core_device_t *device,
+    const unsigned char *dnode, size_t bonus_offset, uint16_t bonus_length,
+    uint64_t *file_size);
 
 struct zfs_core_device {
     FILE *file;
@@ -705,16 +708,8 @@ static int read_root_file(zfs_core_device_t *device, uint64_t object,
         dnode[4] == 44 /* DMU_OT_SA */ && bonus_offset + bonus_length <= 512 &&
         bonus_length >= 24;
     uint64_t file_size = 0;
-    if (valid) {
-        const unsigned char *bonus = dnode + bonus_offset;
-        uint16_t layout_info = load_u16(bonus + 4);
-        uint16_t layout = layout_info & UINT16_C(0x03ff);
-        size_t header_size = (size_t)((layout_info >> 10) & UINT16_C(0x003f)) << 3;
-        /* OpenZFS SA layout 2 begins with ZPL_MODE followed by ZPL_SIZE. */
-        valid = load_u32(bonus) == UINT32_C(0x002f505a) && layout == 2 &&
-            header_size >= 8 && header_size + 16 <= bonus_length;
-        if (valid) file_size = load_u64(bonus + header_size + 8);
-    }
+    if (valid) valid = read_sa_file_size(device, dnode, bonus_offset,
+        bonus_length, &file_size);
     size_t block_size = 0;
     if (valid) valid = file_size <= capacity && file_size <= MOS_DNODE_BLOCK_SIZE &&
         read_block_pointer(device, dnode + 64, data_block, MOS_DNODE_BLOCK_SIZE,
@@ -785,6 +780,121 @@ static int zap_find_uint64(const unsigned char *block, const char *wanted,
             memcmp(name, wanted, name_bytes - 1) != 0) continue;
         *value = be64(raw_value);
         return 1;
+    }
+    return 0;
+}
+
+static int zap_find_uint16_array(const unsigned char *block,
+    const char *wanted, uint16_t *values, size_t capacity, size_t *count)
+{
+    if (load_u64(block) != UINT64_C(0x8000000000000000) ||
+        load_u32(block + 24) != UINT32_C(0x02AB1EAF)) return 0;
+    const size_t chunk_offset = 48 + 512 * 2;
+    const size_t chunk_size = 24;
+    for (uint16_t chunk = 0; chunk < 640; ++chunk) {
+        size_t offset = chunk_offset + (size_t)chunk * chunk_size;
+        if (offset + chunk_size > 16 * 1024 || block[offset] != 252) continue;
+        uint16_t name_bytes = load_u16(block + offset + 6);
+        uint8_t integer_size = block[offset + 1];
+        uint16_t elements = load_u16(block + offset + 10);
+        size_t value_bytes = (size_t)integer_size * elements;
+        if (name_bytes == 0 || name_bytes > 512 || integer_size != 2 ||
+            elements == 0 || elements > capacity || value_bytes > 512) continue;
+        unsigned char name[512];
+        unsigned char raw_value[512];
+        if (!zap_read_chunks(block, load_u16(block + offset + 4), name_bytes,
+                name, sizeof(name)) || !zap_read_chunks(block,
+                load_u16(block + offset + 8), (uint16_t)value_bytes,
+                raw_value, sizeof(raw_value))) continue;
+        if (name[name_bytes - 1] != 0 || strlen(wanted) + 1 != name_bytes ||
+            memcmp(name, wanted, name_bytes) != 0) continue;
+        for (size_t i = 0; i < elements; ++i)
+            values[i] = (uint16_t)(((uint16_t)raw_value[i * 2] << 8) |
+                raw_value[i * 2 + 1]);
+        *count = elements;
+        return 1;
+    }
+    return 0;
+}
+
+static int lookup_filesystem_fatzap_uint16_array(zfs_core_device_t *device,
+    uint64_t object, uint8_t object_type, const char *name, uint16_t *values,
+    size_t capacity, size_t *count)
+{
+    unsigned char *dnode_block = (unsigned char *)malloc(16 * 1024);
+    unsigned char *zap_block = (unsigned char *)malloc(16 * 1024);
+    if (dnode_block == NULL || zap_block == NULL || name == NULL ||
+        values == NULL || count == NULL ||
+        !read_filesystem_object_dnode_block(device, object, dnode_block,
+            16 * 1024, NULL)) {
+        free(zap_block); free(dnode_block); return 0;
+    }
+    const unsigned char *dnode = dnode_block + (object % 32) * 512;
+    int valid = dnode[0] == object_type && dnode[2] == 1 &&
+        dnode[3] >= 1 && dnode[3] <= 3;
+    int found = 0;
+    for (uint8_t block = 0; valid && block < dnode[3] && !found; ++block) {
+        size_t block_size = 0;
+        valid = read_block_pointer(device, dnode + 64 + block * 128,
+            zap_block, 16 * 1024, &block_size) && block_size == 16 * 1024;
+        if (valid) found = zap_find_uint16_array(zap_block, name, values,
+            capacity, count);
+    }
+    free(zap_block);
+    free(dnode_block);
+    return valid && found;
+}
+
+static uint16_t zpl_attribute_size(uint16_t attribute)
+{
+    static const uint16_t sizes[] = {
+        16, 16, 16, 16, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 32,
+        88, 8, 0, 32, 0, 0, 8
+    };
+    return attribute < sizeof(sizes) / sizeof(sizes[0]) ? sizes[attribute] : 0;
+}
+
+static int read_sa_file_size(zfs_core_device_t *device,
+    const unsigned char *dnode, size_t bonus_offset, uint16_t bonus_length,
+    uint64_t *file_size)
+{
+    const unsigned char *bonus = dnode + bonus_offset;
+    if (load_u32(bonus) != UINT32_C(0x002f505a)) return 0;
+    uint16_t layout_info = load_u16(bonus + 4);
+    uint16_t layout_number = layout_info & UINT16_C(0x03ff);
+    size_t header_size = (size_t)((layout_info >> 10) & UINT16_C(0x003f)) << 3;
+    uint64_t sa_master = 0;
+    uint64_t layouts_object = 0;
+    uint16_t attributes[128];
+    size_t attribute_count = 0;
+    char layout_name[16];
+    if (header_size < 8 || header_size > bonus_length ||
+        sprintf_s(layout_name, sizeof(layout_name), "%u", layout_number) < 0 ||
+        !lookup_filesystem_microzap(device, 1, 21, "SA_ATTRS", &sa_master) ||
+        !lookup_filesystem_microzap(device, sa_master, 45, "LAYOUTS",
+            &layouts_object) ||
+        !lookup_filesystem_fatzap_uint16_array(device, layouts_object, 47,
+            layout_name, attributes,
+            sizeof(attributes) / sizeof(attributes[0]), &attribute_count))
+        return 0;
+    size_t variable_index = 0;
+    size_t data_offset = header_size;
+    for (size_t i = 0; i < attribute_count; ++i) {
+        uint16_t size = zpl_attribute_size(attributes[i]);
+        if (size == 0) {
+            size_t length_offset = 6 + variable_index * sizeof(uint16_t);
+            if (length_offset + sizeof(uint16_t) > header_size) return 0;
+            size = load_u16(bonus + length_offset);
+            ++variable_index;
+        }
+        if (data_offset > bonus_length || size > bonus_length - data_offset)
+            return 0;
+        if (attributes[i] == 6 /* ZPL_SIZE */) {
+            if (size != sizeof(uint64_t)) return 0;
+            *file_size = load_u64(bonus + data_offset);
+            return 1;
+        }
+        data_offset = (data_offset + size + 7U) & ~(size_t)7U;
     }
     return 0;
 }

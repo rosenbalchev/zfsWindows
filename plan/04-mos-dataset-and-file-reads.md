@@ -61,7 +61,15 @@ All non-embedded blocks reached through the current reader now validate their
 OpenZFS Fletcher-4 checksum before decompression. Checksum coverage includes
 the MOS root selected by the uberblock, MOS and dataset indirect blocks,
 dnode blocks, ZAP blocks, and non-embedded file data. Multi-block and sparse
-file behavior, general SA layouts, and path traversal remain unfinished.
+file behavior and path traversal remain unfinished.
+
+File-size lookup no longer assumes fixture layout 2. It resolves `SA_ATTRS`
+from the filesystem master node, resolves the `LAYOUTS` fat ZAP from the SA
+master node, decodes the layout's uint16 attribute array, applies OpenZFS's
+8-byte SA attribute alignment and variable-length table, and locates
+`ZPL_SIZE`. The existing fixture read continues to return exactly 27 bytes
+through this metadata-driven path. Multi-block and sparse data traversal and
+general path traversal remain unfinished.
 
 Commit: `native: read datasets directories and files`
 
