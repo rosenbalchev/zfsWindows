@@ -1,0 +1,4 @@
+# Shell scripts run under bash and must keep LF endings.
+*.sh text eol=lf
+# Patches are applied byte-for-byte to the submodule.
+*.patch -text
