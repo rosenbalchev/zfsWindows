@@ -45,6 +45,9 @@ internal static partial class NativeMethods
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read")]
     internal static partial ZfsStatus Read(nint device, ulong offset, nint buffer, ulong length, out ulong bytesRead);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_mos_root")]
+    internal static partial ZfsStatus ReadMosRoot(nint device, nint buffer, ulong length, out ulong bytesRead);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -79,6 +82,23 @@ public sealed class ZfsReadOnlyDevice : IDisposable
     }
 
     public bool IsRecognizedPool => NativeMethods.ProbePool(_handle) == ZfsStatus.Ok;
+
+    public byte[] ReadMosRoot()
+    {
+        if (Info.MosRootValid == 0 || Info.MosRootSize > int.MaxValue)
+            throw new IOException("MOS root is not available");
+        var buffer = new byte[(int)Info.MosRootSize];
+        var pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            var status = NativeMethods.ReadMosRoot(_handle, pinned.AddrOfPinnedObject(),
+                (ulong)buffer.Length, out var bytesRead);
+            if (status != ZfsStatus.Ok) throw new IOException($"MOS root read failed: {status}");
+            if (bytesRead != (ulong)buffer.Length) throw new EndOfStreamException();
+            return buffer;
+        }
+        finally { pinned.Free(); }
+    }
 
     public void Dispose()
     {

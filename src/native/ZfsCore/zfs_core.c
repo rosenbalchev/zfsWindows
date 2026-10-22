@@ -330,3 +330,14 @@ zfs_core_status_t zfs_core_read(const zfs_core_device_t *device, uint64_t offset
     return actual == (size_t)length ? ZFS_CORE_OK : ZFS_CORE_IO_ERROR;
 }
 
+zfs_core_status_t zfs_core_read_mos_root(const zfs_core_device_t *device,
+    void *buffer, uint64_t length, uint64_t *bytes_read)
+{
+    if (device == NULL || buffer == NULL || bytes_read == NULL)
+        return ZFS_CORE_INVALID_ARGUMENT;
+    if (!device->mos_root_valid || length < device->mos_root_size)
+        return ZFS_CORE_OUT_OF_RANGE;
+    return zfs_core_read(device, device->mos_root_offset, buffer,
+        device->mos_root_size, bytes_read);
+}
+

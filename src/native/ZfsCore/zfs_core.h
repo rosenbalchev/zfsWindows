@@ -53,4 +53,7 @@ ZFS_CORE_API zfs_core_status_t zfs_core_probe_pool(
 ZFS_CORE_API zfs_core_status_t zfs_core_read(
     const zfs_core_device_t *device, uint64_t offset, void *buffer,
     uint64_t length, uint64_t *bytes_read);
+ZFS_CORE_API zfs_core_status_t zfs_core_read_mos_root(
+    const zfs_core_device_t *device, void *buffer, uint64_t length,
+    uint64_t *bytes_read);
 
