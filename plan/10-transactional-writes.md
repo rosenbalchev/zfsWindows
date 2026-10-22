@@ -1,6 +1,6 @@
 # Step 10 — Transactional writes
 
-Status: `planned`
+Status: `in-progress`
 
 Objective: implement disposable file-backed writes compatible with upstream
 OpenZFS.
