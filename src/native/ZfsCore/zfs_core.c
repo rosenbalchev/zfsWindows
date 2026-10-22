@@ -128,31 +128,124 @@ static int embedded_checksum_valid(const unsigned char *block, size_t length, ui
     return 1;
 }
 
-static int nvlist_has_key(const unsigned char *buffer, size_t length,
-    const char *wanted, uint64_t *value)
+#define DATA_TYPE_UINT64 8U
+#define DATA_TYPE_STRING 9U
+#define DATA_TYPE_NVLIST 19U
+
+typedef struct nvpair_view {
+    const unsigned char *name;
+    uint32_t name_length;
+    uint32_t type;
+    uint32_t elements;
+    const unsigned char *value;
+    size_t value_length;
+} nvpair_view_t;
+
+static int nvlist_next_pair(const unsigned char *buffer, size_t length,
+    size_t *offset, nvpair_view_t *pair)
 {
-    if (length < 12 || buffer[0] != 1 || buffer[1] != 1) return 0;
-    size_t offset = 12;
-    while (offset + 16 <= length) {
-        uint32_t encoded = be32(buffer + offset);
-        uint32_t decoded = be32(buffer + offset + 4);
-        uint32_t name_length = be32(buffer + offset + 8);
-        if (encoded < 24 || decoded < 16 || encoded > length - offset || name_length == 0) return 0;
-        size_t name_offset = offset + 12;
-        size_t name_bytes = (name_length + 3U) & ~3U;
-        size_t type_offset = name_offset + name_bytes;
-        if (name_bytes > encoded - 12 || type_offset + 4 > length) return 0;
-        uint32_t type = be32(buffer + type_offset);
-        if (strncmp((const char *)(buffer + name_offset), wanted, name_length) == 0 &&
-            (type == 8U || (strcmp(wanted, "vdev_tree") == 0 && type == 19U)) &&
-            value != NULL && type_offset + 12 <= offset + encoded) {
-            /* nvpair payloads begin with a 32-bit element count. */
-            *value = be64(buffer + type_offset + 8);
+    if (*offset > length || length - *offset < 8) return -1;
+    uint32_t encoded = be32(buffer + *offset);
+    uint32_t decoded = be32(buffer + *offset + 4);
+    if (encoded == 0 && decoded == 0) return 0;
+    if (encoded < 24 || decoded < 16 || encoded > length - *offset ||
+        length - *offset < 12) return -1;
+    uint32_t name_length = be32(buffer + *offset + 8);
+    if (name_length == 0 || name_length > encoded - 12) return -1;
+    size_t name_bytes = ((size_t)name_length + 3U) & ~(size_t)3U;
+    size_t name_offset = *offset + 12;
+    size_t type_offset = name_offset + name_bytes;
+    size_t pair_end = *offset + encoded;
+    if (type_offset > pair_end || pair_end - type_offset < 8 ||
+        buffer[name_offset + name_length - 1] != 0) return -1;
+    pair->name = buffer + name_offset;
+    pair->name_length = name_length;
+    pair->type = be32(buffer + type_offset);
+    pair->elements = be32(buffer + type_offset + 4);
+    pair->value = buffer + type_offset + 8;
+    pair->value_length = pair_end - (type_offset + 8);
+    *offset = pair_end;
+    return 1;
+}
+
+static int nvlist_start(const unsigned char *buffer, size_t length,
+    int packed_header, size_t *offset)
+{
+    size_t header = packed_header ? 12U : 8U;
+    if (length < header) return 0;
+    if (packed_header && (buffer[0] != 1 || buffer[1] != 1)) return 0;
+    size_t version_offset = packed_header ? 4U : 0U;
+    if (be32(buffer + version_offset) != 0) return 0;
+    *offset = header;
+    return 1;
+}
+
+static int nvlist_find(const unsigned char *buffer, size_t length,
+    int packed_header, const char *wanted, nvpair_view_t *result)
+{
+    size_t offset = 0;
+    if (!nvlist_start(buffer, length, packed_header, &offset)) return 0;
+    for (;;) {
+        nvpair_view_t pair;
+        int next = nvlist_next_pair(buffer, length, &offset, &pair);
+        if (next <= 0) return 0;
+        size_t wanted_length = strlen(wanted) + 1;
+        if (wanted_length == pair.name_length &&
+            memcmp(pair.name, wanted, wanted_length) == 0) {
+            *result = pair;
             return 1;
         }
-        offset += encoded;
+    }
+}
+
+static int nvpair_get_uint64(const nvpair_view_t *pair, uint64_t *value)
+{
+    if (pair->type != DATA_TYPE_UINT64 || pair->elements != 1 ||
+        pair->value_length < sizeof(uint64_t)) return 0;
+    *value = be64(pair->value);
+    return 1;
+}
+
+static int nvpair_string_equals(const nvpair_view_t *pair, const char *wanted)
+{
+    if (pair->type != DATA_TYPE_STRING || pair->elements != 1 ||
+        pair->value_length < 4) return 0;
+    uint32_t string_length = be32(pair->value);
+    return string_length == strlen(wanted) + 1 &&
+        string_length <= pair->value_length - 4 &&
+        pair->value[4 + string_length - 1] == 0 &&
+        memcmp(pair->value + 4, wanted, string_length) == 0;
+}
+
+static int feature_is_supported(const unsigned char *name, size_t length)
+{
+    static const char *supported[] = {
+        "com.delphix:hole_birth",
+        "com.delphix:embedded_data",
+        "com.klarasystems:vdev_zaps_v2"
+    };
+    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) {
+        if (length == strlen(supported[i]) + 1 &&
+            memcmp(name, supported[i], length) == 0) return 1;
     }
     return 0;
+}
+
+static int nvlist_count_unsupported_features(const unsigned char *buffer,
+    size_t length, uint32_t *unsupported)
+{
+    size_t offset = 0;
+    uint32_t count = 0;
+    if (!nvlist_start(buffer, length, 0, &offset)) return 0;
+    for (;;) {
+        nvpair_view_t pair;
+        int next = nvlist_next_pair(buffer, length, &offset, &pair);
+        if (next < 0) return 0;
+        if (next == 0) break;
+        if (!feature_is_supported(pair.name, pair.name_length)) ++count;
+    }
+    *unsupported = count;
+    return 1;
 }
 
 static int decode_label(zfs_core_device_t *device, uint64_t label)
@@ -164,18 +257,43 @@ static int decode_label(zfs_core_device_t *device, uint64_t label)
         fread(buffer, 1, VDEV_PHYS_SIZE, device->file) != VDEV_PHYS_SIZE) {
         free(buffer); return 0;
     }
-    uint64_t pool_guid = 0, vdev_guid = 0, ashift = 0, state = 0;
+    nvpair_view_t pair;
+    nvpair_view_t vdev_tree;
+    nvpair_view_t features;
+    uint64_t pool_guid = 0, vdev_guid = 0, top_guid = 0, ashift = 0;
+    uint64_t state = 0, vdev_children = 0, vdev_id = 0, nested_guid = 0;
+    uint32_t unsupported = 0;
     int valid = embedded_checksum_valid(buffer, VDEV_PHYS_SIZE,
             label + VDEV_SKIP_SIZE) &&
-        nvlist_has_key(buffer, VDEV_PHYS_SIZE - 40, "pool_guid", &pool_guid) &&
-        nvlist_has_key(buffer, VDEV_PHYS_SIZE - 40, "guid", &vdev_guid) &&
-        nvlist_has_key(buffer, VDEV_PHYS_SIZE - 40, "vdev_tree", &ashift) &&
-        nvlist_has_key(buffer, VDEV_PHYS_SIZE - 40, "state", &state) &&
-        pool_guid != 0 && vdev_guid != 0 && state <= 2;
+        nvlist_find(buffer, VDEV_PHYS_SIZE - 40, 1, "pool_guid", &pair) &&
+        nvpair_get_uint64(&pair, &pool_guid) &&
+        nvlist_find(buffer, VDEV_PHYS_SIZE - 40, 1, "guid", &pair) &&
+        nvpair_get_uint64(&pair, &vdev_guid) &&
+        nvlist_find(buffer, VDEV_PHYS_SIZE - 40, 1, "top_guid", &pair) &&
+        nvpair_get_uint64(&pair, &top_guid) &&
+        nvlist_find(buffer, VDEV_PHYS_SIZE - 40, 1, "state", &pair) &&
+        nvpair_get_uint64(&pair, &state) &&
+        nvlist_find(buffer, VDEV_PHYS_SIZE - 40, 1, "vdev_children", &pair) &&
+        nvpair_get_uint64(&pair, &vdev_children) &&
+        nvlist_find(buffer, VDEV_PHYS_SIZE - 40, 1, "vdev_tree", &vdev_tree) &&
+        vdev_tree.type == DATA_TYPE_NVLIST && vdev_tree.elements == 1 &&
+        nvlist_find(vdev_tree.value, vdev_tree.value_length, 0, "type", &pair) &&
+        nvpair_string_equals(&pair, "file") &&
+        nvlist_find(vdev_tree.value, vdev_tree.value_length, 0, "id", &pair) &&
+        nvpair_get_uint64(&pair, &vdev_id) &&
+        nvlist_find(vdev_tree.value, vdev_tree.value_length, 0, "guid", &pair) &&
+        nvpair_get_uint64(&pair, &nested_guid) &&
+        nvlist_find(vdev_tree.value, vdev_tree.value_length, 0, "ashift", &pair) &&
+        nvpair_get_uint64(&pair, &ashift) &&
+        nvlist_find(buffer, VDEV_PHYS_SIZE - 40, 1, "features_for_read", &features) &&
+        features.type == DATA_TYPE_NVLIST && features.elements == 1 &&
+        nvlist_count_unsupported_features(features.value, features.value_length,
+            &unsupported) && pool_guid != 0 && vdev_guid != 0 &&
+        top_guid == vdev_guid && nested_guid == vdev_guid && vdev_children == 1 &&
+        vdev_id == 0 && ashift >= 9 && ashift <= 24 && state <= 2;
     if (valid) {
-        /* The leaf ashift is nested in vdev_tree; 12 is the OpenZFS default.
-         * Full recursive topology decoding remains an explicit follow-up. */
-        device->ashift = 12;
+        device->ashift = ashift;
+        device->unsupported_features = unsupported;
         device->pool_guid = pool_guid; device->vdev_guid = vdev_guid;
         ++device->valid_labels_found;
     }
@@ -852,6 +970,7 @@ zfs_core_status_t zfs_core_get_info(const zfs_core_device_t *device, zfs_core_de
 zfs_core_status_t zfs_core_probe_pool(const zfs_core_device_t *device)
 {
     if (device == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    if (device->unsupported_features > 0) return ZFS_CORE_NOT_SUPPORTED;
     return device->valid_labels_found > 0 && device->uberblocks_found > 0 &&
         device->mos_root_valid ? ZFS_CORE_OK : ZFS_CORE_NOT_A_ZFS_DEVICE;
 }

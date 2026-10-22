@@ -1,6 +1,6 @@
 # Step 03 — Pool recognition and uberblock selection
 
-Status: `in progress`
+Status: `complete`
 
 Objective: recognize genuine OpenZFS raw vdev images and select a valid
 uberblock without writing to the image.
@@ -30,9 +30,14 @@ fixture selects TXG 19, matching independent `zdb -ul` output. The selected
 uberblock's MOS root block pointer is retained and its Fletcher-4 checksum is
 verified before the pool is recognized.
 
-Remaining work before completion: recursively decode `vdev_tree`, validate
-actual nested `ashift` and topology, and enumerate supported/unsupported
-feature flags.
+The bounded XDR nvlist reader now recursively decodes `vdev_tree`, requires the
+single leaf to be a file vdev with ID 0, validates top-level and nested GUIDs,
+and reports its actual `ashift` of 12. It enumerates `features_for_read`, accepts
+the fixture's `hole_birth`, `embedded_data`, and `vdev_zaps_v2` features, and
+returns `NotSupported` when an unknown read-required feature is present. All
+Step 03 requirements are covered by the four checksum-valid labels, TXG 19,
+the checksum-valid MOS root, independent `zdb` output, and the unchanged image
+hash verified by the Windows integration test.
 
 Commit: `native: recognize pools and validate uberblocks`
 

@@ -68,7 +68,8 @@ public sealed class NativeDeviceTests
         Assert.True(device.Info.SelectedUberblockOffset > 0);
         Assert.True(device.Info.PoolGuid > 0);
         Assert.True(device.Info.VdevGuid > 0);
-        Assert.InRange(device.Info.Ashift, 9UL, 24UL);
+        Assert.Equal(12UL, device.Info.Ashift);
+        Assert.Equal(0U, device.Info.UnsupportedFeatures);
         Assert.Equal(1U, device.Info.MosRootValid);
         Assert.True(device.Info.MosRootSize >= 512);
         Assert.Equal(10, device.ReadMosRoot()[0]);
