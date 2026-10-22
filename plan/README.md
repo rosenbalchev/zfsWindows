@@ -41,7 +41,7 @@ verification and update the step rather than creating duplicate work.
 | 02 | `02-block-device-and-labels.md` | Safe read-only device and labels | complete |
 | 03 | `03-uberblocks-and-pool-recognition.md` | Label nvlist and uberblocks | complete |
 | 04 | `04-mos-dataset-and-file-reads.md` | MOS, datasets, directories, files | complete |
-| 05 | `05-genuine-single-disk-fixture.md` | 5 GiB fixture and hashes | planned |
+| 05 | `05-genuine-single-disk-fixture.md` | 5 GiB fixture and hashes | in-progress |
 | 06 | `06-compression.md` | Compression compatibility | planned |
 | 07 | `07-scale-stress-and-benchmarks.md` | Small-file scale and measurement | planned |
 | 08 | `08-mirrors.md` | Mirror reads, degradation, recovery | planned |
