@@ -54,10 +54,21 @@ typedef struct zfs_core_device_info {
     uint64_t mos_root_size;
     uint64_t selected_txg;
     uint64_t selected_uberblock_offset;
+    uint32_t topology;
+    uint32_t member_count;
+    uint32_t available_members;
+    uint32_t checksum_fallbacks;
 } zfs_core_device_info_t;
+
+enum {
+    ZFS_CORE_TOPOLOGY_SINGLE = 1,
+    ZFS_CORE_TOPOLOGY_MIRROR = 2
+};
 
 ZFS_CORE_API zfs_core_status_t zfs_core_open_readonly(
     const char *path, zfs_core_device_t **device);
+ZFS_CORE_API zfs_core_status_t zfs_core_open_mirror_readonly(
+    const char *first_path, const char *second_path, zfs_core_device_t **device);
 ZFS_CORE_API void zfs_core_close(zfs_core_device_t *device);
 ZFS_CORE_API zfs_core_status_t zfs_core_get_info(
     const zfs_core_device_t *device, zfs_core_device_info_t *info);

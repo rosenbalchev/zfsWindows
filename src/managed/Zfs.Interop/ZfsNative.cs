@@ -28,6 +28,10 @@ public struct ZfsDeviceInfo
     public ulong MosRootSize;
     public ulong SelectedTxg;
     public ulong SelectedUberblockOffset;
+    public uint Topology;
+    public uint MemberCount;
+    public uint AvailableMembers;
+    public uint ChecksumFallbacks;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -49,6 +53,9 @@ internal static partial class NativeMethods
 {
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_readonly", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial ZfsStatus OpenReadOnly(string path, out nint device);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_open_mirror_readonly", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial ZfsStatus OpenMirrorReadOnly(string firstPath, string secondPath, out nint device);
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_close")]
     internal static partial void Close(nint device);
@@ -165,6 +172,29 @@ public sealed class ZfsReadOnlyDevice : IDisposable
         status = NativeMethods.GetInfo(handle, out var info);
         if (status != ZfsStatus.Ok) { NativeMethods.Close(handle); throw new IOException($"ZFS info failed: {status}"); }
         return new(handle, info);
+    }
+
+    public static ZfsReadOnlyDevice OpenMirror(string firstPath, string secondPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(firstPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(secondPath);
+        var status = NativeMethods.OpenMirrorReadOnly(firstPath, secondPath, out var handle);
+        if (status != ZfsStatus.Ok) throw new IOException($"ZFS mirror open failed: {status}");
+        status = NativeMethods.GetInfo(handle, out var info);
+        if (status != ZfsStatus.Ok)
+        {
+            NativeMethods.Close(handle);
+            throw new IOException($"ZFS mirror info failed: {status}");
+        }
+        return new(handle, info);
+    }
+
+    public ZfsDeviceInfo RefreshInfo()
+    {
+        ObjectDisposedException.ThrowIf(_handle == nint.Zero, this);
+        var status = NativeMethods.GetInfo(_handle, out var info);
+        if (status != ZfsStatus.Ok) throw new IOException($"ZFS info failed: {status}");
+        return info;
     }
 
     public byte[] Read(ulong offset, int length)

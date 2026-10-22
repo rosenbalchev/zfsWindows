@@ -29,6 +29,7 @@
 #define DMU_OT_DNODE 10U
 #define MOS_DNODE_BLOCK_SIZE (128ULL * 1024ULL)
 #define ZBT_MICRO UINT64_C(0x8000000000000003)
+#define ZFS_CORE_MAX_MEMBERS 2U
 
 int LZ4_uncompress_unknownOutputSize(const char *source, char *destination,
     int source_length, int destination_length);
@@ -42,6 +43,13 @@ static int read_sa_file_size(zfs_core_device_t *device,
 struct zfs_core_device {
     FILE *file;
     uint64_t size_bytes;
+    FILE *members[ZFS_CORE_MAX_MEMBERS];
+    uint64_t member_sizes[ZFS_CORE_MAX_MEMBERS];
+    uint64_t member_guids[ZFS_CORE_MAX_MEMBERS];
+    uint32_t topology;
+    uint32_t member_count;
+    uint32_t available_members;
+    uint32_t checksum_fallbacks;
     uint32_t labels_found;
     uint32_t uberblocks_found;
     uint32_t valid_labels_found;
@@ -150,6 +158,7 @@ static int embedded_checksum_valid(const unsigned char *block, size_t length, ui
 #define DATA_TYPE_UINT64 8U
 #define DATA_TYPE_STRING 9U
 #define DATA_TYPE_NVLIST 19U
+#define DATA_TYPE_NVLIST_ARRAY 20U
 
 typedef struct nvpair_view {
     const unsigned char *name;
@@ -267,18 +276,21 @@ static int nvlist_count_unsupported_features(const unsigned char *buffer,
     return 1;
 }
 
-static int decode_label(zfs_core_device_t *device, uint64_t label)
+static int decode_label(zfs_core_device_t *device, FILE *file,
+    uint64_t device_size, uint64_t label, uint32_t topology,
+    uint64_t *member_guid_out)
 {
     unsigned char *buffer = (unsigned char *)malloc(VDEV_PHYS_SIZE);
-    if (buffer == NULL || label > device->size_bytes ||
-        VDEV_SKIP_SIZE + VDEV_PHYS_SIZE > device->size_bytes - label ||
-        seek_u64(device->file, label + VDEV_SKIP_SIZE) != 0 ||
-        fread(buffer, 1, VDEV_PHYS_SIZE, device->file) != VDEV_PHYS_SIZE) {
+    if (buffer == NULL || label > device_size ||
+        VDEV_SKIP_SIZE + VDEV_PHYS_SIZE > device_size - label ||
+        seek_u64(file, label + VDEV_SKIP_SIZE) != 0 ||
+        fread(buffer, 1, VDEV_PHYS_SIZE, file) != VDEV_PHYS_SIZE) {
         free(buffer); return 0;
     }
     nvpair_view_t pair;
     nvpair_view_t vdev_tree;
     nvpair_view_t features;
+    nvpair_view_t children;
     uint64_t pool_guid = 0, vdev_guid = 0, top_guid = 0, ashift = 0;
     uint64_t state = 0, vdev_children = 0, vdev_id = 0, nested_guid = 0;
     uint32_t unsupported = 0;
@@ -297,7 +309,8 @@ static int decode_label(zfs_core_device_t *device, uint64_t label)
         nvlist_find(buffer, VDEV_PHYS_SIZE - 40, 1, "vdev_tree", &vdev_tree) &&
         vdev_tree.type == DATA_TYPE_NVLIST && vdev_tree.elements == 1 &&
         nvlist_find(vdev_tree.value, vdev_tree.value_length, 0, "type", &pair) &&
-        nvpair_string_equals(&pair, "file") &&
+        ((topology == ZFS_CORE_TOPOLOGY_SINGLE && nvpair_string_equals(&pair, "file")) ||
+        (topology == ZFS_CORE_TOPOLOGY_MIRROR && nvpair_string_equals(&pair, "mirror"))) &&
         nvlist_find(vdev_tree.value, vdev_tree.value_length, 0, "id", &pair) &&
         nvpair_get_uint64(&pair, &vdev_id) &&
         nvlist_find(vdev_tree.value, vdev_tree.value_length, 0, "guid", &pair) &&
@@ -308,12 +321,22 @@ static int decode_label(zfs_core_device_t *device, uint64_t label)
         features.type == DATA_TYPE_NVLIST && features.elements == 1 &&
         nvlist_count_unsupported_features(features.value, features.value_length,
             &unsupported) && pool_guid != 0 && vdev_guid != 0 &&
-        top_guid == vdev_guid && nested_guid == vdev_guid && vdev_children == 1 &&
-        vdev_id == 0 && ashift >= 9 && ashift <= 24 && state <= 2;
+        ((topology == ZFS_CORE_TOPOLOGY_SINGLE && top_guid == vdev_guid &&
+        nested_guid == vdev_guid) || (topology == ZFS_CORE_TOPOLOGY_MIRROR &&
+        top_guid == nested_guid && nvlist_find(vdev_tree.value,
+        vdev_tree.value_length, 0, "children", &children) &&
+        children.type == DATA_TYPE_NVLIST_ARRAY && children.elements == 2)) &&
+        vdev_children == 1 && vdev_id == 0 && ashift >= 9 && ashift <= 24 && state <= 2;
+    if (valid) {
+        if (device->pool_guid != 0 && (device->pool_guid != pool_guid ||
+            device->vdev_guid != top_guid || device->ashift != ashift)) valid = 0;
+    }
     if (valid) {
         device->ashift = ashift;
-        device->unsupported_features = unsupported;
-        device->pool_guid = pool_guid; device->vdev_guid = vdev_guid;
+        if (unsupported > device->unsupported_features)
+            device->unsupported_features = unsupported;
+        device->pool_guid = pool_guid; device->vdev_guid = top_guid;
+        if (member_guid_out != NULL) *member_guid_out = vdev_guid;
         ++device->valid_labels_found;
     }
     free(buffer);
@@ -522,21 +545,33 @@ static int read_block_pointer(zfs_core_device_t *device, const unsigned char *bp
     int valid = physical_size >= 512 && physical_size <= logical_size &&
         (compression == 2 || compression == 3 ||
         (compression >= 5 && compression <= 16));
-    if (!valid || logical_size > capacity || offset > device->size_bytes ||
-        physical_size > device->size_bytes - offset ||
-        logical_size > SIZE_MAX) {
+    if (!valid || logical_size > capacity || logical_size > SIZE_MAX) {
         return 0;
     }
     unsigned char *compressed = (unsigned char *)malloc((size_t)physical_size);
-    if (compressed == NULL || seek_u64(device->file, offset) != 0 ||
-        fread(compressed, 1, (size_t)physical_size, device->file) != physical_size) {
-        free(compressed); return 0;
+    if (compressed == NULL) return 0;
+    int decoded = 0;
+    uint32_t attempted = 0;
+    for (uint32_t member = 0; member < device->member_count; ++member) {
+        FILE *file = device->members[member];
+        uint64_t member_size = device->member_sizes[member];
+        if (file == NULL || offset > member_size ||
+            physical_size > member_size - offset) {
+            ++attempted; continue;
+        }
+        if (seek_u64(file, offset) != 0 ||
+            fread(compressed, 1, (size_t)physical_size, file) != physical_size ||
+            !block_pointer_checksum_valid(bp, compressed, (size_t)physical_size)) {
+            clearerr(file); ++attempted; continue;
+        }
+        decoded = decompress_block(compression, compressed,
+            (size_t)physical_size, destination, (size_t)logical_size);
+        if (decoded) {
+            if (attempted > 0) ++device->checksum_fallbacks;
+            break;
+        }
+        ++attempted;
     }
-    if (!block_pointer_checksum_valid(bp, compressed, (size_t)physical_size)) {
-        free(compressed); return 0;
-    }
-    int decoded = decompress_block(compression, compressed,
-        (size_t)physical_size, destination, (size_t)logical_size);
     free(compressed);
     if (decoded && logical_size_out != NULL) *logical_size_out = (size_t)logical_size;
     return decoded;
@@ -549,8 +584,9 @@ static int read_mos_first_dnode_block(zfs_core_device_t *device,
         device->mos_root_size > SIZE_MAX || destination == NULL) return 0;
     size_t root_length = (size_t)device->mos_root_size;
     unsigned char *root = (unsigned char *)malloc(root_length);
-    if (root == NULL || seek_u64(device->file, device->mos_root_offset) != 0 ||
-        fread(root, 1, root_length, device->file) != root_length) {
+    size_t actual_root_length = 0;
+    if (root == NULL || !read_block_pointer(device, device->mos_root_bp,
+        root, root_length, &actual_root_length) || actual_root_length != root_length) {
         free(root); return 0;
     }
     /* The first dnode in the MOS objset is the meta-dnode. Its level-one
@@ -592,9 +628,11 @@ static int read_mos_dnode_block_for_object(zfs_core_device_t *device,
 {
     unsigned char *root = (unsigned char *)malloc((size_t)device->mos_root_size);
     unsigned char *indirect = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
+    size_t root_length = 0;
     if (root == NULL || indirect == NULL || device->mos_root_size > SIZE_MAX ||
-        seek_u64(device->file, device->mos_root_offset) != 0 ||
-        fread(root, 1, (size_t)device->mos_root_size, device->file) != device->mos_root_size ||
+        !read_block_pointer(device, device->mos_root_bp, root,
+            (size_t)device->mos_root_size, &root_length) ||
+        root_length != device->mos_root_size ||
         root[0] != DMU_OT_DNODE) {
         free(indirect); free(root); return 0;
     }
@@ -1177,7 +1215,8 @@ static int label_has_payload(FILE *file, uint64_t offset)
     return 0;
 }
 
-static void scan_uberblocks(zfs_core_device_t *device, uint64_t label)
+static void scan_uberblocks(zfs_core_device_t *device, FILE *file,
+    uint64_t device_size, uint64_t label)
 {
     uint64_t shift = device->ashift;
     if (shift < UBERBLOCK_MIN_SHIFT) shift = UBERBLOCK_MIN_SHIFT;
@@ -1186,9 +1225,9 @@ static void scan_uberblocks(zfs_core_device_t *device, uint64_t label)
     unsigned char fields[1U << UBERBLOCK_MAX_SHIFT];
     for (uint64_t slot = 0; slot < VDEV_UBERBLOCK_RING_SIZE / slot_size; ++slot) {
         uint64_t offset = label + VDEV_UBERBLOCK_RING_OFFSET + slot * slot_size;
-        if (offset > device->size_bytes || slot_size > device->size_bytes - offset ||
-            seek_u64(device->file, offset) != 0 ||
-            fread(fields, 1, slot_size, device->file) != slot_size) {
+        if (offset > device_size || slot_size > device_size - offset ||
+            seek_u64(file, offset) != 0 ||
+            fread(fields, 1, slot_size, file) != slot_size) {
             continue;
         }
         uint64_t magic = 0;
@@ -1219,26 +1258,24 @@ static void scan_uberblocks(zfs_core_device_t *device, uint64_t label)
             device->mos_root_offset = VDEV_LABEL_START_SIZE_FULL + dva_offset;
             device->mos_root_size = logical_size;
             device->mos_root_valid = logical_size >= 512 && logical_size <= 16 * 1024 * 1024 &&
-                device->mos_root_offset <= device->size_bytes &&
-                logical_size <= device->size_bytes - device->mos_root_offset;
+                device->mos_root_offset <= device_size &&
+                logical_size <= device_size - device->mos_root_offset;
         }
     }
 }
 
-zfs_core_status_t zfs_core_open_readonly(const char *path, zfs_core_device_t **device)
+static int open_member(const char *path, FILE **file_out, uint64_t *size_out)
 {
-    if (path == NULL || device == NULL) return ZFS_CORE_INVALID_ARGUMENT;
-    *device = NULL;
     FILE *file = NULL;
+    if (path == NULL || file_out == NULL || size_out == NULL) return 0;
 #if defined(_WIN32)
     if (fopen_s(&file, path, "rb") != 0) file = NULL;
 #else
     file = fopen(path, "rb");
 #endif
-    if (file == NULL) return ZFS_CORE_IO_ERROR;
+    if (file == NULL) return 0;
     if (fseek(file, 0, SEEK_END) != 0) {
-        fclose(file);
-        return ZFS_CORE_IO_ERROR;
+        fclose(file); return 0;
     }
 #if defined(_WIN32)
     __int64 end = _ftelli64(file);
@@ -1246,33 +1283,73 @@ zfs_core_status_t zfs_core_open_readonly(const char *path, zfs_core_device_t **d
     off_t end = ftello(file);
 #endif
     if (end <= 0) {
-        fclose(file);
+        fclose(file); return 0;
+    }
+    *file_out = file;
+    *size_out = (uint64_t)end;
+    return 1;
+}
+
+static zfs_core_status_t open_devices(const char *first_path,
+    const char *second_path, uint32_t topology, zfs_core_device_t **device)
+{
+    if (first_path == NULL || device == NULL ||
+        (topology == ZFS_CORE_TOPOLOGY_MIRROR && second_path == NULL))
         return ZFS_CORE_INVALID_ARGUMENT;
-    }
+    *device = NULL;
     zfs_core_device_t *result = (zfs_core_device_t *)calloc(1, sizeof(*result));
-    if (result == NULL) {
-        fclose(file);
-        return ZFS_CORE_IO_ERROR;
-    }
-    result->file = file;
-    result->size_bytes = (uint64_t)end;
-    if (result->size_bytes >= VDEV_LABEL_START_SIZE + VDEV_LABEL_END_SIZE) {
-        for (uint32_t i = 0; i < VDEV_LABEL_COUNT; ++i) {
-            uint64_t label = label_offset(result->size_bytes, i);
-            if (label_has_payload(file, label)) ++result->labels_found;
-            if (decode_label(result, label)) scan_uberblocks(result, label);
+    if (result == NULL) return ZFS_CORE_IO_ERROR;
+    result->topology = topology;
+    result->member_count = topology == ZFS_CORE_TOPOLOGY_MIRROR ? 2U : 1U;
+    const char *paths[ZFS_CORE_MAX_MEMBERS] = { first_path, second_path };
+    for (uint32_t member = 0; member < result->member_count; ++member) {
+        if (!open_member(paths[member], &result->members[member],
+                &result->member_sizes[member])) continue;
+        ++result->available_members;
+        if (result->file == NULL) {
+            result->file = result->members[member];
+            result->size_bytes = result->member_sizes[member];
         }
-        if (result->mos_root_valid) result->mos_root_valid = validate_mos_root(result);
     }
-    (void)seek_u64(file, 0);
+    if (result->available_members == 0) { free(result); return ZFS_CORE_IO_ERROR; }
+    for (uint32_t member = 0; member < result->member_count; ++member) {
+        FILE *file = result->members[member];
+        uint64_t size = result->member_sizes[member];
+        if (file == NULL || size < VDEV_LABEL_START_SIZE + VDEV_LABEL_END_SIZE)
+            continue;
+        for (uint32_t label_index = 0; label_index < VDEV_LABEL_COUNT; ++label_index) {
+            uint64_t label = label_offset(size, label_index);
+            if (label_has_payload(file, label)) ++result->labels_found;
+            uint64_t member_guid = 0;
+            if (decode_label(result, file, size, label, topology, &member_guid)) {
+                result->member_guids[member] = member_guid;
+                scan_uberblocks(result, file, size, label);
+            }
+        }
+    }
+    if (result->mos_root_valid) result->mos_root_valid = validate_mos_root(result);
+    for (uint32_t member = 0; member < result->member_count; ++member)
+        if (result->members[member] != NULL) (void)seek_u64(result->members[member], 0);
     *device = result;
     return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_open_readonly(const char *path, zfs_core_device_t **device)
+{
+    return open_devices(path, NULL, ZFS_CORE_TOPOLOGY_SINGLE, device);
+}
+
+zfs_core_status_t zfs_core_open_mirror_readonly(const char *first_path,
+    const char *second_path, zfs_core_device_t **device)
+{
+    return open_devices(first_path, second_path, ZFS_CORE_TOPOLOGY_MIRROR, device);
 }
 
 void zfs_core_close(zfs_core_device_t *device)
 {
     if (device == NULL) return;
-    if (device->file != NULL) fclose(device->file);
+    for (uint32_t member = 0; member < device->member_count; ++member)
+        if (device->members[member] != NULL) fclose(device->members[member]);
     free(device);
 }
 
@@ -1295,6 +1372,10 @@ zfs_core_status_t zfs_core_get_info(const zfs_core_device_t *device, zfs_core_de
     info->mos_root_size = device->mos_root_size;
     info->selected_txg = device->selected_txg;
     info->selected_uberblock_offset = device->selected_uberblock_offset;
+    info->topology = device->topology;
+    info->member_count = device->member_count;
+    info->available_members = device->available_members;
+    info->checksum_fallbacks = device->checksum_fallbacks;
     return ZFS_CORE_OK;
 }
 
@@ -1325,8 +1406,12 @@ zfs_core_status_t zfs_core_read_mos_root(const zfs_core_device_t *device,
         return ZFS_CORE_INVALID_ARGUMENT;
     if (!device->mos_root_valid || length < device->mos_root_size)
         return ZFS_CORE_OUT_OF_RANGE;
-    return zfs_core_read(device, device->mos_root_offset, buffer,
-        device->mos_root_size, bytes_read);
+    size_t actual = 0;
+    if (!read_block_pointer((zfs_core_device_t *)device, device->mos_root_bp,
+            (unsigned char *)buffer, (size_t)length, &actual))
+        return ZFS_CORE_CORRUPT_METADATA;
+    *bytes_read = actual;
+    return ZFS_CORE_OK;
 }
 
 zfs_core_status_t zfs_core_read_mos_first_dnode_block(

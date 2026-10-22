@@ -1,0 +1,60 @@
+{
+  "pool": "zfswin_mirror",
+  "poolGuid": 10384006900493919756,
+  "zfsVersion": "zfs-2.4.1-1ubuntu5.1",
+  "topology": "mirror",
+  "memberCount": 2,
+  "logicalBytes": 4299227263,
+  "allocatedBytes": 656560128,
+  "reimportVerified": true,
+  "images": [
+    {
+      "path": "disk01.raw",
+      "sizeBytes": 5368709120,
+      "sha256": "D4BB0F0C38AB2B29133A904428B54D5682950ADC2550C5C2C3F2F6DA36E70C63"
+    },
+    {
+      "path": "disk02.raw",
+      "sizeBytes": 5368709120,
+      "sha256": "134570F443C0740C8C3BC58D66CBD6481FF55F0636E5631F43C39B04DE34C7B5"
+    }
+  ],
+  "files": [
+    {
+      "path": "/documents/empty.txt",
+      "length": 0,
+      "sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "pattern": "text"
+    },
+    {
+      "path": "/documents/small.txt",
+      "length": 127,
+      "sha256": "BA8E9A8D025AEBE3532271CE5F5608DB8F6ABCDC226D93C018DEE7C9B9345276",
+      "pattern": "text"
+    },
+    {
+      "path": "/documents/Gr\u00FC\u00DFe-\u6771\u4EAC.txt",
+      "length": 65536,
+      "sha256": "8CBC55FCC52B10B183D79A9DBE27CDE75FA3AA1A76E8ECFBD059D2C7D359020C",
+      "pattern": "text"
+    },
+    {
+      "path": "/nested/l01/l02/l03/l04/deep.bin",
+      "length": 4194304,
+      "sha256": "5C4858F288C37EB91E043EFFA750CFFD62B02970B164AAD92D5A5017F97846C1",
+      "pattern": "random"
+    },
+    {
+      "path": "/large/random-512m.bin",
+      "length": 536870912,
+      "sha256": "28A86D73E2CD2931D159F186AE36A3545A37D75EA8889A27725F7A1F90129DBA",
+      "pattern": "random"
+    },
+    {
+      "path": "/large/compressible-3584m.bin",
+      "length": 3758096384,
+      "sha256": "5F06BBEE38E9D9680AC708973E1ABAFBCB35A28881D7D6C49475FBE16E4BF839",
+      "pattern": "repeating"
+    }
+  ]
+}

@@ -6,7 +6,7 @@ unchanged and is treated as the on-disk format and algorithm reference.
 
 ## Current status
 
-Milestone M5 is complete. The repository now contains:
+Milestone M6 is complete. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
@@ -47,6 +47,13 @@ identity. The 500K and 5M profiles are opt-in dedicated-host workloads.
 BenchmarkDotNet microbenchmarks and separate end-to-end stress runners keep
 warm-cache measurements distinct from initial traversal results.
 
+Read-only mirrored pools are supported through a two-member API. Genuine
+OpenZFS mirror tests verify healthy reads, either member missing, and
+checksum-based fallback from a deliberately corrupted member. The validated
+5 GiB-per-member fixture contains more than 4 GiB logical data; its corruption
+case exercised 2,389 peer fallbacks with exact final hashes. This is read
+recovery only—no automatic repair or resilver is claimed.
+
 Read-only recognition validates OpenZFS SHA-256 checksums on labels and
 uberblocks and Fletcher-4 checksums on referenced non-embedded metadata before
 using it.
@@ -86,7 +93,9 @@ real disk writes. Genuine-image tests use `ZFS_TEST_IMAGE` and
 `ZFS_SINGLE_MANIFEST` for the 5 GiB acceptance fixture. Set
 `ZFS_COMPRESSION_IMAGES` to the directory containing compression `.raw` files
 and `ZFS_COMPRESSION_MANIFESTS` to `tests/fixtures/compression` to run the
-compression matrix.
+compression matrix. Set `ZFS_MIRROR_DIRECTORY` to the two-member fixture
+directory and `ZFS_MIRROR_MANIFEST` to its committed manifest to run mirror
+recovery tests.
 
 ## Safety
 
