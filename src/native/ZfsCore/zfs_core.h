@@ -62,4 +62,6 @@ ZFS_CORE_API zfs_core_status_t zfs_core_read_mos_first_dnode_block(
 ZFS_CORE_API zfs_core_status_t zfs_core_read_mos_object_directory_block(
     const zfs_core_device_t *device, void *buffer, uint64_t length,
     uint64_t *bytes_read);
+ZFS_CORE_API zfs_core_status_t zfs_core_lookup_mos_object_directory(
+    const zfs_core_device_t *device, const char *name, uint64_t *value);
 

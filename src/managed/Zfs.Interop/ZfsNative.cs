@@ -54,6 +54,9 @@ internal static partial class NativeMethods
 
     [LibraryImport("ZfsCore", EntryPoint = "zfs_core_read_mos_object_directory_block")]
     internal static partial ZfsStatus ReadMosObjectDirectoryBlock(nint device, nint buffer, ulong length, out ulong bytesRead);
+
+    [LibraryImport("ZfsCore", EntryPoint = "zfs_core_lookup_mos_object_directory", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial ZfsStatus LookupMosObjectDirectory(nint device, string name, out ulong value);
 }
 
 public sealed class ZfsReadOnlyDevice : IDisposable
@@ -136,6 +139,13 @@ public sealed class ZfsReadOnlyDevice : IDisposable
             return buffer[..(int)bytesRead];
         }
         finally { pinned.Free(); }
+    }
+
+    public ulong LookupMosObjectDirectory(string name)
+    {
+        var status = NativeMethods.LookupMosObjectDirectory(_handle, name, out var value);
+        if (status != ZfsStatus.Ok) throw new IOException($"MOS object-directory lookup failed: {status}");
+        return value;
     }
 
     public void Dispose()

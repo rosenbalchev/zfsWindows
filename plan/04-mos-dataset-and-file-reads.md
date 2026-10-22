@@ -23,8 +23,9 @@ meta-dnode's first indirect block, supports ZLE and OpenZFS LZ4 framing, and
 returns the first 16 KiB MOS dnode data block through the C ABI and C# wrapper,
 then resolves object 1 to its first 16 KiB object-directory ZAP block. The
 fixture test confirms the expected empty object-0 dnode, object-directory dnode,
-and ZAP magic. Remaining work is checksum verification, full ZAP/dataset
-traversal, sparse and regular-file reads, and the final handle ABI.
+ZAP magic, and a fat-ZAP lookup of `root_dataset` to object 32. Remaining work
+is checksum verification, full ZAP/dataset traversal, sparse and regular-file
+reads, and the final handle ABI.
 
 Commit: `native: read datasets directories and files`
 

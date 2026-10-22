@@ -325,6 +325,93 @@ static int read_mos_object_directory_block(zfs_core_device_t *device,
     return valid;
 }
 
+static uint16_t load_u16(const unsigned char *p)
+{
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static uint32_t load_u32(const unsigned char *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+        ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static int zap_read_chunks(const unsigned char *block, uint16_t first_chunk,
+    uint16_t num_bytes, unsigned char *value, size_t value_capacity)
+{
+    const size_t chunk_offset = 48 + 512 * 2;
+    const size_t chunk_size = 24;
+    size_t copied = 0;
+    uint16_t chunk = first_chunk;
+    while (copied < num_bytes && chunk < 640) {
+        size_t offset = chunk_offset + (size_t)chunk * chunk_size;
+        if (offset + chunk_size > 16 * 1024 || copied >= value_capacity ||
+            block[offset] != 251 /* ZAP_CHUNK_ARRAY */) return 0;
+        size_t available = chunk_size - 3;
+        size_t wanted = num_bytes - copied;
+        if (wanted > available) wanted = available;
+        if (wanted > value_capacity - copied) return 0;
+        memcpy(value + copied, block + offset + 1, wanted);
+        copied += wanted;
+        chunk = load_u16(block + offset + 22);
+        if (copied < num_bytes && chunk == UINT16_C(0xffff)) return 0;
+    }
+    return copied == num_bytes;
+}
+
+static int zap_find_uint64(const unsigned char *block, const char *wanted,
+    uint64_t *value)
+{
+    if (load_u64(block) != UINT64_C(0x8000000000000000) ||
+        load_u32(block + 24) != UINT32_C(0x02AB1EAF)) return 0;
+    const size_t chunk_offset = 48 + 512 * 2;
+    const size_t chunk_size = 24;
+    for (uint16_t chunk = 0; chunk < 640; ++chunk) {
+        size_t offset = chunk_offset + (size_t)chunk * chunk_size;
+        if (offset + chunk_size > 16 * 1024 || block[offset] != 252) continue;
+        uint16_t name_bytes = load_u16(block + offset + 6);
+        uint16_t value_bytes = (uint16_t)(block[offset + 1] * load_u16(block + offset + 10));
+        if (name_bytes == 0 || name_bytes > 512 || value_bytes != sizeof(uint64_t)) continue;
+        unsigned char name[512];
+        unsigned char raw_value[sizeof(uint64_t)];
+        if (!zap_read_chunks(block, load_u16(block + offset + 4), name_bytes,
+                name, sizeof(name)) || !zap_read_chunks(block,
+                load_u16(block + offset + 8), value_bytes, raw_value, sizeof(raw_value)))
+            continue;
+        if (name[name_bytes - 1] != 0 || strlen(wanted) + 1 != name_bytes ||
+            memcmp(name, wanted, name_bytes - 1) != 0) continue;
+        *value = be64(raw_value);
+        return 1;
+    }
+    return 0;
+}
+
+static int lookup_mos_object_directory(zfs_core_device_t *device,
+    const char *name, uint64_t *value)
+{
+    if (name == NULL || value == NULL) return 0;
+    unsigned char *dnode_block = (unsigned char *)malloc(MOS_DNODE_BLOCK_SIZE);
+    unsigned char *zap_block = (unsigned char *)malloc(16 * 1024);
+    size_t dnode_size = 0;
+    int found = dnode_block != NULL && zap_block != NULL &&
+        read_mos_first_dnode_block(device, dnode_block, MOS_DNODE_BLOCK_SIZE, &dnode_size) &&
+        dnode_size >= 1024;
+    if (found) {
+        const unsigned char *dnode = dnode_block + 512;
+        found = dnode[0] == 1 && dnode[2] == 1 && dnode[3] >= 1 && dnode[3] <= 3;
+        for (uint8_t block = 0; found && block < dnode[3] && !*value; ++block) {
+            size_t block_size = 0;
+            int block_read = read_block_pointer(device, dnode + 64 + block * 128,
+                zap_block, 16 * 1024, &block_size) && block_size == 16 * 1024;
+            if (!block_read) { found = 0; break; }
+            if (block > 0 && zap_find_uint64(zap_block, name, value)) break;
+        }
+    }
+    free(zap_block);
+    free(dnode_block);
+    return found && *value != 0;
+}
+
 static int seek_u64(FILE *file, uint64_t offset)
 {
 #if defined(_WIN32)
@@ -530,5 +617,14 @@ zfs_core_status_t zfs_core_read_mos_object_directory_block(
         return ZFS_CORE_NOT_SUPPORTED;
     *bytes_read = logical_size;
     return ZFS_CORE_OK;
+}
+
+zfs_core_status_t zfs_core_lookup_mos_object_directory(
+    const zfs_core_device_t *device, const char *name, uint64_t *value)
+{
+    if (device == NULL || name == NULL || value == NULL) return ZFS_CORE_INVALID_ARGUMENT;
+    *value = 0;
+    return lookup_mos_object_directory((zfs_core_device_t *)device, name, value) ?
+        ZFS_CORE_OK : ZFS_CORE_CORRUPT_METADATA;
 }
 

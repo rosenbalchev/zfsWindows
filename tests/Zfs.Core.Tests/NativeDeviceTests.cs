@@ -78,6 +78,7 @@ public sealed class NativeDeviceTests
         Assert.Equal(16 * 1024, objectDirectoryBlock.Length);
         Assert.Equal(0x8000000000000001UL, BitConverter.ToUInt64(objectDirectoryBlock, 0));
         Assert.Equal(0x2F52AB2ABUL, BitConverter.ToUInt64(objectDirectoryBlock, 8));
+        Assert.Equal(32UL, device.LookupMosObjectDirectory("root_dataset"));
         Assert.True(device.IsRecognizedPool);
         Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(image)));
     }
