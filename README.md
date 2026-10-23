@@ -1,8 +1,14 @@
 # ZFS for Windows
 
 This repository contains an independent Windows implementation around the
-upstream OpenZFS source in [`OpenZFS/`](OpenZFS/). The upstream tree is kept
-unchanged and is treated as the on-disk format and algorithm reference.
+upstream OpenZFS source in [`OpenZFS/`](OpenZFS/). That directory is a git
+submodule pinned to upstream tag `zfs-2.4.4` (branch `zfs-2.4-release`,
+commit `71a9f957`). It is kept unchanged and is treated as the on-disk format
+and algorithm reference. `third_party/openzfs-windows` is the pinned
+OpenZFS-on-Windows port (`zfswin-2.4.1rc17`) used for the write core and the
+kernel driver. Clone with `git clone --recurse-submodules`, or run
+`git submodule update --init` in an existing clone; the submodules' own
+nested submodules are not needed.
 
 ## Current status
 

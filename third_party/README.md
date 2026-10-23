@@ -6,4 +6,5 @@
 Its license is retained in `zlib-1.3.2/LICENSE`.
 
 OpenZFS's vendored LZ4 and Zstandard sources are compiled directly from the
-unchanged `OpenZFS/` reference tree; their original notices remain in place.
+unchanged `OpenZFS/` reference tree: the upstream `openzfs/zfs` submodule at
+tag `zfs-2.4.4`. Their original notices remain in place.

@@ -2,3 +2,7 @@
 	path = third_party/openzfs-windows
 	url = https://github.com/openzfsonwindows/openzfs.git
 	branch = zfs-Windows-2.4.1-release
+[submodule "OpenZFS"]
+	path = OpenZFS
+	url = https://github.com/openzfs/zfs.git
+	branch = zfs-2.4-release
