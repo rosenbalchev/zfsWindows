@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Unattend answers for the isolated OpenZFS driver test VM; filled in by
+  New-DriverTestVm.ps1 (@USER@, @PASSWORD@, @VMIP@, @HOSTIP@).  The image
+  is applied directly, so only the specialize and oobeSystem passes run.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend"
+          xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>ZFSWIN-TEST</ComputerName>
+      <TimeZone>UTC</TimeZone>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>@USER@</Name>
+            <Group>Administrators</Group>
+            <Password>
+              <Value>@PASSWORD@</Value>
+              <PlainText>true</PlainText>
+            </Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+      <AutoLogon>
+        <Enabled>true</Enabled>
+        <LogonCount>1</LogonCount>
+        <Username>@USER@</Username>
+        <Password>
+          <Value>@PASSWORD@</Value>
+          <PlainText>true</PlainText>
+        </Password>
+      </AutoLogon>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Description>Address the internal test network</Description>
+          <CommandLine>powershell -NoProfile -Command "$a = Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1; if (-not (Get-NetIPAddress -InterfaceIndex $a.ifIndex -IPAddress @VMIP@ -ErrorAction SilentlyContinue)) { New-NetIPAddress -InterfaceIndex $a.ifIndex -IPAddress @VMIP@ -PrefixLength 24 }; Set-NetConnectionProfile -InterfaceIndex $a.ifIndex -NetworkCategory Private"</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Description>PowerShell remoting from the host only</Description>
+          <CommandLine>powershell -NoProfile -Command "Enable-PSRemoting -Force -SkipNetworkProfileCheck; Set-NetFirewallRule -Name WINRM-HTTP-In-TCP -RemoteAddress @HOSTIP@; Set-Item WSMan:\localhost\Service\MaxEnvelopeSizekb 8192"</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Description>Kernel memory dumps and no reboot loop on bug checks</Description>
+          <CommandLine>powershell -NoProfile -Command "Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl CrashDumpEnabled 2; Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl AutoReboot 1; Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl AlwaysKeepMemoryDump 1"</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Description>Signal readiness</Description>
+          <CommandLine>cmd /c echo ready &gt; C:\zfswin-ready.txt</CommandLine>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>
