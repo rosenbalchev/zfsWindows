@@ -1,0 +1,18 @@
+diff --git a/lib/libspl/os/windows/posix.c b/lib/libspl/os/windows/posix.c
+index 8602bc637..003f28d75 100644
+--- a/lib/libspl/os/windows/posix.c
++++ b/lib/libspl/os/windows/posix.c
+@@ -1123,8 +1123,11 @@ getline(char **linep, size_t *linecapp, FILE *stream)
+ int
+ wosix_fsync(int fd)
+ {
+-	if (!FlushFileBuffers(ITOH(fd)))
+-		return (EIO);
++	/* POSIX: -1 and errno; zfs_file_fsync() tests for a negative result. */
++	if (!FlushFileBuffers(ITOH(fd))) {
++		errno = EIO;
++		return (-1);
++	}
+ 	return (0);
+ }
+ 

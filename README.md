@@ -6,7 +6,7 @@ unchanged and is treated as the on-disk format and algorithm reference.
 
 ## Current status
 
-Steps 00–10 of the plan are complete (read-only milestones and disposable-pool writes). The repository now contains:
+Steps 00–11 of the plan are complete (read-only milestones, disposable-pool writes, and failure recovery). The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
@@ -131,7 +131,9 @@ Every command has the form
 - `write-file <path> <offset|append> <payload-file>`, `truncate <path> <size>`;
 - `remove <path>`, `rmdir <path>` (optionally `--defer-reclaim`, a test hook
   that leaves the znode on the unlinked set as a crash before reclaim would);
-- `rename <from-path> <to-path>` (replaces an existing file or empty directory).
+- `rename <from-path> <to-path>` (replaces an existing file or empty directory);
+- `run-script <file>`: the commands above, one per line, in a single import,
+  plus `inject-write-errors <leaf|*>` and `clear-injections`.
 
 Each command imports the pool, commits and syncs its transaction groups, and
 exports it, so Linux imports the result without `-f`. Unlinks follow the
@@ -173,6 +175,37 @@ so under concurrent vdev I/O they wrote blocks at the wrong offset; this
 corrupted a space map and left Linux unable to mount the datasets. The debug
 CRT's abort dialog is disabled, so a failed OpenZFS `VERIFY` returns an exit
 code instead of blocking on a popup.
+
+## Failure injection and recovery (step 11)
+
+`scripts/test-write-recovery.py` checks durability. The adapter's
+`run-script` command acknowledges each step (`ack <n>`) only after its
+transaction groups are synced. After each failure, Linux OpenZFS 2.4.1 must
+import the pool without rewind, and the pool must match the acknowledged
+state, or the same plus the in-flight step completed. Scrub must be clean,
+`zdb -bcc` must report no leaks, and the unlinked set must drain. The
+failures are:
+
+- **Power loss.** `ZFS_WRITE_CORE_JOURNAL` journals every vdev write (with
+  the bytes it replaced), every flush, and every acknowledgement.
+  `scripts/zfs_crash_image.py` then rebuilds the disk after a power cut at
+  any chosen point. Writes covered by a completed flush survive; other
+  writes survive or are lost sector by sector. 47 cuts pass, including
+  ones losing thousands of sectors. Windows also reopens crashed images
+  and keeps writing.
+- Process kills at random points.
+- Upstream `zio_inject` write faults:
+  - on a single disk, the pool suspends and later steps are never
+    acknowledged;
+  - on one mirror member, the member really loses the faulted writes and
+    Linux repairs it.
+- ENOSPC on a full pool, followed by reclaim.
+- A mirror member that is missing or 96 MiB-corrupted.
+- Destroyed front or back vdev label pairs.
+
+```powershell
+python scripts/test-write-recovery.py 192.168.195.63 [scenario ...]
+```
 
 ## Safety
 

@@ -2,3 +2,5 @@
 *.sh text eol=lf
 # Patches are applied byte-for-byte to the submodule.
 *.patch -text
+# Python test helpers are copied to and run on the Linux VM.
+*.py text eol=lf

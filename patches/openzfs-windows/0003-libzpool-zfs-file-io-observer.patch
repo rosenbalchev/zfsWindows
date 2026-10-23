@@ -1,0 +1,93 @@
+diff --git a/include/sys/zfs_file.h b/include/sys/zfs_file.h
+index 8737ee0eb..98532455b 100644
+--- a/include/sys/zfs_file.h
++++ b/include/sys/zfs_file.h
+@@ -44,6 +44,23 @@ typedef struct zfs_file {
+ 	loff_t f_win_offset;
+ #endif
+ } zfs_file_t;
++
++/*
++ * Optional observer of user-space file writes and flushes, for
++ * failure-injection tests (NULL by default).  WRITE_BEGIN is called before
++ * any byte of a zfs_file_pwrite() reaches the file and WRITE_END after it
++ * returns; FLUSH_BEGIN/FLUSH_END bracket zfs_file_fsync().  'offset' is the
++ * absolute file offset and 'result' the errno returned (END events only).
++ */
++typedef enum zfs_file_event {
++	ZFS_FILE_WRITE_BEGIN,
++	ZFS_FILE_WRITE_END,
++	ZFS_FILE_FLUSH_BEGIN,
++	ZFS_FILE_FLUSH_END
++} zfs_file_event_t;
++typedef void (*zfs_file_observer_t)(zfs_file_event_t event, zfs_file_t *fp,
++    const void *buf, size_t count, loff_t offset, int result);
++extern zfs_file_observer_t zfs_file_observer;
+ #elif defined(__linux__) || defined(__FreeBSD__)
+ typedef struct file zfs_file_t;
+ #elif defined(_WIN32)
+diff --git a/lib/libzpool/kernel.c b/lib/libzpool/kernel.c
+index 5a5f3c0c7..4c1dc7796 100644
+--- a/lib/libzpool/kernel.c
++++ b/lib/libzpool/kernel.c
+@@ -648,16 +648,36 @@ zfs_file_write(zfs_file_t *fp, const void *buf, size_t count, ssize_t *resid)
+  *
+  * Returns 0 on success errno on failure.
+  */
++zfs_file_observer_t zfs_file_observer = NULL;
++
++static int zfs_file_pwrite_impl(zfs_file_t *, const void *, size_t, loff_t,
++    uint8_t, ssize_t *);
++
+ int
+ zfs_file_pwrite(zfs_file_t *fp, const void *buf,
+     size_t count, loff_t pos, uint8_t ashift, ssize_t *resid)
+ {
+-	ssize_t rc, split, done;
+-	int sectors;
++	zfs_file_observer_t observer = zfs_file_observer;
++	int error;
+ 
+ #ifdef _WIN32
+ 	pos += fp->f_win_offset;
+ #endif
++	if (observer != NULL)
++		observer(ZFS_FILE_WRITE_BEGIN, fp, buf, count, pos, 0);
++	error = zfs_file_pwrite_impl(fp, buf, count, pos, ashift, resid);
++	if (observer != NULL)
++		observer(ZFS_FILE_WRITE_END, fp, buf, count, pos, error);
++	return (error);
++}
++
++static int
++zfs_file_pwrite_impl(zfs_file_t *fp, const void *buf,
++    size_t count, loff_t pos, uint8_t ashift, ssize_t *resid)
++{
++	ssize_t rc, split, done;
++	int sectors;
++
+ 	/*
+ 	 * To simulate partial disk writes, we split writes into two
+ 	 * system calls so that the process can be killed in between.
+@@ -834,12 +854,18 @@ zfs_file_getattr(zfs_file_t *fp, zfs_file_attr_t *zfattr)
+ int
+ zfs_file_fsync(zfs_file_t *fp, int flags)
+ {
++	zfs_file_observer_t observer = zfs_file_observer;
++	int error = 0;
++
+ 	(void) flags;
+ 
++	if (observer != NULL)
++		observer(ZFS_FILE_FLUSH_BEGIN, fp, NULL, 0, 0, 0);
+ 	if (fsync(fp->f_fd) < 0)
+-		return (errno);
+-
+-	return (0);
++		error = errno;
++	if (observer != NULL)
++		observer(ZFS_FILE_FLUSH_END, fp, NULL, 0, 0, error);
++	return (error);
+ }
+ 
+ /*

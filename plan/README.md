@@ -51,7 +51,7 @@ verification and update the step rather than creating duplicate work.
 | 08 | `08-mirrors_completed.md` | Mirror reads, degradation, recovery | complete |
 | 09 | `09-snapshots_completed.md` | Snapshot discovery and historical reads | complete |
 | 10 | `10-transactional-writes_completed.md` | COW writes and persistence | complete |
-| 11 | `11-crash-recovery.md` | Failure injection and durability | planned |
+| 11 | `11-crash-recovery_completed.md` | Failure injection and durability | complete |
 | 12 | `12-windows-driver.md` | WDK filesystem driver in VM | planned |
 | 13 | `13-userspace-tools-and-installer.md` | Administration tools and Windows setup package | planned |
 

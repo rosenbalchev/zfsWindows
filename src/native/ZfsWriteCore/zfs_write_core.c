@@ -29,12 +29,19 @@
 #include <sys/sa.h>
 #include <sys/sa_impl.h>
 #include <sys/spa.h>
+#include <sys/spa_impl.h>
 #include <sys/txg.h>
 #include <sys/u8_textprep.h>
+#include <sys/vdev_impl.h>
 #include <sys/zap.h>
+#include <sys/zfs_file.h>
+#include <sys/zfs_ioctl.h>
+#include <sys/zio.h>
 #include <sys/zfs_acl.h>
 #include <sys/zfs_sa.h>
 #include <sys/zfs_znode.h>
+
+#define ZWC_MAX_INJECTIONS 8
 
 typedef struct write_context {
     const char *pool_name;
@@ -51,6 +58,8 @@ typedef struct write_context {
     uint64_t casesensitivity;
     uint64_t utf8;
     boolean_t imported;
+    int injections[ZWC_MAX_INJECTIONS];	/* zio_inject_fault() ids */
+    int ninjections;
 } write_context_t;
 
 /*
@@ -503,9 +512,14 @@ rmnode(write_context_t *context, wznode_t *zp)
             return (error);
     }
 
+    /*
+     * Freeing the object is a net free; mark it as dmu_free_long_object()
+     * does so a full pool can still reclaim space.
+     */
     tx = dmu_tx_create(context->os);
     dmu_tx_hold_free(tx, zp->z_id, 0, DMU_OBJECT_END);
     dmu_tx_hold_zap(tx, context->unlinked_obj, FALSE, NULL);
+    dmu_tx_mark_netfree(tx);
     error = dmu_tx_assign(tx, DMU_TX_WAIT);
     if (error != 0) {
         dmu_tx_abort(tx);
@@ -516,6 +530,23 @@ rmnode(write_context_t *context, wznode_t *zp)
     VERIFY0(dmu_object_free(context->os, zp->z_id, tx));
     dmu_tx_commit(tx);
     return (0);
+}
+
+/*
+ * Reclaim after the unlink is durable.  As with zfs_zinactive() upstream, a
+ * failure is not the caller's error: the znode stays on the unlinked set
+ * and the next mount (on any OpenZFS host) finishes the job.
+ */
+static void
+reclaim(write_context_t *context, wznode_t *zp)
+{
+    int error = rmnode(context, zp);
+
+    if (error != 0)
+        (void) fprintf(stderr, "warning: reclaim of object %llu deferred to "
+            "the next mount: %s (%d)\n", (unsigned long long)zp->z_id,
+            strerror(error), error);
+    txg_wait_synced(dmu_objset_pool(context->os), 0);
 }
 
 static int
@@ -889,10 +920,8 @@ remove_node(write_context_t *context, const char *path, boolean_t isdir,
     dmu_tx_commit(tx);
     txg_wait_synced(dmu_objset_pool(context->os), 0);
 
-    if (unlinked && !defer_reclaim) {
-        error = rmnode(context, zp);
-        txg_wait_synced(dmu_objset_pool(context->os), 0);
-    }
+    if (unlinked && !defer_reclaim)
+        reclaim(context, zp);
     zrele(zp);
     zrele(dzp);
     return (error);
@@ -996,10 +1025,8 @@ rename_node(write_context_t *context, const char *from, const char *to)
     dmu_tx_commit(tx);
     txg_wait_synced(dmu_objset_pool(context->os), 0);
 
-    if (t_unlinked) {
-        error = rmnode(context, tzp);
-        txg_wait_synced(dmu_objset_pool(context->os), 0);
-    }
+    if (t_unlinked)
+        reclaim(context, tzp);
 out:
     zrele(tzp);
     zrele(szp);
@@ -1358,10 +1385,16 @@ open_context(write_context_t *context)
     return (error);
 }
 
+static void clear_injections(write_context_t *);
+
 static int
 close_context(write_context_t *context)
 {
     int error = 0;
+
+    /* An injection holds a spa reference that would make export fail. */
+    if (context->spa != NULL)
+        clear_injections(context);
 
     if (context->os != NULL) {
         txg_wait_synced(dmu_objset_pool(context->os), 0);
@@ -1388,6 +1421,227 @@ close_context(write_context_t *context)
     return (error);
 }
 
+/*
+ * I/O journal for power-loss simulation (ZFS_WRITE_CORE_JOURNAL=<file>).
+ *
+ * Every vdev file write is recorded with the bytes it replaces, and every
+ * flush and acknowledged script step is recorded in the same total order,
+ * through libzpool's zfs_file observer.  scripts/zfs_crash_image.py replays
+ * the journal to reconstruct the device as it would be after a power cut at
+ * any recorded moment: writes completed before a completed flush survive,
+ * later ones survive or vanish sector by sector.
+ */
+#define JOURNAL_MAGIC 0x314a575aU	/* "ZWJ1" little-endian */
+
+typedef enum journal_type {
+    JOURNAL_FILE = 1,		/* file id -> path (payload: path) */
+    JOURNAL_WRITE_BEGIN,	/* payload: previous bytes, then new bytes */
+    JOURNAL_WRITE_END,
+    JOURNAL_FLUSH_BEGIN,
+    JOURNAL_FLUSH_END,
+    JOURNAL_ACK			/* id: acknowledged script step */
+} journal_type_t;
+
+typedef struct journal_record {
+    uint32_t magic;
+    uint32_t type;
+    uint64_t id;		/* write/flush sequence, or script step */
+    uint64_t file;
+    uint64_t offset;
+    uint64_t length;		/* bytes of new data, or path length */
+    int64_t result;		/* errno of END records */
+} journal_record_t;
+
+#define JOURNAL_MAX_FILES 16
+
+static struct {
+    HANDLE handle;
+    CRITICAL_SECTION lock;
+    uint64_t next_id;
+    int nfiles;
+    zfs_file_t *files[JOURNAL_MAX_FILES];
+} journal = { INVALID_HANDLE_VALUE };
+
+static void
+journal_append(const void *data, size_t length)
+{
+    const char *p = data;
+    DWORD wrote;
+
+    while (length > 0) {
+        VERIFY(WriteFile(journal.handle, p, (DWORD)MIN(length, 1 << 30),
+            &wrote, NULL));
+        p += wrote;
+        length -= wrote;
+    }
+}
+
+static void
+journal_record(journal_type_t type, uint64_t id, uint64_t file,
+    uint64_t offset, uint64_t length, int64_t result)
+{
+    journal_record_t record = {
+        JOURNAL_MAGIC, type, id, file, offset, length, result
+    };
+
+    journal_append(&record, sizeof (record));
+}
+
+/* Called with the journal lock held. */
+static uint64_t
+journal_file_id(zfs_file_t *fp)
+{
+    char path[MAX_PATH * 2];
+    DWORD length;
+    int i;
+
+    for (i = 0; i < journal.nfiles; i++)
+        if (journal.files[i] == fp)
+            return ((uint64_t)i);
+    VERIFY3S(journal.nfiles, <, JOURNAL_MAX_FILES);
+    journal.files[journal.nfiles] = fp;
+    length = GetFinalPathNameByHandleA(ITOH(fp->f_fd), path, sizeof (path),
+        FILE_NAME_NORMALIZED);
+    if (length == 0 || length >= sizeof (path))
+        length = (DWORD)snprintf(path, sizeof (path), "fd-%d", fp->f_fd);
+    journal_record(JOURNAL_FILE, 0, (uint64_t)journal.nfiles, 0, length, 0);
+    journal_append(path, length);
+    return ((uint64_t)journal.nfiles++);
+}
+
+static void
+journal_observer(zfs_file_event_t event, zfs_file_t *fp, const void *buf,
+    size_t count, loff_t offset, int result)
+{
+    OVERLAPPED ov = { 0 };
+    DWORD got = 0;
+    void *before;
+    uint64_t file;
+
+    EnterCriticalSection(&journal.lock);
+    file = journal_file_id(fp);
+    switch (event) {
+    case ZFS_FILE_WRITE_BEGIN:
+        /* The bytes this write replaces; zero beyond the end of file. */
+        VERIFY3P(before = calloc(1, MAX(count, 1)), !=, NULL);
+        ov.Offset = (DWORD)((uint64_t)offset & 0xffffffffULL);
+        ov.OffsetHigh = (DWORD)((uint64_t)offset >> 32);
+        (void) ReadFile(ITOH(fp->f_fd), before, (DWORD)count, &got, &ov);
+        journal_record(JOURNAL_WRITE_BEGIN, journal.next_id++, file,
+            (uint64_t)offset, count, 0);
+        journal_append(before, count);
+        journal_append(buf, count);
+        free(before);
+        break;
+    case ZFS_FILE_WRITE_END:
+        journal_record(JOURNAL_WRITE_END, journal.next_id++, file,
+            (uint64_t)offset, count, result);
+        break;
+    case ZFS_FILE_FLUSH_BEGIN:
+        journal_record(JOURNAL_FLUSH_BEGIN, journal.next_id++, file, 0, 0, 0);
+        break;
+    case ZFS_FILE_FLUSH_END:
+        journal_record(JOURNAL_FLUSH_END, journal.next_id++, file, 0, 0,
+            result);
+        break;
+    }
+    LeaveCriticalSection(&journal.lock);
+}
+
+static int
+journal_open(const char *path)
+{
+    journal.handle = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (journal.handle == INVALID_HANDLE_VALUE)
+        return (EIO);
+    InitializeCriticalSection(&journal.lock);
+    zfs_file_observer = journal_observer;
+    return (0);
+}
+
+static void
+journal_ack(uint64_t step)
+{
+    if (journal.handle == INVALID_HANDLE_VALUE)
+        return;
+    EnterCriticalSection(&journal.lock);
+    journal_record(JOURNAL_ACK, step, 0, 0, 0, 0);
+    LeaveCriticalSection(&journal.lock);
+}
+
+static void
+journal_close(void)
+{
+    if (journal.handle == INVALID_HANDLE_VALUE)
+        return;
+    zfs_file_observer = NULL;
+    EnterCriticalSection(&journal.lock);
+    CloseHandle(journal.handle);
+    journal.handle = INVALID_HANDLE_VALUE;
+    LeaveCriticalSection(&journal.lock);
+}
+
+/* Leaf vdevs whose path contains 'match' ("*" for every leaf). */
+static int
+collect_leaves(vdev_t *vd, const char *match, vdev_t **leaves, int max,
+    int count)
+{
+    uint64_t c;
+
+    if (vd->vdev_ops->vdev_op_leaf) {
+        if (count < max && vd->vdev_path != NULL &&
+            (strcmp(match, "*") == 0 || strstr(vd->vdev_path, match) != NULL))
+            leaves[count++] = vd;
+        return (count);
+    }
+    for (c = 0; c < vd->vdev_children; c++)
+        count = collect_leaves(vd->vdev_child[c], match, leaves, max, count);
+    return (count);
+}
+
+/*
+ * Upstream fault injection (the zinject device-fault path): from now on,
+ * writes to the matching leaves complete with EIO.
+ */
+static int
+inject_write_errors(write_context_t *context, const char *match)
+{
+    vdev_t *leaves[ZWC_MAX_INJECTIONS];
+    zinject_record_t record;
+    int count, i, error;
+
+    spa_config_enter(context->spa, SCL_VDEV, FTAG, RW_READER);
+    count = collect_leaves(context->spa->spa_root_vdev, match, leaves,
+        ZWC_MAX_INJECTIONS - context->ninjections, 0);
+    spa_config_exit(context->spa, SCL_VDEV, FTAG);
+    if (count == 0)
+        return (ENOENT);
+    for (i = 0; i < count; i++) {
+        memset(&record, 0, sizeof (record));
+        record.zi_cmd = ZINJECT_DEVICE_FAULT;
+        record.zi_guid = leaves[i]->vdev_guid;
+        record.zi_iotype = ZINJECT_IOTYPE_WRITE;
+        record.zi_error = EIO;
+        record.zi_freq = 0;	/* always */
+        error = zio_inject_fault((char *)context->pool_name, 0,
+            &context->injections[context->ninjections], &record);
+        if (error != 0)
+            return (error);
+        context->ninjections++;
+        (void) printf("inject-write-errors %s guid=%llu\n",
+            leaves[i]->vdev_path, (unsigned long long)leaves[i]->vdev_guid);
+    }
+    return (0);
+}
+
+static void
+clear_injections(write_context_t *context)
+{
+    while (context->ninjections > 0)
+        (void) zio_clear_fault(context->injections[--context->ninjections]);
+}
+
 typedef struct command {
     const char *name;
     int min_args, max_args;	/* after <image-directory> <pool> <dataset> */
@@ -1405,7 +1659,16 @@ static const command_t commands[] = {
     { "remove", 1, 2, "<path> [--defer-reclaim]" },
     { "rmdir", 1, 2, "<path> [--defer-reclaim]" },
     { "rename", 2, 2, "<from-path> <to-path>" },
+    { "run-script", 1, 1, "<script-file>" },
 };
+
+/*
+ * run-script: one import, then one command per line (the commands above
+ * without the image arguments, plus "inject-write-errors <leaf-path-part|*>"
+ * and "clear-injections").  "ack <n>" is printed, and journaled, after step
+ * n's transaction groups are synced, i.e. once the step is durable.
+ */
+#define SCRIPT_MAX_ARGS 8
 
 static void
 usage(const char *program)
@@ -1492,6 +1755,63 @@ run_command(write_context_t *context, const char *command, int argc,
     return (EINVAL);
 }
 
+static int
+run_script(write_context_t *context, const char *path)
+{
+    char *text = NULL, *line, *line_next, *token, *next;
+    char *argv[SCRIPT_MAX_ARGS];
+    uint64_t size = 0, step = 0;
+    int argc, error;
+    size_t i;
+
+    /* read_payload(): libspl's stdio streams are not fully stdio. */
+    if ((error = read_payload(path, (void **)&text, &size)) != 0)
+        return (error);
+    if ((line = realloc(text, size + 1)) == NULL) {
+        free(text);
+        return (ENOMEM);
+    }
+    text = line;
+    text[size] = '\0';
+    for (line = strtok_s(text, "\r\n", &line_next); error == 0 &&
+        line != NULL; line = strtok_s(NULL, "\r\n", &line_next)) {
+        argc = 0;
+        for (token = strtok_s(line, " \t", &next); token != NULL &&
+            argc < SCRIPT_MAX_ARGS; token = strtok_s(NULL, " \t", &next))
+            argv[argc++] = token;
+        if (argc == 0 || argv[0][0] == '#')
+            continue;
+        if (strcmp(argv[0], "inject-write-errors") == 0 && argc == 2) {
+            error = inject_write_errors(context, argv[1]);
+        } else if (strcmp(argv[0], "clear-injections") == 0 && argc == 1) {
+            clear_injections(context);
+        } else {
+            error = EINVAL;
+            for (i = 0; i < sizeof (commands) / sizeof (commands[0]); i++) {
+                if (strcmp(argv[0], commands[i].name) == 0 &&
+                    strcmp(argv[0], "run-script") != 0 &&
+                    argc - 1 >= commands[i].min_args &&
+                    argc - 1 <= commands[i].max_args) {
+                    error = run_command(context, argv[0], argc - 1,
+                        argv + 1);
+                    break;
+                }
+            }
+        }
+        if (error != 0) {
+            (void) fprintf(stderr, "step %llu: %s: %s (%d)\n",
+                (unsigned long long)step, argv[0], strerror(error), error);
+            break;
+        }
+        journal_ack(step);
+        (void) printf("ack %llu\n", (unsigned long long)step);
+        (void) fflush(stdout);
+        step++;
+    }
+    free(text);
+    return (error);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1521,14 +1841,25 @@ main(int argc, char **argv)
     context.pool_name = argv[3];
     context.dataset_name = argv[4];
 
+    if (getenv("ZFS_WRITE_CORE_JOURNAL") != NULL &&
+        (error = journal_open(getenv("ZFS_WRITE_CORE_JOURNAL"))) != 0) {
+        print_error("open journal", error);
+        return (1);
+    }
+
     error = open_context(&context);
     if (error == 0) {
-        error = run_command(&context, command->name, argc - 5, argv + 5);
+        if (strcmp(command->name, "run-script") == 0)
+            error = run_script(&context, argv[5]);
+        else
+            error = run_command(&context, command->name, argc - 5,
+                argv + 5);
         if (error != 0)
             print_error(command->name, error);
     }
 
     (void) fflush(stdout);
     close_error = close_context(&context);
+    journal_close();
     return (error == 0 && close_error == 0 ? 0 : 1);
 }
