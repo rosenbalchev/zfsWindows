@@ -6,7 +6,7 @@ unchanged and is treated as the on-disk format and algorithm reference.
 
 ## Current status
 
-Milestone M7 is complete. The repository now contains:
+Steps 00–10 of the plan are complete (read-only milestones and disposable-pool writes). The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
@@ -110,48 +110,69 @@ Set `ZFS_SNAPSHOT_IMAGE` to the snapshot fixture image and
 `ZFS_SNAPSHOT_MANIFEST` to `tests/fixtures/snapshots/snapshots.json` to run the
 snapshot discovery and historical-read test.
 
-## Experimental writes (step 10, in progress)
+## Disposable-pool writes (step 10)
 
 `zfs-write-core.exe` is a user-mode adapter that writes to disposable,
 file-backed pool images. It is built against the pinned openzfs-windows
 libzpool (`third_party/openzfs-windows`, tag `zfswin-2.4.1rc17`) and calls the
-upstream DMU/ZAP/SA code directly, so allocation, transaction groups,
-checksums, and space maps are the genuine OpenZFS implementation. The ZPL
-operations it performs are ports of the upstream Linux ZPL code paths and are
-verified against upstream Linux OpenZFS 2.4.1.
+upstream DMU/ZAP/SA code directly, so allocation, copy-on-write, transaction
+groups, checksums, and space maps are the genuine OpenZFS implementation. The
+namespace operations are ports of the upstream Linux ZPL code paths
+(`zfs_mknode`, `zfs_link_create`/`destroy`, the unlinked set and
+`zfs_rmnode`, `zfs_rename`, `zfs_freesp`, `zfs_write`) and are verified
+against upstream Linux OpenZFS 2.4.1.
 
-Commands, all of the form `zfs-write-core <command> <image-dir> <pool> <dataset> ...`:
+Every command has the form
+`zfs-write-core <command> <image-directory> <pool> <dataset> ...`. Paths are
+`/`-separated and relative to the dataset root:
 
-- `probe` and `sync` — import, report or sync, export;
-- `create-file <name>` — a port of `zfs_mknode` + `zfs_link_create` (SA
-  layout, generation, trivial ACL, project ID, parent directory update);
-- `write-file <name> <offset|append> <payload-file>` — a port of `zfs_write`
-  (block-size growth, chunked transactions, size and timestamp updates).
+- `probe`, `sync`, `stat <path>`;
+- `create-file <path>`, `mkdir <path>`;
+- `write-file <path> <offset|append> <payload-file>`, `truncate <path> <size>`;
+- `remove <path>`, `rmdir <path>` (optionally `--defer-reclaim`, a test hook
+  that leaves the znode on the unlinked set as a crash before reclaim would);
+- `rename <from-path> <to-path>` (replaces an existing file or empty directory).
 
-The pool is exported on close, so Linux imports the result without `-f`.
+Each command imports the pool, commits and syncs its transaction groups, and
+exports it, so Linux imports the result without `-f`. Unlinks follow the
+upstream crash-consistent ordering. The name is removed and the znode is
+added to the unlinked set in one transaction, and Linux drains that set on
+mount if reclaim never ran.
 
-Verified so far: files created and written on Windows import cleanly on Linux
-with exact SHA-256 content (small, 3 MiB multi-block with append and
-overwrite, sparse, and empty files); Linux can append to them; scrub reports
-no errors; `zdb -bcc` reports no leaks. Not yet implemented: truncate, delete,
-rename, mkdir/rmdir, nested paths, the C ABI/C# integration, and multi-cycle
-persistence tests. Only operate on disposable copies of images.
+Verified with `scripts/test-write-core.py`:
+- 73 Windows import/export cycles exercise every command and 18 expected
+  error cases.
+- A Linux → Windows → Linux round trip ends with an exact match against a
+  model of every file's bytes and every directory's size and link count.
+- Scrub reports no errors, `zdb -bcc` reports no leaks, and the unlinked set
+  is empty after mount.
+- In zdb, Windows-created files and directories are identical to
+  Linux-created ones.
+
+The adapter refuses, with an error, cases it does not port:
+- inheritable parent ACLs;
+- xattr directories;
+- normalized or case-insensitive datasets;
+- long names.
+
+Quotas, non-root ownership, hard links, and symlinks are not implemented.
+Only operate on disposable copies of images.
 
 Build and test (the test needs SSH access to a Linux VM with OpenZFS):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-write-core.ps1
-bash scripts/test-write-core.sh 192.168.195.63
+python scripts/test-write-core.py 192.168.195.63
 ```
 
 The build script applies the patches in
 [`patches/openzfs-windows/`](patches/openzfs-windows/) to the submodule
 before compiling, so the submodule shows as modified; this is expected. The
-first patch fixes `pread`/`pwrite` in libspl, which used a shared file pointer
-and, under concurrent vdev I/O, wrote blocks at the wrong offset (a corrupted
-space map that made Linux unable to mount the datasets). The abort dialog of
-the debug CRT is disabled, so a failed OpenZFS `VERIFY` returns an exit code
-instead of blocking on a popup.
+first patch fixes `pread`/`pwrite` in libspl. They used a shared file pointer,
+so under concurrent vdev I/O they wrote blocks at the wrong offset; this
+corrupted a space map and left Linux unable to mount the datasets. The debug
+CRT's abort dialog is disabled, so a failed OpenZFS `VERIFY` returns an exit
+code instead of blocking on a popup.
 
 ## Safety
 
