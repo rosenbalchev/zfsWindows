@@ -1,0 +1,30 @@
+diff --git a/module/os/windows/zfs/zfs_vfsops.c b/module/os/windows/zfs/zfs_vfsops.c
+index 28f843d83..972876b33 100644
+--- a/module/os/windows/zfs/zfs_vfsops.c
++++ b/module/os/windows/zfs/zfs_vfsops.c
+@@ -1611,6 +1611,25 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
+ 		mutex_exit(&zfsvfs->z_znodes_lock);
+ 	}
+ 
++	/*
++	 * Unmounting waits only one round above, so znodes whose vnodes the
++	 * Cache Manager still holds can remain on z_all_znodes.  Release
++	 * their SA handles, and with them their dnode holds, now: otherwise
++	 * the objset can never finish evicting after dmu_objset_disown() and
++	 * "zpool export" blocks forever in spa_evicting_os_wait().  A later
++	 * zfs_vnop_reclaim() frees a znode whose z_sa_hdl is NULL without
++	 * touching the DMU.
++	 */
++	if (unmounting) {
++		mutex_enter(&zfsvfs->z_znodes_lock);
++		for (zp = list_head(&zfsvfs->z_all_znodes); zp != NULL;
++		    zp = list_next(&zfsvfs->z_all_znodes, zp)) {
++			if (zp->z_sa_hdl)
++				zfs_znode_dmu_fini(zp);
++		}
++		mutex_exit(&zfsvfs->z_znodes_lock);
++	}
++
+ 	/*
+ 	 * If we are unmounting, set the unmounted flag and let new VFS ops
+ 	 * unblock.  zfs_inactive will have the unmounted behavior, and all

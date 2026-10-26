@@ -1,0 +1,20 @@
+diff --git a/module/os/windows/zfs/zfs_vnops_os.c b/module/os/windows/zfs/zfs_vnops_os.c
+index 1eb1551cc..bf2e11d62 100644
+--- a/module/os/windows/zfs/zfs_vnops_os.c
++++ b/module/os/windows/zfs/zfs_vnops_os.c
+@@ -3429,6 +3429,15 @@ zfs_inactive(struct vnode *vp)
+ 		return;
+ 	}
+ 
++	/*
++	 * A read-only file system (including a pool imported read-only)
++	 * never syncs: the transaction below would dirty the dataset, and
++	 * dsl_dataset_dirty()'s hold would then never be released, leaving
++	 * the pool busy for export forever.  Drop the pending atime instead.
++	 */
++	if (zp->z_atime_dirty && zfs_is_readonly(zfsvfs))
++		zp->z_atime_dirty = 0;
++
+ 	if (zp->z_atime_dirty && zp->z_unlinked == 0 &&
+ 	    !spa_suspended(dmu_objset_spa(zfsvfs->z_os))) {
+ 		dmu_tx_t *tx = dmu_tx_create(zfsvfs->z_os);

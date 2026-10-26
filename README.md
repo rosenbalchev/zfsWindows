@@ -170,8 +170,13 @@ Build and test (the test needs SSH access to a Linux VM with OpenZFS):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-write-core.ps1
-python scripts/test-write-core.py 192.168.195.63
+python scripts/test-write-core.py <vm-host>
 ```
+
+`<vm-host>` is the Linux verification VM. It can also be given as
+`ZFS_VM_HOST`; the default in `scripts/zfstest.py` is the last known
+address. The VM gets its address by DHCP on a bridged switch, so after a
+network change, find it by its MAC address with `Get-NetNeighbor`.
 
 The build script applies the patches in
 [`patches/openzfs-windows/`](patches/openzfs-windows/) to the submodule
@@ -210,7 +215,7 @@ failures are:
 - Destroyed front or back vdev label pairs.
 
 ```powershell
-python scripts/test-write-recovery.py 192.168.195.63 [scenario ...]
+python scripts/test-write-recovery.py <vm-host> [scenario ...]
 ```
 
 ## Safety

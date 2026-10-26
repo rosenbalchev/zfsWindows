@@ -61,7 +61,7 @@
         <SynchronousCommand wcm:action="add">
           <Order>2</Order>
           <Description>PowerShell remoting from the host only</Description>
-          <CommandLine>powershell -NoProfile -Command "Enable-PSRemoting -Force -SkipNetworkProfileCheck; Set-NetFirewallRule -Name WINRM-HTTP-In-TCP -RemoteAddress @HOSTIP@; Set-Item WSMan:\localhost\Service\MaxEnvelopeSizekb 8192"</CommandLine>
+          <CommandLine>powershell -NoProfile -Command "Enable-PSRemoting -Force -SkipNetworkProfileCheck; New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System -Name LocalAccountTokenFilterPolicy -Value 1 -PropertyType DWord -Force;Set-NetFirewallRule -Name WINRM-HTTP-In-TCP -RemoteAddress @HOSTIP@; Set-Item WSMan:\localhost\Service\MaxEnvelopeSizekb 8192"</CommandLine>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>3</Order>

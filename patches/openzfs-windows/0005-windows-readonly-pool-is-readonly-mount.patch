@@ -1,0 +1,20 @@
+diff --git a/module/os/windows/zfs/zfs_vfsops.c b/module/os/windows/zfs/zfs_vfsops.c
+index 45b7448b5..28f843d83 100644
+--- a/module/os/windows/zfs/zfs_vfsops.c
++++ b/module/os/windows/zfs/zfs_vfsops.c
+@@ -117,6 +117,15 @@ extern void zfs_ioctl_fini(void);
+ boolean_t
+ zfs_is_readonly(zfsvfs_t *zfsvfs)
+ {
++	/*
++	 * A pool imported read-only can never be written, whatever the
++	 * mount flag says: callers use this to skip writes (e.g. saving a
++	 * generated NT security descriptor while enumerating a directory),
++	 * and any write would panic in zilog_dirty().
++	 */
++	if (zfsvfs->z_os != NULL &&
++	    !spa_writeable(dmu_objset_spa(zfsvfs->z_os)))
++		return (B_TRUE);
+ 	return (!!(vfs_isrdonly(zfsvfs->z_vfs)));
+ }
+ 

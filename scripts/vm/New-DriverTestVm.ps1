@@ -131,41 +131,6 @@ Set-VM -Name $Name -ProcessorCount $ProcessorCount -StaticMemory `
     -AutomaticCheckpointsEnabled $false -CheckpointType Standard
 Set-VMFirmware -VMName $Name -EnableSecureBoot Off
 
-# --- host side --------------------------------------------------------------
-$trusted = (Get-Item WSMan:\localhost\Client\TrustedHosts).Value
-if ($trusted -notmatch [regex]::Escape($VmIp)) {
-    Set-Item WSMan:\localhost\Client\TrustedHosts -Value (@($trusted, $VmIp) -ne '' -join ',') -Force
-}
-if (-not (Get-NetFirewallRule -DisplayName "zfswin KDNET" -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName "zfswin KDNET" -Direction Inbound -Protocol UDP `
-        -LocalPort $KdPort -InterfaceAlias "vEthernet ($SwitchName)" -Action Allow | Out-Null
-}
-if ($GrantHyperVAdmin) {
-    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $group = (Get-LocalGroup -SID 'S-1-5-32-578').Name	# Hyper-V Administrators
-    if (-not (Get-LocalGroupMember -Group $group | Where-Object Name -eq $me)) {
-        Add-LocalGroupMember -Group $group -Member $me
-        Write-Host "Added $me to '$group' (sign out and back in to use it)."
-    }
-}
-
-# --- first boot -------------------------------------------------------------
-Start-VM -Name $Name
-Write-Host "Waiting for the guest to finish its first boot (10-20 minutes) ..."
-$credential = New-Object PSCredential ("$VmIp\$user",
-    (ConvertTo-SecureString $password -AsPlainText -Force))
-$deadline = (Get-Date).AddMinutes(45)
-do {
-    Start-Sleep -Seconds 20
-    $ready = $false
-    try {
-        $ready = Invoke-Command -ComputerName $VmIp -Credential $credential `
-            -ScriptBlock { Test-Path C:\zfswin-ready.txt } -ErrorAction Stop
-    } catch { }
-} until ($ready -or (Get-Date) -gt $deadline)
-if (-not $ready) { throw "The guest did not become reachable at $VmIp." }
-
-Stop-VM -Name $Name
-Checkpoint-VM -Name $Name -SnapshotName "clean"
-Start-VM -Name $Name
-Write-Host "VM '$Name' is ready at $VmIp with checkpoint 'clean'."
+# --- host side, first boot and the clean checkpoint -------------------------
+& (Join-Path $PSScriptRoot "Complete-DriverTestVm.ps1") -Name $Name -SwitchName $SwitchName `
+    -GrantHyperVAdmin:$GrantHyperVAdmin

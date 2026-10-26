@@ -1,0 +1,69 @@
+diff --git a/lib/libzfs/os/windows/libzfs_mount_os.c b/lib/libzfs/os/windows/libzfs_mount_os.c
+index 2ac09d08d..bfe818a00 100644
+--- a/lib/libzfs/os/windows/libzfs_mount_os.c
++++ b/lib/libzfs/os/windows/libzfs_mount_os.c
+@@ -217,12 +217,26 @@ do_mount(zfs_handle_t *zhp, const char *dir, const char *optptr, int mflag)
+ #endif
+ 				} while (retry++ < 10);
+ 
+-					zfs_prop_get(pzhp,
+-					    ZFS_PROP_MOUNTPOINT,
+-					    parent_mountpoint,
+-					    sizeof (parent_mountpoint),
+-					    NULL, NULL, 0,
+-					    B_FALSE);
++					if (toupper(driveletter[0]) >= 'A' &&
++					    toupper(driveletter[0]) <= 'Z') {
++						zfs_prop_get(pzhp,
++						    ZFS_PROP_MOUNTPOINT,
++						    parent_mountpoint,
++						    sizeof (parent_mountpoint),
++						    NULL, NULL, 0,
++						    B_FALSE);
++					} else {
++						/*
++						 * The parent is not mounted
++						 * on a drive letter (e.g. a
++						 * pool root with mountpoint=
++						 * none): use the full path on
++						 * c:, as documented above,
++						 * not the "-" placeholder.
++						 */
++						driveletter[0] = 'c';
++						parent_mountpoint[0] = '\0';
++					}
+ 
+ 					stop_loop = TRUE;
+ 				}
+@@ -274,6 +288,31 @@ do_mount(zfs_handle_t *zhp, const char *dir, const char *optptr, int mflag)
+ 	for (int i = 0; zc.zc_value[i]; i++)
+ 		if (zc.zc_value[i] == '/')
+ 			zc.zc_value[i] = '\\'; /* "\\??\\c:\\BOOM\\lower" */
++
++	/*
++	 * A path mount: the kernel creates only the final directory (the
++	 * reparse point), so create missing parents first, as zfs_mount_at()
++	 * does with mkdirp() on other platforms.
++	 */
++	if (zhp->zfs_type != ZFS_TYPE_SNAPSHOT && !hasprop &&
++	    strncmp(zc.zc_value, "\\??\\", 4) == 0) {
++		char path[sizeof (zc.zc_value)];
++		char *p;
++
++		(void) strlcpy(path, zc.zc_value + 4, sizeof (path));
++		p = strrchr(path, '\\');
++		if (p != NULL && p > path + 3) {	/* below "c:\" */
++			*p = '\0';
++			for (p = path + 3; *p != '\0'; p++) {
++				if (*p == '\\') {
++					*p = '\0';
++					(void) CreateDirectoryA(path, NULL);
++					*p = '\\';
++				}
++			}
++			(void) CreateDirectoryA(path, NULL);
++		}
++	}
+ #ifdef DEBUG
+ 	fprintf(stderr, "zmount(%s,'%s') hasprop %d ispool %d\n",
+ 	    zhp->zfs_name, zc.zc_value, hasprop, ispool);
