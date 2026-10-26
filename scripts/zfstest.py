@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # belong to the individual test).
 HOST = (sys.argv[1] if len(sys.argv) > 1 and any(c in sys.argv[1]
                                                  for c in '.:')
-        else os.environ.get('ZFS_VM_HOST', '10.88.205.34'))
+        else os.environ.get('ZFS_VM_HOST', '192.168.195.51'))
 KEY = os.environ.get('ZFS_VM_KEY',
                      os.path.expanduser('~/.ssh/zfswindows-agent_ed25519'))
 EXE = os.environ.get('ZFS_WRITE_CORE', os.path.join(

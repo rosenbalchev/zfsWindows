@@ -33,7 +33,8 @@ def main():
     out = vm('''set -e
 zpool import -d %(r)s %(p)s
 trap 'cd /; zpool export %(p)s 2>/dev/null || true' EXIT
-python3 -c %(m)s /%(ds)s > /tmp/zwd-manifest.json
+mnt=$(zfs get -H -o value mountpoint %(ds)s)
+python3 -c %(m)s "$mnt" > /tmp/zwd-manifest.json
 zpool scrub -w %(p)s
 zpool status -v %(p)s | grep -E 'state:|scan:|errors:'
 zpool export %(p)s

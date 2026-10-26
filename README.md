@@ -12,7 +12,7 @@ nested submodules are not needed.
 
 ## Current status
 
-Steps 00–11 of the plan are complete (read-only milestones, disposable-pool writes, and failure recovery). The repository now contains:
+Steps 00–12 of the plan are complete (read-only milestones, disposable-pool writes, failure recovery, and the kernel driver in an isolated VM). The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
@@ -218,10 +218,36 @@ failures are:
 python scripts/test-write-recovery.py <vm-host> [scenario ...]
 ```
 
+## Kernel driver in an isolated VM (step 12)
+
+The OpenZFS-on-Windows kernel driver is built from the pinned
+`third_party/openzfs-windows` submodule, with the repository patches
+applied, by `scripts/build-driver.ps1`. That script uses MSVC, which the
+kernel sources require, and test-signs `out/driver-package` with a
+user-store certificate trusted only inside the VM. **It is never installed
+on the development host.**
+
+- `scripts/vm/New-DriverTestVm.ps1` (elevated, once) creates the Windows 11
+  VM. Its network is a private internal switch, 10.77.0.0/24, and test
+  signing and KDNET are enabled.
+- `scripts/vm/Test-DriverInVm.ps1` (unelevated) runs the
+  `prepare|install|read|write` phases under Driver Verifier.
+- `scripts/vm/validate-written.py` has Linux OpenZFS validate the pool the
+  driver wrote.
+
+Verified so far:
+- the genuine 5 GiB fixture reads through standard .NET file APIs with
+  exact hashes and an unchanged image;
+- writes through the driver pass Linux hashes, scrub and `zdb -bcc`.
+
+Six driver bugs found this way are fixed as patches 0004–0009.
+
 ## Safety
 
 The default native API opens images read-only. Only the experimental
 `zfs-write-core` adapter writes, and only to the file-backed image directory it
-is given. There is no code that formats a
-disk, repairs GPT, upgrades a pool, or loads a kernel driver.
+is given. The kernel driver is installed only inside the isolated test VM, by
+`scripts/vm/Test-DriverInVm.ps1` over remoting; nothing installs or loads it on
+the development host. There is no code that formats a disk, repairs GPT, or
+upgrades a pool.
 

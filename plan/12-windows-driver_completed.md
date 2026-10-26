@@ -1,6 +1,6 @@
 # Step 12 — Windows kernel filesystem driver
 
-Status: `in-progress`
+Status: `complete`
 
 Objective: expose the validated core through a real WDK filesystem driver.
 
@@ -105,9 +105,43 @@ Results:
   deleted another and created nested directories; the read-back hashes
   match. Export succeeded on the first attempt, and the image is in
   `TestVolumes/vm/written/`.
-- **Pending:** upstream Linux validation of the written image
-  (`scripts/vm/validate-written.py`), and the step's exit evidence.
+- **Upstream validation** (2026-10-26):
+  `python scripts/vm/validate-written.py 192.168.195.51` on Ubuntu
+  `zfs-2.4.1-1ubuntu5.1`. Linux imported the driver-written pool cleanly.
+  The 4 fixture files and the 4 driver-written files matched by SHA-256,
+  and the deleted and renamed-away files were absent. Scrub repaired 0 B
+  with 0 errors, and `zdb -bcc` reported no leaks.
 
 There were two unexplained host incidents during VM work: a bugcheck 0x10E
 and a later hang with no dump. They are recorded so that host stability is
 watched in later runs.
+
+## Completion
+
+The exit evidence is met:
+
+1. Standard .NET file APIs (`tools/Zfs.MountVerifier`) read validated
+   fixture data through the kernel driver: the genuine 5 GiB single-disk
+   fixture, with exact hashes and an unchanged image.
+2. Upstream Linux OpenZFS independently validates the pool written through
+   the driver: hashes, scrub and `zdb -bcc`.
+
+All runs were in the isolated VM under Driver Verifier (standard flags).
+The driver was never loaded on the host.
+
+Known limitations, not claimed as working:
+
+- Only the scenarios above are exercised. Out of scope: snapshots or
+  `.zfs`, xattr/ADS, ACL editing, large-scale enumeration, memory-mapped
+  writes, concurrent writers, and Driver Verifier's additional flags (low
+  resources, pending I/O, IRP logging).
+- `zpool.exe import` intermittently exits with an access violation
+  (`0xC0000005`) after the pool has been imported. This is a userland issue
+  and has not been investigated.
+- After heavy reads Windows can briefly hold file objects, so the harness
+  retries `zpool export` and records every attempt; every recorded export
+  succeeded on the first attempt.
+- Two host incidents happened during VM work: a bugcheck 0x10E in the
+  graphics memory manager, and a later hang without a dump. The host dumps
+  need elevation to analyze. The cause is undetermined and they may be
+  unrelated.
