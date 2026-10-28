@@ -23,34 +23,51 @@ Phases (default: all, in order):
            read-write, verify it, write/append/rename/delete through the
            driver, export, and copy the image back to
            TestVolumes\vm\written\ for upstream validation on Linux.
+  extended run scripts\vm\guest-extended.ps1 in the guest: ADS, DACL edits,
+           large directories, concurrent and memory-mapped writes,
+           snapshots and rollback, dedup and compression datasets, scrub,
+           and a driver-created mirror repaired by scrub.  The images and
+           expectations are copied to TestVolumes\vm\extended\ for
+           scripts\vm\validate-extended.py.
+  cache    plan step 13: run scripts\vm\guest-cache.ps1 stages (ARC, L2ARC,
+           coherency), then two power cuts (Hyper-V TurnOff of the guest)
+           while writers run under each sync mode and with a SLOG; check
+           durability after each restart and copy the pools to
+           TestVolumes\vm\cache\ for scripts\vm\validate-cache.py.
 
 Results are appended to TestVolumes\vm\results.jsonl.
 #>
 [CmdletBinding()]
 param(
-    # all, install, tools, read, write (comma-separated with -File)
+    # all, install, tools, read, write, extended, cache (comma-separated with -File)
     [string[]]$Phase = @("all"),
-    [string]$Name = "zfswin-driver-test"
+    [string]$Name = "zfswin-driver-test",
+    # install: Driver Verifier flags instead of /standard (0x209BB).  0xA6FBB
+    # adds forced pending I/O, IRP logging, invariant MDL checking (stack and
+    # driver) and the additional DDI compliance rules; 0x209BF adds
+    # randomized low-resources simulation.
+    [string]$VerifierFlags = ""
 )
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $state = Get-Content (Join-Path $repo "TestVolumes\vm\$Name.json") -Raw | ConvertFrom-Json
-$credential = New-Object PSCredential ("$($state.address)\$($state.user)",
+# PowerShell Direct (the Hyper-V VM bus): no network or guest address is
+# involved, so remoting survives guest NIC changes and host adapter resets.
+$credential = New-Object PSCredential ($state.user,
     (ConvertTo-SecureString $state.password -AsPlainText -Force))
 $results = Join-Path $repo "TestVolumes\vm\results.jsonl"
 $Phase = @($Phase | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 foreach ($p in $Phase) {
-    if ($p -notin "all", "prepare", "install", "tools", "read", "write") { throw "Unknown phase '$p'." }
+    if ($p -notin "all", "prepare", "install", "tools", "read", "write", "extended", "cache") { throw "Unknown phase '$p'." }
 }
-if ($Phase -contains "all") { $Phase = @("install", "read", "write") }
+if ($Phase -contains "all") { $Phase = @("install", "read", "write", "extended", "cache") }
 
 function Open-Guest {
     $deadline = (Get-Date).AddMinutes(15)
     while ($true) {
         try {
-            return New-PSSession -ComputerName $state.address -Credential $credential `
-                -SessionOption (New-PSSessionOption -OperationTimeout 3600000) -ErrorAction Stop
+            return New-PSSession -VMName $Name -Credential $credential -ErrorAction Stop
         } catch {
             if ((Get-Date) -gt $deadline) { throw }
             Start-Sleep -Seconds 30	# gentle: one attempt per 30 s
@@ -91,6 +108,16 @@ $findMount = {
     $path
 }
 
+# A remote guest script outlives a broken remoting session; stop any left
+# over from an interrupted run so two never work on the same pools.
+function Stop-GuestScripts($session) {
+    Invoke-Command $session {
+        Get-CimInstance Win32_Process |
+            Where-Object { $_.CommandLine -match 'guest-(extended|cache)\.ps1|Zfs\.MountVerifier' } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; "stopped $($_.ProcessId)" }
+    }
+}
+
 function Restore-Guest($checkpoint) {
     Restore-VMCheckpoint -VMName $Name -Name $checkpoint -Confirm:$false
     Start-VM -Name $Name
@@ -122,6 +149,7 @@ if ($Phase -contains "install") {
     Copy-ToGuest $s (Join-Path $repo "out\driver-package") "C:\zfswin\driver"
     Copy-ToGuest $s (Join-Path $repo "out\driver-tools") "C:\zfswin\tools"
     $out = Invoke-Command $s {
+        param($flags)
         # Native tools report progress on stderr; check exit codes instead.
         $ErrorActionPreference = "Continue"
         Set-Location C:\zfswin\driver
@@ -132,12 +160,30 @@ if ($Phase -contains "install") {
         }
         $install = & .\zfsinstaller.exe install .\OpenZFS.inf .\OpenZVOL.inf 2>&1 | Out-String
         $installExit = $LASTEXITCODE
-        $verifier = & verifier.exe /standard /driver OpenZFS.sys 2>&1 | Out-String
+        $verifier = if ($flags) {
+            & verifier.exe /flags $flags /driver OpenZFS.sys 2>&1 | Out-String
+        } else {
+            & verifier.exe /standard /driver OpenZFS.sys 2>&1 | Out-String
+        }
+        # A hang can then be dumped with Debug-VM -InjectNonMaskableInterrupt.
+        Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl -Name NMICrashDump -Value 1 -Type DWord
+        # Keep user-mode crash dumps of the userland tools for offline analysis.
+        foreach ($tool in "zpool.exe", "zfs.exe") {
+            $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$tool"
+            New-Item -Force $key | Out-Null
+            New-ItemProperty -Force $key -Name DumpFolder -PropertyType ExpandString -Value C:\zfswin\dumps | Out-Null
+            New-ItemProperty -Force $key -Name DumpType -PropertyType DWord -Value 2 | Out-Null
+        }
+        # No kernel debugger: with KDNET enabled but nothing attached, every
+        # DbgPrint from the debug driver stalls in KdSendPacket, and a
+        # breakpoint freezes the guest.  Crash and NMI dumps still work.
+        $debug = & bcdedit /debug off 2>&1 | Out-String
         [ordered]@{
             testsigning = (& bcdedit /enum '{current}' | Select-String testsigning).ToString().Trim()
+            kernelDebug = $debug.Trim()
             install = $install.Trim(); installExit = $installExit; verifier = $verifier.Trim()
         }
-    }
+    } -ArgumentList $VerifierFlags
     Record "install" $out
     Invoke-Command $s { Restart-Computer -Force }
     Remove-PSSession $s
@@ -267,4 +313,82 @@ if ($Phase -contains "write") {
     ($out.verifier.written | ConvertTo-Json) | Set-Content (Join-Path $local "written.json")
     Remove-PSSession $s
     Write-Host "Written image: $local\lz4.raw (validate with scripts\vm\validate-written.py)"
+}
+
+if ($Phase -contains "extended") {
+    $s = Open-Guest
+    Stop-GuestScripts $s | Out-Null
+    Copy-ToGuest $s (Join-Path $PSScriptRoot "guest-extended.ps1") "C:\zfswin\guest-extended.ps1"
+    $hasPristine = Invoke-Command $s { Test-Path C:\zfswin\images\lz4-pristine\lz4.raw }
+    if (-not $hasPristine) {
+        Copy-ToGuest $s (Join-Path $repo "TestVolumes\compression\lz4.raw") "C:\zfswin\images\lz4-pristine\lz4.raw"
+    }
+    $json = Invoke-Command $s {
+        # The script reports every failure in its JSON; stderr is noise.
+        $ErrorActionPreference = "Continue"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\zfswin\guest-extended.ps1 2>$null
+    }
+    $out = ($json -join "`n") | ConvertFrom-Json
+    Record "extended" $out
+    $local = Join-Path $repo "TestVolumes\vm\extended"
+    Remove-Item -Recurse -Force $local -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $local | Out-Null
+    Copy-Item -FromSession $s -Path C:\zfswin\images\ext\* -Destination $local -Recurse -Force
+    Copy-Item -FromSession $s -Path C:\zfswin\ext\*.json -Destination $local -Force
+    Remove-PSSession $s
+    if (@($out.failures).Count -ne 0) { throw "extended phase failed: $($out.failures -join '; ')" }
+    Write-Host "Extended images: $local (validate with scripts\vm\validate-extended.py)"
+}
+
+if ($Phase -contains "cache") {
+    function Invoke-CacheStage($stage) {
+        $s = Open-Guest
+        # (No stage runs between cut*-start and its power cut, so this
+        # never stops the writers that are meant to be cut.)
+        Stop-GuestScripts $s | Out-Null
+        Copy-ToGuest $s (Join-Path $PSScriptRoot "guest-cache.ps1") "C:\zfswin\guest-cache.ps1"
+        Copy-Item -ToSession $s (Join-Path $repo "out\driver-tools\Zfs.MountVerifier.exe") `
+            -Destination C:\zfswin\tools\Zfs.MountVerifier.exe -Force
+        $json = Invoke-Command $s {
+            param($stage)
+            # The script reports every failure in its JSON; stderr is noise.
+            $ErrorActionPreference = "Continue"
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\zfswin\guest-cache.ps1 -Stage $stage 2>$null
+        } -ArgumentList $stage
+        Remove-PSSession $s
+        $out = ($json -join "`n") | ConvertFrom-Json
+        Record "cache-$stage" $out
+        $out
+    }
+    # Power cut: the guest loses everything not yet on its virtual disk.
+    function Invoke-PowerCut($seconds) {
+        Start-Sleep -Seconds $seconds
+        $cut = Get-Date
+        Stop-VM -Name $Name -TurnOff -Force
+        Start-VM -Name $Name
+        Start-Sleep -Seconds 30
+        Record "power-cut" @{ time = $cut.ToString("o"); writersRanSeconds = $seconds }
+    }
+    $failed = @()
+    foreach ($stage in "arc", "l2arc", "coherency") {
+        $failed += @((Invoke-CacheStage $stage).failures)
+    }
+    $failed += @((Invoke-CacheStage "cut1-start").failures)
+    Invoke-PowerCut 45
+    $failed += @((Invoke-CacheStage "cut1-check").failures)
+    $failed += @((Invoke-CacheStage "cut2-start").failures)
+    Invoke-PowerCut 45
+    $failed += @((Invoke-CacheStage "cut2-check").failures)
+    $local = Join-Path $repo "TestVolumes\vm\cache"
+    Remove-Item -Recurse -Force $local -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $local | Out-Null
+    $s = Open-Guest
+    foreach ($f in "C:\zfswin\images\cache\main.raw", "C:\zfswin\images\cache\l2data.raw",
+                   "C:\zfswin\images\cache\coh.raw", "C:\zfswin\images\cache\nolog\slogdata.raw") {
+        Copy-Item -FromSession $s -Path $f -Destination $local -Force
+    }
+    Copy-Item -FromSession $s -Path C:\zfswin\cache\*.json -Destination $local -Force
+    Remove-PSSession $s
+    if ($failed.Count -ne 0) { throw "cache phase failed: $($failed -join '; ')" }
+    Write-Host "Cache pools: $local (validate with scripts\vm\validate-cache.py)"
 }

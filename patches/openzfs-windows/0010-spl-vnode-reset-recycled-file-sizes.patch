@@ -1,0 +1,19 @@
+diff --git a/module/os/windows/spl/spl-vnode.c b/module/os/windows/spl/spl-vnode.c
+index 2a859d20e..c0921d50f 100644
+--- a/module/os/windows/spl/spl-vnode.c
++++ b/module/os/windows/spl/spl-vnode.c
+@@ -1378,6 +1378,14 @@ vnode_create(mount_t *mp, struct vnode *dvp, void *v_data, int type, int flags,
+ 	memset(&vp->SectionObjectPointers, 0,
+ 	    sizeof (vp->SectionObjectPointers));
+ 
++	/*
++	 * A recycled vnode still holds the previous file's sizes, and
++	 * FsRtlSetupAdvancedHeader() does not reset them.  The open path
++	 * only ever grows FileSize, so a stale larger size would let reads
++	 * run past the new file's end (returning zeros); start from zero.
++	 */
++	memset(&vp->FileHeader, 0, sizeof (vp->FileHeader));
++
+ 	FsRtlSetupAdvancedHeader(&vp->FileHeader, &vp->AdvancedFcbHeaderMutex);
+ 
+ 	FsRtlInitializeFileLock(&vp->lock, NULL, NULL);

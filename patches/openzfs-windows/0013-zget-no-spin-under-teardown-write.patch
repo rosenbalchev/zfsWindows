@@ -1,0 +1,33 @@
+diff --git a/module/os/windows/zfs/zfs_znode_os.c b/module/os/windows/zfs/zfs_znode_os.c
+index 96a64c666..e68efd01a 100644
+--- a/module/os/windows/zfs/zfs_znode_os.c
++++ b/module/os/windows/zfs/zfs_znode_os.c
+@@ -1143,6 +1143,18 @@ again:
+ 		 * ZGET_FLAG_ASYNC, which left every plain zget() racing a
+ 		 * synchronous attach to busy-spin here instead of blocking.
+ 		 */
++		/*
++		 * During unmount, zil_close() -> zfs_get_data() looks up
++		 * files while this thread holds the teardown lock as writer.
++		 * A vnode that is still being attached or reclaimed then
++		 * can never become usable, and spinning here (holding
++		 * vfs_main_lock) deadlocks the lazy writer.  Fail instead:
++		 * zfs_get_data() treats it as ENOENT, and zil_close() waits
++		 * for the TXG that holds the data anyway.
++		 */
++		if (!vp && ZFS_TEARDOWN_WRITE_HELD(zfsvfs))
++			return (SET_ERROR(EAGAIN));
++
+ 		if (!vp) {
+ 			if (zfs_znode_asyncwait(zfsvfs, zp) == 0) {
+ 				dprintf("%s: waited on z_vnode OK\n", __func__);
+@@ -1168,6 +1180,9 @@ again:
+ 
+ 		if (err != 0) {
+ 			dprintf("ZFS: vnode_get() returned %d\n", err);
++			/* Being reclaimed: same reasoning as above. */
++			if (ZFS_TEARDOWN_WRITE_HELD(zfsvfs))
++				return (SET_ERROR(EAGAIN));
+ 			kpreempt(KPREEMPT_SYNC);
+ 			goto again;
+ 		}

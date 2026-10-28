@@ -1,0 +1,48 @@
+diff --git a/module/os/windows/spl/spl-mutex.c b/module/os/windows/spl/spl-mutex.c
+index 4811eaa60..a3171b9ff 100644
+--- a/module/os/windows/spl/spl-mutex.c
++++ b/module/os/windows/spl/spl-mutex.c
+@@ -163,6 +163,17 @@ spl_mutex_exit(kmutex_t *mp)
+ 
+ 	VERIFY3P(mp->m_owner, !=, 0xdeadbeefdeadbeef);
+ 
++	/*
++	 * Hold m_destroy_lock across the whole release.  Once m_owner is
++	 * NULL another thread can take the mutex, drop it, and destroy and
++	 * free the memory it lives in (zio_wait() -> zio_destroy() while
++	 * zio_done() is still in this mutex_exit()); every access below
++	 * would then touch freed memory.  mutex_destroy() takes the same
++	 * spinlock, so it waits until this thread is done with *mp.
++	 */
++	KIRQL oldq;
++	KeAcquireSpinLock(&mp->m_destroy_lock, &oldq);
++
+ 	/*
+ 	 * Release ownership with a full memory barrier so that any thread
+ 	 * which subsequently reads m_owner == NULL is guaranteed to also see
+@@ -171,19 +182,14 @@ spl_mutex_exit(kmutex_t *mp)
+ 	(void) InterlockedExchangePointer(&mp->m_owner, NULL);
+ 
+ 	/*
+-	 * Only pay the spinlock + KeSetEvent cost when a thread is actually
+-	 * sleeping in the slow path.  In the common uncontested case this
+-	 * makes mutex_exit a single interlocked exchange — no kernel objects.
+-	 *
+-	 * The m_destroy_lock spinlock still guards against a racing
+-	 * mutex_destroy() tearing down the KEVENT while we signal it.
++	 * Only signal when a thread is sleeping in the slow path.  Waiters
++	 * register before their final CAS, so reading m_waiters after the
++	 * release cannot miss one.
+ 	 */
+-	if (mp->m_waiters > 0) {
+-		KIRQL oldq;
+-		KeAcquireSpinLock(&mp->m_destroy_lock, &oldq);
++	if (mp->m_waiters > 0)
+ 		KeSetEvent((PRKEVENT)&mp->m_lock, SEMAPHORE_INCREMENT, FALSE);
+-		KeReleaseSpinLock(&mp->m_destroy_lock, oldq);
+-	}
++
++	KeReleaseSpinLock(&mp->m_destroy_lock, oldq);
+ 
+ 	VERIFY3U(KeGetCurrentIrql(), <=, DISPATCH_LEVEL);
+ }

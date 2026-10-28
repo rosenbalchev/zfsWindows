@@ -12,7 +12,7 @@ nested submodules are not needed.
 
 ## Current status
 
-Steps 00–12 of the plan are complete (read-only milestones, disposable-pool writes, failure recovery, and the kernel driver in an isolated VM). The repository now contains:
+Steps 00–13 of the plan are complete: the read-only milestones, disposable-pool writes, failure recovery, the kernel driver in an isolated VM, and read and write caching through the driver, including power-loss durability. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;
@@ -228,19 +228,63 @@ user-store certificate trusted only inside the VM. **It is never installed
 on the development host.**
 
 - `scripts/vm/New-DriverTestVm.ps1` (elevated, once) creates the Windows 11
-  VM. Its network is a private internal switch, 10.77.0.0/24, and test
-  signing and KDNET are enabled.
+  VM, with test signing enabled.
 - `scripts/vm/Test-DriverInVm.ps1` (unelevated) runs the
-  `prepare|install|read|write` phases under Driver Verifier.
-- `scripts/vm/validate-written.py` has Linux OpenZFS validate the pool the
-  driver wrote.
+  `prepare|install|read|write|extended|cache` phases under Driver Verifier.
+  `-VerifierFlags 0xA6FBB` adds forced pending I/O, IRP logging and the
+  extra DDI rules. Remoting uses PowerShell Direct (the Hyper-V VM bus), and
+  the install phase turns the guest's kernel debugger off.
+- `scripts/vm/validate-written.py`, `validate-extended.py` and
+  `validate-cache.py` have Linux OpenZFS validate every pool the driver
+  wrote.
+- Kernel dumps from bugchecks, or from an NMI for a hang, are analyzed
+  inside the VM with `scripts/vm/Analyze-GuestDump.ps1`, never on the host.
 
-Verified so far:
-- the genuine 5 GiB fixture reads through standard .NET file APIs with
-  exact hashes and an unchanged image;
-- writes through the driver pass Linux hashes, scrub and `zdb -bcc`.
+Verified through standard Windows file APIs, and then by Linux OpenZFS:
+- **Reads:** the genuine 5 GiB fixture reads with exact hashes and an
+  unchanged image.
+- **Writes:** create, append, rename and delete. Linux checks the hashes,
+  runs a scrub and finds no leaks with `zdb -bcc`.
+- **Extended workload** (`-Phase extended`):
+  - alternate data streams, which Linux sees as `user.<name>:$DATA`
+    xattrs;
+  - DACL edits, stored as `windows:security.NTACL`;
+  - a 20,000-entry directory, and wildcard listings;
+  - concurrent and memory-mapped writes;
+  - snapshots read through `.zfs\snapshot`, and rollback;
+  - `dedup=on` (4.00x), and `zstd`/`gzip` compression (5.29x/6.34x);
+  - scrub;
+  - a mirror created by the driver, whose scrub repaired 83.4 MB of
+    deliberate corruption.
 
-Six driver bugs found this way are fixed as patches 0004–0009.
+The driver bugs found this way are fixed as patches 0004–0018 (listed in
+[`patches/openzfs-windows/README.md`](patches/openzfs-windows/README.md)):
+crashes, hangs, wrong reads, failed wildcard listings and, in step 13, lost
+writes after power loss.
+
+## Read and write caching (step 13)
+
+`Test-DriverInVm.ps1 -Phase cache` exercises every cache layer through the
+driver:
+- **ARC:** `zfs_arc_max` and `primarycache` are honored.
+- **L2ARC:** checked against the same scenario on Linux
+  (`scripts/vm/l2arc-reference.py`): hits, persistent rebuild, corrupted
+  cache blocks rejected and correct data returned, and online removal.
+- **Cache Manager coherency:** between handles, memory mappings, and cached
+  and non-cached I/O.
+- **Power cuts:** Hyper-V `TurnOff` of the VM while writers run in every
+  sync mode and with a SLOG, plus import with the log device missing.
+
+The power-cut tests found that, before patches 0015–0017, acknowledged
+`FlushFileBuffers`, write-through, `sync=always` and SLOG writes could be
+lost after a power failure:
+- intent-log create records were malformed;
+- write-through never synced;
+- Windows replay dropped every logged write.
+
+`scripts/vm/Test-ZilReplay.ps1` with `validate-zil-replay.py` now shows Linux
+replaying Windows-written logs with no acknowledged durable write missing.
+An NTFS control writer on the same virtual disk loses nothing either.
 
 ## Safety
 
@@ -251,3 +295,11 @@ is given. The kernel driver is installed only inside the isolated test VM, by
 the development host. There is no code that formats a disk, repairs GPT, or
 upgrades a pool.
 
+
+## License
+
+The code written for this repository is MIT-licensed. The files derived from
+OpenZFS stay CDDL-1.0: `src/native/ZfsWriteCore/zfs_write_core.c`, the patches
+in `patches/openzfs-windows/`, and both submodules. [`LICENSE.md`](LICENSE.md)
+lists every exception and every third-party component, with its license, and
+the obligations for binary distributions.

@@ -53,5 +53,7 @@ verification and update the step rather than creating duplicate work.
 | 10 | `10-transactional-writes_completed.md` | COW writes and persistence | complete |
 | 11 | `11-crash-recovery_completed.md` | Failure injection and durability | complete |
 | 12 | `12-windows-driver_completed.md` | WDK filesystem driver in VM | complete |
-| 13 | `13-userspace-tools-and-installer.md` | Administration tools and Windows setup package | planned |
+| 13 | `13-read-and-write-caching_completed.md` | ARC, L2ARC, Cache Manager, sync and SLOG through the driver | complete |
+| 14 | `14-userspace-tools-and-installer.md` | Administration tools and Windows setup package | planned |
+| 15 | `15-documentation-and-1.0-distribution.md` | 1.0 docs, x64/ARM64 downloads, Windows support matrix, ZFS vs NTFS/ReFS | planned |
 

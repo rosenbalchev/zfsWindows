@@ -3,7 +3,7 @@
 The submodule stays pinned to the upstream openzfsonwindows release.
 `scripts/apply-openzfs-patches.ps1` (run by `build-write-core.ps1` and
 `build-driver.ps1`) applies these patches idempotently before configuring.
-0001, 0002 and 0004–0009 are bug fixes and candidates for upstream
+0001, 0002 and 0004–0018 are bug fixes and candidates for upstream
 submission. 0003 is test instrumentation.
 
 ## 0001 — libspl positional I/O without the shared file pointer
@@ -130,3 +130,190 @@ writes through the driver. `zfs_attach_security()` now returns early when
 the current thread holds the teardown lock as writer: an intent-log data
 fetch needs no security descriptor, and Linux's `zfs_zget()` never reads
 xattrs at all.
+
+The function also returns early when the vnode has no znode (`VTOZ(vp)` is
+NULL). A concurrent reclaim can clear it right after
+`zfs_znode_getvnode()` publishes the vnode. The original code got away with
+that only when a stored descriptor let it return before using the znode.
+The teardown check above first moved that use earlier, and a step-13 power
+cut test then hit it: bugcheck 0x3B in `zfs_attach_security`, from a
+create's lookup.
+
+## 0010 — SPL: a recycled vnode starts with zero file sizes
+
+`vnode_create()` takes vnodes from a kmem cache, and the cache constructor
+zeroes a vnode only when the cache first creates it. `vnode_create()` reset
+the section object pointers, but not the `FSRTL_ADVANCED_FCB_HEADER` sizes,
+and `FsRtlSetupAdvancedHeader()` does not reset them either. A recycled
+vnode therefore kept the previous file's `FileSize`, `AllocationSize` and
+`ValidDataLength`. `zfs_couplefileobject()` deliberately only *grows*
+`FileSize` on open, so the stale larger value stayed. Cached reads, which
+are bounded by `FileHeader.FileSize`, then ran past the real end of the new
+file and returned zeros. A later size query refreshed the value, so a
+re-read was correct.
+
+This was found in the step-12 extended tests. After export and re-import,
+between 0 and 20 of 15,036 files read wrong the first time in 4 of 5
+mounts. Each bad read was the right content, zero-padded to another file's
+length (11 bytes, 1 MiB, 4 MiB, 120 MiB), while Linux read every file
+correctly from the same image. The fresh-boot read test never recycles
+vnodes, so it could not see this. `vnode_create()` now zeroes the header
+before `FsRtlSetupAdvancedHeader()`. With the patch, the extended run and
+4 more reimport read rounds read every file correctly.
+
+## 0011 — ctldir: wait briefly for a snapshot automount
+
+The first lookup of `.zfs\snapshot\<name>` mounts the snapshot through
+`zfs_vss_snapshot_mount()`, then retries `getzfsvfs()` exactly once. When
+the new mount was not yet reachable, the lookup returned the ctldir stub,
+which is an empty directory. The first open of a path inside a snapshot
+just taken (`...\.zfs\snapshot\win1\windows-extended`) then failed with
+"path not found", although later accesses worked. After a successful mount
+call, the lookup now retries `getzfsvfs()` for up to 2 s (20 × 100 ms),
+leaving the teardown lock between tries. Found in the step-12 extended
+tests; with the patch, the snapshot is read through `.zfs` on first access.
+
+## 0012 — Windows: volume PDOs complete the IRPs they do not handle
+
+Each mounted dataset's device (DCB) is a PDO that the bus driver reports in
+BusRelations, so it is the bottom of its own device stack. When a request
+was not handled (`STATUS_INVALID_DEVICE_REQUEST`), `dispatcher()` passed
+the IRP with `IoSkipCurrentIrpStackLocation()` and `IoCallDriver()` to the
+*bus* FDO's lower device, which is in another stack, and the IRP has no
+stack location for it. Under the standard Driver Verifier flags nothing
+below looked. With forced pending I/O and IRP logging
+(`verifier /flags 0xA6FBB`), Verifier's filter read past the IRP's stack
+and raised bugcheck 0x50. Two dumps were analyzed inside the VM:
+
+- `IRP_MN_QUERY_RESOURCE_REQUIREMENTS` during `PiProcessNewDeviceNode`,
+  faulting in `nt!ViFilterDispatchPnp` (write to `0xffffffffffffffbb`);
+- `IRP_MJ_DEVICE_CONTROL` from MountMgr
+  (`FsRtlGetVirtualDiskNestingLevel`) for a newly arrived volume,
+  faulting in `nt!ViFilterDispatchGeneric` (write to `0xfffffffffffffff0`).
+
+On every non-bus device the patch now completes unhandled IRPs. PnP and
+power IRPs keep their `IoStatus.Status`, as WDM requires of a PDO; every
+other request completes with `STATUS_INVALID_DEVICE_REQUEST`. The bus FDO
+still forwards down its own stack.
+
+## 0013 — Windows: no zget spin while unmount holds the teardown lock
+
+`zfs_windows_unmount_impl()` holds `vfs_main_lock` as writer and calls
+`zfsvfs_teardown()`. That runs `zil_close()` → `zil_commit()` →
+`zfs_get_data()` → `zfs_zget()` with the teardown lock held as writer by
+the same thread. If the znode's vnode was still being attached, or was
+being reclaimed, `zfs_zget_ext()` retried in a `kpreempt()` loop. But the
+attach (`zfs_znode_asyncwait()` fails during teardown) and the reclaim
+cannot finish while unmount holds those locks. Meanwhile the Cache
+Manager's lazy writer, flushing that file
+(`CcWriteBehind` → `zfs_AcquireForLazyWrite()` → `vfs_busy()`), blocked on
+`vfs_main_lock` as reader. Export never finished.
+
+This was found in plan step 12 under `verifier /flags 0xA6FBB` (forced
+pending I/O), where the write phase's `zpool export` hung every time. A
+resource-timeout breakpoint froze the guest. An NMI dump analyzed inside
+the VM showed `zpool.exe` holding `OpenZFS!vfs_main_lock` exclusively in
+`zfs_zget_ext+0x471` → `kpreempt`, and the lazy writer waiting for it
+shared.
+
+`zfs_zget_ext()` now fails with `EAGAIN` instead of spinning when the
+current thread holds the teardown lock as writer. Upstream
+`zfs_get_data()` already turns a failed `zfs_zget()` into `ENOENT`, which
+the ZIL treats as "data not needed", and `zil_close()` then waits for the
+TXG that contains the data. This is the same unmount path as patch 0009.
+
+## 0014 — Windows: wildcard directory listings on case-sensitive datasets
+
+`query_directory` always upper-cased a search pattern that contained
+wildcards. It then matched with
+`FsRtlIsNameInExpression(..., IgnoreCase = !(z_case == ZFS_CASE_SENSITIVE))`.
+On a case-sensitive dataset, which is the default for Linux-created pools
+and for Windows pools created without `-O casesensitivity=insensitive`,
+the match is exact. So `*.bin` became `*.BIN` and matched none of the
+lower-case names, and any wildcard containing a letter returned an empty
+listing (`dir *.txt`, `Directory.GetFiles(dir, "*.bin")`). `*` alone still
+worked, which is why the earlier tests did not see it.
+
+This was found in plan step 13. After the power cuts, every dataset
+appeared to have lost all its files, but an unfiltered listing showed 396
+files where `GetFiles(dir, "w-*.bin")` returned 0, and the user-mode core
+read them from the image. The pattern is now upper-cased only when the
+match ignores case. The step-12 extended workload checks wildcard
+listings, so this stays covered.
+
+## 0015 — ZIL: create records keep the xvattr bit (lost writes after power loss)
+
+`zfs_log_create_txtype()` stored `vap->va_mask & ATTR_XVATTR` in an `int`.
+On Windows, `ATTR_XVATTR` is `1ULL << 63` (on Linux it is `1U << 31`), so
+the truncation always gave 0. Every create carrying an xvattr was logged as
+`TX_CREATE` / `TX_MKDIR`, and Windows creates carry one for the DOS
+attributes. But `zfs_log_create()` tests the untruncated mask and wrote the
+xvattr block where a plain `TX_CREATE` record keeps the file name.
+
+On replay, after a crash or power loss, the name was read from
+`lr_attr_masksize` (3), giving a file called `"\x03"`. The next create
+collided with it, replay stopped, and every later record was dropped. That
+includes the writes acknowledged after `FlushFileBuffers`, write-through,
+`sync=always` and a SLOG.
+
+This was found in plan step 13. After Hyper-V power cuts, the durable modes
+lost their last acknowledged writes. `zdb -iv` of the never-imported pool
+showed every `TX_CREATE` named `^C`, and Linux OpenZFS replaying the same
+log produced the same `\x03` file, which ruled out the replay side. The
+type is now computed from the boolean result. This is an upstream bug on
+any platform whose `ATTR_XVATTR` does not fit in an `int`.
+
+## 0016 — Windows: write-through writes commit the intent log
+
+Windows writes call `zfs_write()` with no sync flag. Cached writes reach
+ZFS later, as paging I/O from the Cache Manager. A file opened with
+`FILE_FLAG_WRITE_THROUGH` (`FO_WRITE_THROUGH`), or a request flagged
+`SL_WRITE_THROUGH`, promises that the data is on stable storage when the
+write completes, like `O_DSYNC` elsewhere. But its intent-log records stayed
+asynchronous until the next TXG. In plan step 13, a write-through writer
+lost its last ~2 s of acknowledged files after a power cut, the same as a
+buffered writer, while `FlushFileBuffers` and `sync=always` lost none once
+patch 0015 was applied.
+
+After a successful non-paging write on such a file object,
+`zfs_write_wrap()` now calls `zil_commit()` for the file, as an fsync does.
+By then the Cache Manager has already flushed the write-through data
+synchronously. `zil_commit()` honors `sync=disabled`.
+
+## 0017 — Windows: intent-log replay writes data (no vnode stub)
+
+Replaying a `TX_WRITE` record calls `zfs_write_simple()`. On Windows that
+went through `zfs_vn_rdwr()`, a stub whose `VNOP_WRITE` is commented out.
+It never wrote and left `resid` uninitialized, so `zfs_write_simple()`
+returned `EIO` and `zil_replay()` stopped at the first write record. After
+a crash or power loss, every write in the intent log was therefore dropped
+on Windows. In the step-13 power cuts this showed as one 0-byte file (its
+create replayed, its write not) followed by every later acknowledged file
+missing, in all durable modes. Linux OpenZFS replayed the same log with
+nothing missing (after patch 0015). The NTFS control writer on the same
+disk lost nothing either.
+
+`zfs_write_simple()` now does what Linux's does: it builds a `zfs_uio` and
+calls `zfs_write()` on the znode. That needs no vnode, which a znode
+created during replay may not have yet.
+
+## 0018 — SPL: mutex_exit() no longer touches a mutex another thread freed
+
+`spl_mutex_exit()` cleared `m_owner` first. Only afterwards did it read
+`m_waiters`, take `m_destroy_lock` and `KeSetEvent()` the mutex's event.
+In that window another thread could take the now-free mutex, drop it, and
+destroy and free the memory around it. `zio_done()` wakes `zio_wait()`
+with `mutex_exit(&zio->io_lock)`, and the woken thread calls
+`zio_destroy()`, which is exactly that pattern. The exiting thread then
+touched freed memory. Under Driver Verifier's special pool this was
+bugcheck 0x0A (IRQL_NOT_LESS_OR_EQUAL) in `KeSetEvent` from
+`spl_mutex_exit()` ← `zio_done()` ← a zio taskq thread, during the
+step-13 L2ARC test. The `m_destroy_lock` guard existed for this case but
+was taken too late.
+
+`spl_mutex_exit()` now holds `m_destroy_lock` across the release, the
+waiter check and the signal. `spl_mutex_destroy()` takes the same
+spinlock, so it waits until the exiting thread no longer touches the
+mutex. The wake-up protocol is unchanged: waiters register before their
+final compare-and-swap, so reading `m_waiters` after the release cannot
+miss one. This adds a spinlock acquire to every uncontended release.

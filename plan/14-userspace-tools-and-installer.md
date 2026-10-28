@@ -1,10 +1,16 @@
-# Step 13 — User-space administration tools and Windows setup
+# Step 14 — User-space administration tools and Windows setup
 
 Status: `planned`
 
-Prerequisites: Steps 10–12 are complete, the writable core and driver IOCTL
-contract are stable, and the driver has passed isolated-VM verification. This
-is the final implementation step.
+Prerequisites: Steps 10–13 are complete, the writable core and driver IOCTL
+contract are stable, and the driver has passed isolated-VM verification. Step
+15 then documents and distributes the result.
+
+Known issue to fix here: `zpool.exe` intermittently exits with 0xC0000005
+after a successful import. The CRT's per-thread-data teardown at exit races
+the detached libspl taskq worker threads, which are still exiting after
+`taskq_destroy()` (step 12, dump `zpool.exe.7212.dmp`). The tools must
+return reliable exit codes, so taskq workers must be joined before exit.
 
 Objective: provide supported Windows tools for discovering and administering
 ZFS pools, filesystems, and snapshots, plus a versioned setup package that can

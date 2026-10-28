@@ -145,3 +145,97 @@ Known limitations, not claimed as working:
   graphics memory manager, and a later hang without a dump. The host dumps
   need elevation to analyze. The cause is undetermined and they may be
   unrelated.
+
+## Follow-up: previously uncovered cases (2026-10-26/27)
+
+At the user's request, the limitations above were tested. `Test-DriverInVm.ps1 -Phase extended` runs `scripts/vm/guest-extended.ps1`, and `scripts/vm/validate-extended.py` then validates the result on Linux.
+
+**Workload on the Linux-created `zc_lz4` fixture:**
+
+- **Alternate data streams:** a 100 B stream and a 300 KB stream, listed with `FindFirstStreamW`.
+- **DACL edits:** BUILTIN\Users is granted Modify on a file and on a directory.
+- **Large directories:**
+  - 20,000 files in one directory, then 5,000 deleted and 1,000 renamed;
+  - 2,000 subdirectories.
+- **Concurrent writes:** 8 threads with 4 files each, plus 8 threads writing disjoint ranges of one shared file.
+- **Memory-mapped writes:** create, map, write and flush; then a second mapping patches the file mid-way.
+- **Dedup and compression:** `zfs create` of `dedup=on`, `compression=zstd` and `compression=gzip-6` children, filled with duplicate or compressible data.
+- **Snapshots:**
+  - `@win1`, then mutate (overwrite, delete, add, rename, rmdir), then read `.zfs\snapshot\win1`;
+  - `@win2`, then mutate, then `zfs rollback` to `@win2`.
+- **Scrub, export and re-import:** everything is verified again after re-import.
+
+**Workload on a mirror the driver creates (`zpool create … mirror`) from two file vdevs:**
+
+1. Fill it with 120 MiB.
+2. Export it and overwrite 160 MiB of member b.
+3. Import it and run `zpool scrub`.
+4. Run `zpool clear`, then a second scrub, which must be clean.
+
+### Results
+
+Three runs, under Driver Verifier standard flags:
+
+| Run | Bugs found |
+|---|---|
+| First run (2026-10-26) | 0010 and 0011 |
+| Second run, with 0010 and 0011 (2026-10-27) | none: every check passed |
+| Four further re-import read rounds of the 15,036-file tree | none: 0 failures, where 3 of 4 rounds failed before 0010 |
+
+**Linux validation:** `python scripts/vm/validate-extended.py`, PASS on Ubuntu `zfs-2.4.1-1ubuntu5.1`:
+
+- **Live dataset:** 15,036 files and 2,003 directories match.
+- **`@win1`:** read through `.zfs/snapshot`, 15,036 files and 2,004 directories match the pre-mutation state.
+- **Dedup and compression children:** match. `dedupratio` is 4.00x, and `zdb -DD` shows 32 duplicate DDT entries.
+- **Compression ratios:** `compressratio` is 5.29x for zstd and 6.34x for gzip.
+- **Alternate data streams:** each stream is a `user.<name>:$DATA` xattr. The 100 B stream matches byte for byte. The 300 KB stream is listed, but its value is over Linux's 64 KiB xattr limit, so Linux cannot read it.
+- **DACLs:** the security descriptor is stored as `windows:security.NTACL`, which Linux shows as `user.windows:security.NTACL`, and it contains the BUILTIN\Users grant.
+- **Scrub and leaks:** scrubs are clean on both pools, and `zdb -bcc` reports no leaks.
+- **Mirror:** the Windows scrub repaired 83.4 MB with 0 errors, and the second scrub was clean. Linux imported the mirror, scrubbed it clean, and the data matched.
+
+### Bugs found and fixed
+
+The patches are documented in `patches/openzfs-windows/README.md`.
+
+- **0010, recycled vnodes kept stale file sizes.**
+  - **Symptom:** after re-import, a few files' first reads returned their real content zero-padded to another file's length; a re-read was correct.
+  - **Fix:** `vnode_create()` now zeroes `FileHeader`.
+- **0011, first access to a new snapshot.**
+  - **Symptom:** the first access to `.zfs\snapshot\<new>` returned the empty ctldir stub, so paths inside it failed.
+  - **Fix:** a bounded wait for the automount.
+- **0012, volume PDOs forwarded unhandled IRPs to another device stack.** Found only under stricter Driver Verifier flags; two dumps:
+  - `IRP_MN_QUERY_RESOURCE_REQUIREMENTS`, bugcheck 0x50 in `ViFilterDispatchPnp`;
+  - a MountMgr `IRP_MJ_DEVICE_CONTROL`, bugcheck 0x50 in `ViFilterDispatchGeneric`.
+- **0013, unmount deadlocked the lazy writer.** `zfs_zget_ext` spun during `zil_close` while holding `vfs_main_lock`, and the lazy writer waited for that lock. Diagnosed from an NMI dump analyzed inside the VM.
+
+### Stricter Driver Verifier
+
+`-VerifierFlags 0xA6FBB` adds the following to the standard flags:
+
+- forced pending I/O;
+- IRP logging;
+- invariant MDL checking (stack and driver);
+- the additional DDI compliance rules.
+
+Patches 0012 and 0013 came from running the read/write/extended phases under these flags. With both applied, all three phases pass under them. The only failure was the known `zpool.exe` exit crash after a successful mirror import, which is now recorded separately; there were 0 bugchecks.
+
+**Final regression (2026-10-28, patches 0001–0018).** `Test-DriverInVm.ps1 -Phase all`, under the standard flags, exited 0 with 0 bugchecks, and Linux validated the written, extended and cache pools (see step 13). Step 13 also found:
+- 0014: wildcard listings;
+- 0015–0017: intent-log durability and replay;
+- 0018: `spl_mutex_exit()` use-after-free;
+- an amendment to 0009.
+
+### Other items
+
+- **`zpool.exe` exit crash.**
+  - **Diagnosis:** a WER user dump (`zpool.exe.7212.dmp`) shows the crash happens at process exit, after the import succeeded. The CRT's per-thread-data teardown (`destroy_ptd`) races about 200 detached libspl taskq worker threads that are still exiting after `taskq_destroy()`.
+  - **Status:** the fix is assigned to step 14, where the tools must return reliable exit codes.
+- **Host incidents.** The host's event log shows 16 unexpected shutdowns since 2026-09-21, which predate the VM (created 2026-10-23). Two of them are bugchecks, both 0x10E/0x2D (VIDEO_MEMORY_MANAGEMENT_INTERNAL):
+  - one during a live KDNET session;
+  - one during an offline `kd -z` with connected standby in progress.
+
+  The driver never ran on the host. All dump analysis now runs inside the VM (`scripts/vm/Analyze-GuestDump.ps1`).
+- **Not tested:** randomized low-resources simulation (`0x209BF`).
+- **Test environment:**
+  - The VM's kernel debugger is now off during tests: KDNET with nothing attached stalled every `DbgPrint` and froze the guest on breakpoints.
+  - Remoting uses PowerShell Direct, because the host's internal-switch address was lost on 2026-10-27.

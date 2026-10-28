@@ -1,0 +1,19 @@
+diff --git a/module/os/windows/zfs/zfs_vnops_windows.c b/module/os/windows/zfs/zfs_vnops_windows.c
+index 6010a13a9..4566f2a37 100644
+--- a/module/os/windows/zfs/zfs_vnops_windows.c
++++ b/module/os/windows/zfs/zfs_vnops_windows.c
+@@ -6431,7 +6431,13 @@ query_directory_FileFullDirectoryInformation(PDEVICE_OBJECT DeviceObject,
+ 		    kmem_alloc(zccb->searchname.MaximumLength,
+ 		    KM_SLEEP);
+ 
+-		if (zccb->ContainsWildCards) {
++		/*
++		 * FsRtlIsNameInExpression() needs an upcased expression only
++		 * when it ignores case.  On a case-sensitive dataset the
++		 * match is exact, so an upcased "*.BIN" would match nothing.
++		 */
++		if (zccb->ContainsWildCards &&
++		    zfsvfs->z_case != ZFS_CASE_SENSITIVE) {
+ 			Status = RtlUpcaseUnicodeString(&zccb->searchname,
+ 			    IrpSp->Parameters.QueryDirectory.FileName, FALSE);
+ 		} else {

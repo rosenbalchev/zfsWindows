@@ -1,0 +1,42 @@
+diff --git a/module/os/windows/zfs/zfs_vnops_os.c b/module/os/windows/zfs/zfs_vnops_os.c
+index 1eb1551cc..86f744287 100644
+--- a/module/os/windows/zfs/zfs_vnops_os.c
++++ b/module/os/windows/zfs/zfs_vnops_os.c
+@@ -281,20 +281,26 @@ int
+ zfs_write_simple(znode_t *zp, const void *data, size_t len,
+     loff_t pos, size_t *presid)
+ {
+-	int error = 0;
+-	ssize_t resid;
++	/*
++	 * Write through zfs_write() directly, as Linux does.  The previous
++	 * zfs_vn_rdwr() is a stub that never writes and leaves resid unset,
++	 * so every TX_WRITE replayed from the intent log failed (EIO) and
++	 * stopped the replay; it would also need a vnode, which a znode
++	 * created during replay may not have yet.
++	 */
++	struct iovec iov;
++	iov.iov_base = (void *)data;
++	iov.iov_len = len;
+ 
+-	error = zfs_vn_rdwr(UIO_WRITE, ZTOV(zp), data, len,
+-	    pos, UIO_SYSSPACE, 0 /* IO_SYNC */, RLIM64_INFINITY, NULL, &resid);
++	zfs_uio_t uio;
++	zfs_uio_iovec_init(&uio, &iov, 1, pos, UIO_SYSSPACE, len, 0);
+ 
+-	if (error) {
+-		return (SET_ERROR(error));
+-	} else if (presid == NULL) {
+-		if (resid != 0) {
++	int error = zfs_write(zp, &uio, 0, kcred);
++	if (error == 0) {
++		if (presid != NULL)
++			*presid = zfs_uio_resid(&uio);
++		else if (zfs_uio_resid(&uio) != 0)
+ 			error = SET_ERROR(EIO);
+-		}
+-	} else {
+-		*presid = resid;
+ 	}
+ 	return (error);
+ }

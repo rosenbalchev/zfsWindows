@@ -1,0 +1,27 @@
+diff --git a/module/os/windows/zfs/zfs_vnops_windows.c b/module/os/windows/zfs/zfs_vnops_windows.c
+index 6010a13a9..38e150b9a 100644
+--- a/module/os/windows/zfs/zfs_vnops_windows.c
++++ b/module/os/windows/zfs/zfs_vnops_windows.c
+@@ -7954,6 +7960,22 @@ end:
+ 	if (acquired_vp_lock)
+ 		ExReleaseResourceLite(vp->FileHeader.Resource);
+ 
++	/*
++	 * Write-through (FILE_FLAG_WRITE_THROUGH, or SL_WRITE_THROUGH on this
++	 * request) promises the data is on stable storage when the write
++	 * completes, as O_DSYNC does on other platforms.  The data reaches
++	 * ZFS (directly, or through the Cache Manager's synchronous flush)
++	 * as asynchronous intent-log records; commit them, as an fsync does.
++	 * zil_commit() honours sync=disabled.
++	 */
++	if (NT_SUCCESS(Status) && !paging_io && zp != NULL &&
++	    ((FileObject->Flags & FO_WRITE_THROUGH) ||
++	    (IrpSp->Flags & SL_WRITE_THROUGH))) {
++		int error = zil_commit(zp->z_zfsvfs->z_log, zp->z_id);
++		if (error != 0)
++			Status = zfs_error_to_ntstatus(error);
++	}
++
+ 	return (Status);
+ }
+ 

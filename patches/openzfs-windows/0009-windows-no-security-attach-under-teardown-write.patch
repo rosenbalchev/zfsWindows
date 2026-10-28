@@ -1,9 +1,18 @@
 diff --git a/module/os/windows/zfs/zfs_vnops_windows_lib.c b/module/os/windows/zfs/zfs_vnops_windows_lib.c
-index a7206ce40..78b9c3cf2 100644
+index a7206ce40..b846c3643 100644
 --- a/module/os/windows/zfs/zfs_vnops_windows_lib.c
 +++ b/module/os/windows/zfs/zfs_vnops_windows_lib.c
-@@ -3060,6 +3060,17 @@ zfs_attach_security(struct vnode *vp, struct vnode *dvp,
+@@ -3057,9 +3057,26 @@ zfs_attach_security(struct vnode *vp, struct vnode *dvp,
+ 	if (vp->security_descriptor != NULL)
+ 		return (Status);
+ 
++	/*
++	 * The vnode can lose its znode to a concurrent reclaim right after
++	 * zfs_znode_getvnode() publishes it; there is nothing to attach to.
++	 */
  	znode_t *zp = VTOZ(vp);
++	if (zp == NULL)
++		return (Status);
  	zfsvfs_t *zfsvfs = zp->z_zfsvfs;
  
 +	/*

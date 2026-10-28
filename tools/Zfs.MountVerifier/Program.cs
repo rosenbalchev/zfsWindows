@@ -14,6 +14,10 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 
+if (args.Length > 0 && Extended.Verbs.Contains(args[0]))
+    return Extended.Run(args);
+if (args.Length > 0 && Cache.Verbs.Contains(args[0]))
+    return Cache.Run(args);
 if (args.Length < 2)
 {
     Console.Error.WriteLine("usage: Zfs.MountVerifier <manifest.json> <root> [--write <dir>]");
