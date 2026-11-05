@@ -1,9 +1,9 @@
-# Step 16 — Documentation and the 1.0 x64/ARM64 distribution
+# Step 17 — Documentation and the 1.0 x64/ARM64 distribution
 
 Status: `planned`
 
 Prerequisites:
-- Steps 13 (read and write caching), 14 (administration tools and signed installer) and 15 (user-mode WinFsp variant) are complete.
+- Steps 13 (read and write caching), 14 (administration tools and signed installer), 15 (user-mode WinFsp variant) and 16 (GUI administration tool) are complete.
 - 1.0 ships two variants. The **kernel driver** needs a Microsoft-signed driver package, or else it is published only as a test-signing preview. The **user-mode (WinFsp)** variant from step 15 needs no Microsoft signature. The README explains when to choose each, and the support table, checksums, SBOM and the README walkthrough cover both.
 - No driver bug found in the isolated VM is open without a documented workaround.
 

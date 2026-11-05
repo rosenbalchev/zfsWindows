@@ -94,7 +94,8 @@ public class CommandLineTests
             "scrub status t", "scrub start t", "scrub pause t", "scrub stop t", "dataset list", "dataset get t", "dataset set t a=b",
             "dataset create t/a", "dataset destroy t/a --yes", "dataset mount t/a", "dataset unmount t/a", "mount list",
             "snapshot list", "snapshot create t@s", "snapshot destroy t@s --yes", @"vdev attach t D:\a D:\b --yes",
-            @"vdev detach t D:\a --yes", @"vdev replace t D:\a --yes", "version",
+            @"vdev detach t D:\a --yes", @"vdev replace t D:\a --yes", @"vdev add-cache t D:\c --yes",
+            @"vdev add-log t --mirror D:\a D:\b --yes", @"vdev remove t D:\c --yes", "version",
         ];
         var used = lines.Select(l => Parse(l).Operation).ToHashSet();
         foreach (string op in used)

@@ -56,5 +56,6 @@ verification and update the step rather than creating duplicate work.
 | 13 | `13-read-and-write-caching_completed.md` | ARC, L2ARC, Cache Manager, sync and SLOG through the driver | complete |
 | 14 | `14-userspace-tools-and-installer_completed.md` | Administration tools and Windows setup package | complete |
 | 15 | `15-user-mode-filesystem.md` | User-mode variant: libzpool engine bridged to WinFsp, service and installer; no Microsoft driver signature needed | in-progress |
-| 16 | `16-documentation-and-1.0-distribution.md` | 1.0 docs, x64/ARM64 downloads of both variants, Windows support matrix, ZFS vs NTFS/ReFS | planned |
+| 16 | `16-gui-administration-tool.md` | ZfsWinGui: status, compression/dedup/sync, mirrors, read/write caches, user-mode mounts | in-progress |
+| 17 | `17-documentation-and-1.0-distribution.md` | 1.0 docs, x64/ARM64 downloads of both variants, Windows support matrix, ZFS vs NTFS/ReFS | planned |
 

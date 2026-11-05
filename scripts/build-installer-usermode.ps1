@@ -20,7 +20,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$build = Join-Path $root "out\openzfs-write-debug\zfswin-um"
+$build = Join-Path $root ("out\openzfs-write-debug" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }) + "\zfswin-um")
 $payload = Join-Path $root "out\installer-payload\usermode-$Architecture"
 $release = Join-Path $root "out\release\$Version"
 $winfspLicense = Join-Path $root "third_party\winfsp\sdk-2.1\DYNAMIC\License.txt"
@@ -40,7 +40,12 @@ if (-not $cert) { throw "The zfsWindows code-signing certificate is missing; run
 if (Test-Path $payload) { Remove-Item -Recurse -Force $payload }
 foreach ($d in "bin", "licenses", "symbols") { New-Item -ItemType Directory -Force (Join-Path $payload $d) | Out-Null }
 Copy-Item $exe (Join-Path $payload "bin")
+# The administration tool (its User mode tab manages this edition).
+$gui = Join-Path $root "out\admin-$Architecture\ZfsWinGui.exe"
+if (-not (Test-Path $gui)) { throw "$gui is missing; run build-admin.ps1 -Architecture $Architecture first." }
+Copy-Item $gui (Join-Path $payload "bin")
 Copy-Item (Join-Path $build "zfswin-um.pdb") (Join-Path $payload "symbols")
+Copy-Item (Join-Path $root "installer\ZfsWin.UserMode\README.html") $payload
 Copy-Item (Join-Path $root "LICENSE.md") (Join-Path $payload "licenses\LICENSE.md")
 Copy-Item (Join-Path $root "third_party\openzfs-windows\LICENSE") (Join-Path $payload "licenses\OpenZFS-LICENSE.txt")
 Copy-Item (Join-Path $root "third_party\openzfs-windows\NOTICE") (Join-Path $payload "licenses\OpenZFS-NOTICE.txt")
@@ -53,8 +58,10 @@ Copy-Item $winfspLicense (Join-Path $payload "licenses\WinFsp-License.txt")
     patches = @(Get-ChildItem (Join-Path $root "patches\openzfs-windows") -Filter *.patch | ForEach-Object Name)
 } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $payload "VERSION.json")
 
-& $signtool sign /q /fd sha256 /sha1 $cert.Thumbprint (Join-Path $payload "bin\zfswin-um.exe")
-if ($LASTEXITCODE -ne 0) { throw "signtool failed for zfswin-um.exe" }
+foreach ($bin in "zfswin-um.exe", "ZfsWinGui.exe") {
+    & $signtool sign /q /fd sha256 /sha1 $cert.Thumbprint (Join-Path $payload "bin\$bin")
+    if ($LASTEXITCODE -ne 0) { throw "signtool failed for $bin" }
+}
 
 $wixproj = Join-Path $root "installer\ZfsWin.UserMode\ZfsWin.UserMode.wixproj"
 $bin = Join-Path $root "out\installer-build\usermode-$Architecture"

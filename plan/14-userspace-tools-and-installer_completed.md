@@ -4,7 +4,7 @@ Status: `complete`
 
 Prerequisites: Steps 10–13 are complete, the writable core and driver IOCTL
 contract are stable, and the driver has passed isolated-VM verification. Step
-15 adds the user-mode (WinFsp) variant, and step 16 documents and distributes
+15 adds the user-mode (WinFsp) variant, and step 17 documents and distributes
 both.
 
 Known issue to fix here: `zpool.exe` intermittently exits with 0xC0000005
@@ -155,7 +155,7 @@ Status: `complete`, with the limitations below.
 **Documentation**
 - `docs/installation.md`, `docs/zfswin-cli.md` and `docs/building.md`.
 
-**Limitations (carried to step 16)**
+**Limitations (carried to step 17)**
 - Debug builds only.
 - x64 only: the ARM64 admin suite builds, but there is no ARM64 driver build
   (no ARM64 OpenSSL yet) and no ARM64 VM.

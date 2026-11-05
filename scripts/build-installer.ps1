@@ -32,7 +32,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $version = if ($Version) { $Version } else { & (Join-Path $PSScriptRoot "Get-ZfsWinVersion.ps1") }
-$driver = Join-Path $root "out\driver-package"
+$driver = Join-Path $root ("out\driver-package" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }))
 $admin = Join-Path $root "out\admin-$Architecture"
 $payload = Join-Path $root "out\installer-payload\$Architecture"
 $release = Join-Path $root "out\release\$version"
@@ -59,7 +59,7 @@ if (-not $cert) { throw "The zfsWindows test-signing certificate is missing; run
 # --- stage --------------------------------------------------------------------
 if (Test-Path $payload) { Remove-Item -Recurse -Force $payload }
 foreach ($d in "bin", "driver", "licenses", "symbols", "ZfsWin") { New-Item -ItemType Directory -Force (Join-Path $payload $d) | Out-Null }
-Copy-Item (Join-Path $admin "zfswin.exe"), (Join-Path $admin "ZfsWinBroker.exe") (Join-Path $payload "bin")
+Copy-Item (Join-Path $admin "zfswin.exe"), (Join-Path $admin "ZfsWinBroker.exe"), (Join-Path $admin "ZfsWinGui.exe") (Join-Path $payload "bin")
 foreach ($tool in "zpool.exe", "zfs.exe", "zdb.exe", "kstat.exe", "zfsinstaller.exe") { Copy-Item (Join-Path $driver $tool) (Join-Path $payload "bin") }
 foreach ($file in "OpenZFS.inf", "OpenZFS.sys", "OpenZFS.cat", "OpenZFS.man", "OpenZVOL.inf", "OpenZVOL.sys", "OpenZVOL.cat") {
     Copy-Item (Join-Path $driver $file) (Join-Path $payload "driver")
@@ -70,6 +70,7 @@ Copy-Item (Join-Path $root "src\powershell\ZfsWin\*") (Join-Path $payload "ZfsWi
 # The module manifest carries the build's version (stamped before signing).
 $psd1 = Join-Path $payload "ZfsWin\ZfsWin.psd1"
 [IO.File]::WriteAllText($psd1, ([IO.File]::ReadAllText($psd1) -replace "ModuleVersion(\s*)=(\s*)'[^']*'", "ModuleVersion`$1=`$2'$version'"))
+Copy-Item (Join-Path $root "installer\ZfsWin.Installer\README.html") $payload
 Copy-Item (Join-Path $root "LICENSE.md") (Join-Path $payload "licenses\LICENSE.md")
 Copy-Item (Join-Path $root "third_party\openzfs-windows\LICENSE") (Join-Path $payload "licenses\OpenZFS-LICENSE.txt")
 Copy-Item (Join-Path $root "third_party\openzfs-windows\NOTICE") (Join-Path $payload "licenses\OpenZFS-NOTICE.txt")
@@ -115,7 +116,7 @@ Copy-Item (Join-Path $driver "zfswindows-test.cer") $release -Force
 
 # --- checksums and SBOM ------------------------------------------------------------
 $components = foreach ($f in Get-ChildItem $payload -Recurse -File | Where-Object Extension -in ".exe", ".sys", ".cat", ".inf", ".psm1", ".psd1") {
-    $license = if ($f.Name -in "zfswin.exe", "ZfsWinBroker.exe" -or $f.Extension -in ".psm1", ".psd1") { "MIT" } else { "CDDL-1.0" }
+    $license = if ($f.Name -in "zfswin.exe", "ZfsWinBroker.exe", "ZfsWinGui.exe" -or $f.Extension -in ".psm1", ".psd1") { "MIT" } else { "CDDL-1.0" }
     [ordered]@{
         type = if ($f.Extension -in ".exe", ".sys") { "application" } else { "file" }
         name = $f.Name; version = $version

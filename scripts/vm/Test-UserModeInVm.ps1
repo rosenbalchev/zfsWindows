@@ -30,7 +30,7 @@ TestVolumes\vm\results.jsonl as "usermode-*".
 [CmdletBinding()]
 param(
     [string[]]$Phase = @("all"),
-    [string]$Name = "zfswin-driver-test"
+    [string]$Name = "zfsTest"
 )
 
 $ErrorActionPreference = "Stop"
@@ -131,6 +131,11 @@ if ($Phase -contains "setup") {
     Invoke-Command $s { New-Item -ItemType Directory -Force C:\zfswin\um, C:\zfswin\tools, C:\zfswin\fixtures, C:\zfswin\images\single, C:\zfswin\images\lz4-pristine, C:\zfswin\dumps | Out-Null }
     Copy-Item -ToSession $s $winfsp C:\zfswin\um\winfsp.msi -Force
     Copy-Item -ToSession $s $msi C:\zfswin\um\zfswin-usermode.msi -Force
+    # The .NET 10 Desktop Runtime for ZfsWinGui.exe: the official, signed
+    # installer, verified on the host.
+    $runtime = Get-ChildItem (Join-Path $repo "out\dotnet-runtime") -Filter "windowsdesktop-runtime-*-win-x64.exe" | Select-Object -First 1
+    if (-not $runtime -or (Get-AuthenticodeSignature $runtime.FullName).Status -ne "Valid") { throw "out\dotnet-runtime\windowsdesktop-runtime-*-win-x64.exe is missing or not validly signed." }
+    Copy-Item -ToSession $s $runtime.FullName C:\zfswin\um\dotnet-desktop-runtime.exe -Force
     Copy-Item -ToSession $s (Join-Path $repo "out\driver-tools\Zfs.MountVerifier.exe") C:\zfswin\tools\ -Force
     Copy-Item -ToSession $s (Join-Path $PSScriptRoot "guest-bench.ps1") C:\zfswin\guest-bench.ps1 -Force
     Copy-Item -ToSession $s (Join-Path $repo "tests\fixtures\single-disk.manifest.json") C:\zfswin\fixtures\ -Force
@@ -139,15 +144,23 @@ if ($Phase -contains "setup") {
     Copy-Item -ToSession $s (Join-Path $repo "TestVolumes\compression\lz4.raw") C:\zfswin\images\lz4-pristine\lz4.raw -Force
     $out = Invoke-Command $s {
         $ErrorActionPreference = "Continue"
-        function Msi($package, $log) {
-            $p = Start-Process msiexec.exe -ArgumentList '/i', $package, '/qn', '/norestart', '/l*v', $log -Wait -PassThru
+        function Msi($package, $log, $ui = '/qn') {
+            $p = Start-Process msiexec.exe -ArgumentList '/i', $package, $ui, '/norestart', '/l*v', $log -Wait -PassThru
             [ordered]@{ exit = $p.ExitCode; refused = @(Get-Content $log -ErrorAction SilentlyContinue | Select-String 'REFUSED:' | ForEach-Object { ($_.Line -replace '^.*REFUSED:', 'REFUSED:').Trim() } | Select-Object -Unique) }
         }
         # Our package first: without WinFsp it must refuse and change nothing.
         $withoutWinFsp = Msi 'C:\zfswin\um\zfswin-usermode.msi' 'C:\zfswin\um\usermode-nowinfsp.log'
         $serviceAfterRefusal = [bool](Get-Service ZfsWinUserMode -ErrorAction SilentlyContinue)
         $winfspInstall = Msi 'C:\zfswin\um\winfsp.msi' 'C:\zfswin\um\winfsp-install.log'
-        $install = Msi 'C:\zfswin\um\zfswin-usermode.msi' 'C:\zfswin\um\usermode-install.log'
+        # Reduced UI (/qr), as a person installing: the client-side UI
+        # sequence runs and opens the getting-started page (OpenReadMe);
+        # silent installs never run it.
+        $install = Msi 'C:\zfswin\um\zfswin-usermode.msi' 'C:\zfswin\um\usermode-install.log' '/qr'
+        $readme = @(Get-Content C:\zfswin\um\usermode-install.log | Select-String 'Action ended .*: OpenReadMe\. Return value (\d)' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+        $rt = Start-Process C:\zfswin\um\dotnet-desktop-runtime.exe -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
+        $gui = "$env:ProgramFiles\OpenZFS for Windows (user mode)\bin\ZfsWinGui.exe"
+        $gp = Start-Process $gui -ArgumentList '--self-check', 'C:\zfswin\um\gui-selfcheck.json' -Wait -PassThru
+        $guiReport = if (Test-Path C:\zfswin\um\gui-selfcheck.json) { Get-Content C:\zfswin\um\gui-selfcheck.json -Raw | ConvertFrom-Json } else { $null }
         $svc = Get-CimInstance Win32_Service -Filter "Name='ZfsWinUserMode'"
         foreach ($tool in "zfswin-um.exe") {
             $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$tool"
@@ -162,8 +175,10 @@ if ($Phase -contains "setup") {
             winfspExit = $winfspInstall.exit
             winfspDriver = (Get-AuthenticodeSignature "${env:ProgramFiles(x86)}\WinFsp\bin\winfsp-x64.sys" | ForEach-Object { "$($_.Status) $($_.SignerCertificate.Subject)" })
             winfspService = ((& sc.exe query WinFsp.Launcher) -match 'STATE' | Out-String).Trim()
-            install = $install
-            service = $(if ($svc) { [ordered]@{ start = $svc.StartMode; account = $svc.StartName; path = $svc.PathName; state = $svc.State } })
+            install = $install; readmeOpened = $readme; runtimeExit = $rt.ExitCode
+            gui = [ordered]@{ exit = $gp.ExitCode; report = $guiReport }
+            shortcuts = @(Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\OpenZFS for Windows (user mode)" -ErrorAction SilentlyContinue | ForEach-Object Name)
+            service =$(if ($svc) { [ordered]@{ start = $svc.StartMode; account = $svc.StartName; path = $svc.PathName; state = $svc.State } })
             ourBinarySignature = (Get-AuthenticodeSignature "$env:ProgramFiles\OpenZFS for Windows (user mode)\bin\zfswin-um.exe").Status.ToString()
             os = (Get-CimInstance Win32_OperatingSystem).Caption + " " + [Environment]::OSVersion.Version
         }
@@ -175,6 +190,13 @@ if ($Phase -contains "setup") {
     Expect "refused install left no service" (-not $out.serviceAfterRefusal)
     Expect "WinFsp installed" ($out.winfspExit -eq 0) "exit $($out.winfspExit)"
     Expect "user-mode MSI installed" ($out.install.exit -eq 0) "exit $($out.install.exit)"
+    # PowerShell Direct has no desktop, so Windows Installer downgrades /qr to
+    # basic UI and never runs the UI sequence that holds OpenReadMe.  The MSI
+    # tables are checked on the host instead (docs/building.md); the page
+    # opening is confirmed by a person once per release.
+    if (@($out.readmeOpened) -notcontains "1") { Write-Host "note: OpenReadMe not run (no desktop in this session; expected)" }
+    Expect "GUI self-check on the user-mode edition" ($out.gui.exit -eq 0 -and $out.gui.report.brokerError -and $out.gui.report.userModeService) "exit $($out.gui.exit)"
+    Expect "Start menu shortcuts" (@($out.shortcuts).Count -eq 2) ($out.shortcuts -join ', ')
     Expect "service is automatic, LocalSystem" ($out.service.start -eq 'Auto' -and $out.service.account -eq 'LocalSystem') ($out.service | ConvertTo-Json -Compress)
     Stop-VM -Name $Name
     Get-VMSnapshot -VMName $Name -Name "usermode" -ErrorAction SilentlyContinue | Remove-VMSnapshot

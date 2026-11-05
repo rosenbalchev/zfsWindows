@@ -111,6 +111,9 @@
       <Component Id="ZfsWinCli">
         <File Source="$(var.Payload)\bin\zfswin.exe" KeyPath="yes" />
       </Component>
+      <Component Id="ZfsWinGui">
+        <File Id="ZfsWinGui.exe" Source="$(var.Payload)\bin\ZfsWinGui.exe" KeyPath="yes" />
+      </Component>
       <Component><File Source="$(var.Payload)\bin\zpool.exe" KeyPath="yes" /></Component>
       <Component><File Source="$(var.Payload)\bin\zfs.exe" KeyPath="yes" /></Component>
       <Component><File Source="$(var.Payload)\bin\zdb.exe" KeyPath="yes" /></Component>
@@ -137,6 +140,26 @@
       <Component><File Source="$(var.Payload)\driver\OpenZVOL.cat" KeyPath="yes" /></Component>
     </ComponentGroup>
 
+    <ComponentGroup Id="ReadMe" Directory="INSTALLFOLDER">
+      <Component Id="ReadMe">
+        <File Id="README.html" Source="$(var.Payload)\README.html" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Start menu: the administration tool and the getting-started page. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ShortcutFolder" Name="OpenZFS for Windows" />
+    </StandardDirectory>
+    <ComponentGroup Id="Shortcuts" Directory="ShortcutFolder">
+      <Component Id="StartMenuShortcuts">
+        <Shortcut Id="GuiShortcut" Name="OpenZFS for Windows" Description="Pools, datasets, mirrors and caches"
+                  Target="[#ZfsWinGui.exe]" WorkingDirectory="BINFOLDER" />
+        <Shortcut Id="ReadMeShortcut" Name="OpenZFS for Windows - Getting started" Target="[#README.html]" />
+        <RemoveFolder Id="RemoveShortcutFolder" On="uninstall" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows" Name="StartMenuShortcuts" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
     <ComponentGroup Id="Licenses" Directory="LICENSEFOLDER">
       <Files Include="$(var.Payload)\licenses\**" />
     </ComponentGroup>
@@ -157,6 +180,8 @@
       <ComponentGroupRef Id="Licenses" />
       <ComponentGroupRef Id="Symbols" />
       <ComponentGroupRef Id="PowerShellModule" />
+      <ComponentGroupRef Id="ReadMe" />
+      <ComponentGroupRef Id="Shortcuts" />
     </Feature>
 
     <!-- Setup steps: ZfsWinBroker.exe in setup mode; WixQuietExec copies
@@ -195,6 +220,17 @@
          the install fails after every deferred action has run, so the
          rollback actions must restore the previous state. -->
     <util:FailWhenDeferred />
+
+    <!-- Getting started: after an interactive install or upgrade (not repair
+         or uninstall), open README.html as the user.  From the client-side UI
+         sequence, which runs only with a UI (double-click, /qr): in the
+         server-side execute sequence UILevel is always 2 (step-16 VM run). -->
+    <Property Id="WixShellExecTarget" Value="[#README.html]" />
+    <CustomAction Id="OpenReadMe" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixShellExec"
+                  Impersonate="yes" Return="ignore" />
+    <InstallUISequence>
+      <Custom Action="OpenReadMe" After="ExecuteAction" Condition="NOT Installed AND NOT REMOVE" />
+    </InstallUISequence>
 
     <InstallExecuteSequence>
       <!-- Pools first: the first deferred action, so on repair, upgrade and

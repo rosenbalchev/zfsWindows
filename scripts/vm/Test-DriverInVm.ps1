@@ -43,7 +43,7 @@ Results are appended to TestVolumes\vm\results.jsonl.
 param(
     # all, install, tools, read, write, extended, cache (comma-separated with -File)
     [string[]]$Phase = @("all"),
-    [string]$Name = "zfswin-driver-test",
+    [string]$Name = "zfsTest",
     # install: Driver Verifier flags instead of /standard (0x209BB).  0xA6FBB
     # adds forced pending I/O, IRP logging, invariant MDL checking (stack and
     # driver) and the additional DDI compliance rules; 0x209BF adds

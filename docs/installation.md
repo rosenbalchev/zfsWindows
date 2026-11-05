@@ -16,7 +16,9 @@ refuses to install next to the other.
 | zvols, ADS, Windows ACLs | no | yes |
 
 Both use the same OpenZFS engine and on-disk format. A pool written by
-either variant imports anywhere OpenZFS 2.4 runs.
+either variant imports anywhere OpenZFS 2.4 runs. The README's *User mode
+or kernel mode? Feature matrix* lists every feature and whether it is
+tested, implemented or missing in each edition.
 
 First verify the download:
 
@@ -55,7 +57,7 @@ mounted whenever the service starts, including at boot:
 ```powershell
 $key = "HKLM:\SOFTWARE\OpenZFS for Windows\UserMode\Mounts\tank"
 New-Item -Force $key | Out-Null
-Set-ItemProperty $key Source     'D:\pools'            # image directory, or a device such as \\?\PhysicalDrive2
+Set-ItemProperty $key Source     'D:\pools'            # image directory (whole-disk sources are not tested yet)
 Set-ItemProperty $key Pool       'tank'
 Set-ItemProperty $key Dataset    'tank/data'
 Set-ItemProperty $key MountPoint 'Z:'                  # a drive letter, or an empty folder that does not exist yet
@@ -138,7 +140,7 @@ the log contains a `REFUSED:` line.
     Certification Authorities** and **Trusted Publishers** stores.
 
   Use test-signed packages only on test machines. A release package signed
-  through the Microsoft Partner Center needs none of this (plan step 16).
+  through the Microsoft Partner Center needs none of this (plan step 17).
 - No OpenZFS driver that this package did not install may be present. Remove
   an existing one first (see the last section).
 
@@ -185,7 +187,7 @@ output appears there, including `zfsinstaller` and the pool check.
 
 ## Formatting, importing and automount
 
-See the README's *Using ZFS volumes* section (step 16) for creating a pool on
+See the README's *Using ZFS volumes* section (step 17) for creating a pool on
 a disk, mounting it at a drive letter or folder, and having it mount at boot.
 
 ## Diagnostics

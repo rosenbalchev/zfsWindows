@@ -17,7 +17,7 @@ idempotent), e.g. after a failure in that script.
 #>
 [CmdletBinding()]
 param(
-    [string]$Name = "zfswin-driver-test",
+    [string]$Name = "zfsTest",
     [string]$SwitchName = "zfswin-test",
     [switch]$GrantHyperVAdmin
 )

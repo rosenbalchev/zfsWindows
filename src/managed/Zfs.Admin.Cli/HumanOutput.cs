@@ -74,6 +74,9 @@ internal static class HumanOutput
         "vdev.attach" => $"Attached {r?["attached"]} to {r?["to"]} in {r?["pool"]}; resilvering starts automatically.",
         "vdev.detach" => $"Detached {r?["detached"]} from {r?["pool"]}.",
         "vdev.replace" => $"Replacing {r?["replaced"]} with {r?["with"]} in {r?["pool"]}; see 'zfswin pool status'.",
+        "vdev.add" => $"Added {(r?["role"]?.GetValue<string>() == "cache" ? "read cache (L2ARC)" : (r?["mirror"]?.GetValue<bool>() == true ? "mirrored write log (SLOG)" : "write log (SLOG)"))} " +
+            $"{string.Join(", ", r?["devices"]?.AsArray().Select(d => d?.GetValue<string>()) ?? [])} to {r?["pool"]}.",
+        "vdev.remove" => $"Removed {r?["removed"]} from {r?["pool"]}.",
         _ => r?.ToJsonString() ?? "Done.",
     };
 
@@ -98,6 +101,15 @@ internal static class HumanOutput
         }
         foreach (JsonNode? vdev in pool?["vdevs"] as JsonArray ?? [])
             Walk(vdev, 1);
+        // The device classes zpool status prints below the data vdevs.
+        foreach (var (key, title) in new[] { ("special", "special"), ("dedup", "dedup"), ("logs", "logs"), ("caches", "cache"), ("spares", "spares") })
+        {
+            if (pool?[key] is not JsonArray { Count: > 0 } group)
+                continue;
+            rows.Add([title, "", "", "", ""]);
+            foreach (JsonNode? vdev in group)
+                Walk(vdev, 1);
+        }
         WriteRows(output, rows, indent: "\t");
         output.WriteLine($"errors: {(pool?["errorCount"]?.GetValue<long>() is long n && n > 0 ? $"{n} data errors" : "No known data errors")}");
         output.WriteLine();

@@ -74,10 +74,33 @@
              are configured afterwards. -->
         <ServiceControl Id="ZfsWinUserModeControl" Name="ZfsWinUserMode" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
+      <Component Id="ZfsWinGui">
+        <File Id="ZfsWinGui.exe" Source="$(var.Payload)\bin\ZfsWinGui.exe" KeyPath="yes" />
+      </Component>
       <Component Id="VersionMetadata">
         <File Source="$(var.Payload)\VERSION.json" KeyPath="yes" />
         <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows\UserMode" Name="Version" Value="$(var.Version)" Type="string" />
         <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows\UserMode" Name="InstallFolder" Value="[INSTALLFOLDER]" Type="string" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="ReadMe" Directory="INSTALLFOLDER">
+      <Component Id="ReadMe">
+        <File Id="README.html" Source="$(var.Payload)\README.html" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Start menu: the administration tool (User mode tab) and the guide. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ShortcutFolder" Name="OpenZFS for Windows (user mode)" />
+    </StandardDirectory>
+    <ComponentGroup Id="Shortcuts" Directory="ShortcutFolder">
+      <Component Id="StartMenuShortcuts">
+        <Shortcut Id="GuiShortcut" Name="OpenZFS for Windows (user mode)" Description="Mounts and the ZfsWinUserMode service"
+                  Target="[#ZfsWinGui.exe]" WorkingDirectory="BINFOLDER" />
+        <Shortcut Id="ReadMeShortcut" Name="OpenZFS for Windows (user mode) - Getting started" Target="[#README.html]" />
+        <RemoveFolder Id="RemoveShortcutFolder" On="uninstall" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows\UserMode" Name="StartMenuShortcuts" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
@@ -93,6 +116,19 @@
       <ComponentGroupRef Id="Service" />
       <ComponentGroupRef Id="Licenses" />
       <ComponentGroupRef Id="Symbols" />
+      <ComponentGroupRef Id="ReadMe" />
+      <ComponentGroupRef Id="Shortcuts" />
     </Feature>
+
+    <!-- Getting started: after an interactive install or upgrade (not repair
+         or uninstall), open README.html as the user.  From the client-side UI
+         sequence, which runs only with a UI (double-click, /qr): in the
+         server-side execute sequence UILevel is always 2 (step-16 VM run). -->
+    <Property Id="WixShellExecTarget" Value="[#README.html]" />
+    <CustomAction Id="OpenReadMe" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixShellExec"
+                  Impersonate="yes" Return="ignore" />
+    <InstallUISequence>
+      <Custom Action="OpenReadMe" After="ExecuteAction" Condition="NOT Installed AND NOT REMOVE" />
+    </InstallUISequence>
   </Package>
 </Wix>

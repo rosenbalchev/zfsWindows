@@ -12,7 +12,7 @@ the Windows driver wrote, which separates a log-writing bug from a
 replay bug.
 #>
 [CmdletBinding()]
-param([string]$Name = "zfswin-driver-test", [int]$Seconds = 45)
+param([string]$Name = "zfsTest", [int]$Seconds = 45)
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $state = Get-Content (Join-Path $repo "TestVolumes\vm\$Name.json") -Raw | ConvertFrom-Json

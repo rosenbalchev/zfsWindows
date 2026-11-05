@@ -51,6 +51,7 @@ trap 'cd /; zpool export %(p)s 2>/dev/null || true' EXIT
 zpool status %(p)s | grep -E 'mirror|img'
 zfs get -H -o property,value,source compression,atime,com.zfswin:test %(ds)s
 zfs list -H -t snapshot -o name -r %(ds)s
+echo "bcloneused=$(zpool get -Hp -o value bcloneused %(p)s)"
 mnt=$(zfs get -H -o value mountpoint %(ds)s)
 python3 -c %(m)s "$mnt" > /tmp/zwi-current.json
 python3 -c %(m)s "$mnt/.zfs/snapshot/s1" > /tmp/zwi-s1.json
@@ -73,6 +74,11 @@ cat /tmp/zwi-current.json; echo; cat /tmp/zwi-s1.json
                    'com.zfswin:test\thello world\tlocal', '%s@s1' % DATASET):
         if expect not in out:
             failures.append('missing: %r' % expect)
+    # The clone made on Windows with FSCTL_DUPLICATE_EXTENTS_TO_FILE shares
+    # its blocks with the source (block reference table), as Linux sees it.
+    cloned = [line.split('=', 1)[1] for line in out.splitlines() if line.startswith('bcloneused=')]
+    if not cloned or not cloned[0].strip().isdigit() or int(cloned[0]) == 0:
+        failures.append('no cloned blocks (bcloneused=%s)' % (cloned[0] if cloned else '?'))
     if '%s@s2' % DATASET in out:
         failures.append('@s2 was destroyed through zfswin but still exists')
     if 'No leaks' not in out or 'with 0 errors' not in out:

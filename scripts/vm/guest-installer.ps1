@@ -3,7 +3,7 @@
 # object.  Driven by scripts\vm\Test-InstallerInVm.ps1.
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("state", "msi", "cli", "powershell", "standard-user", "samples", "import", "export", "hash")]
+    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "samples", "import", "export", "hash")]
     [string]$Stage,
     [string]$Msi = "",
     [ValidateSet("install", "repair", "uninstall")]
@@ -58,6 +58,36 @@ function WaitScan([string]$function, [int]$seconds = 600) {
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $deadline)
     $s
+}
+
+# FSCTL_DUPLICATE_EXTENTS_TO_FILE, the block-cloning call ReFS copies use.
+function Clone-Extents([string]$source, [string]$target, [long]$length) {
+    if (-not ("ZfsWinClone" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class ZfsWinClone {
+    [StructLayout(LayoutKind.Sequential)]
+    struct DuplicateExtentsData { public IntPtr FileHandle; public long SourceFileOffset; public long TargetFileOffset; public long ByteCount; }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool DeviceIoControl(SafeFileHandle device, uint code, ref DuplicateExtentsData input, int inputSize,
+        IntPtr output, int outputSize, out int returned, IntPtr overlapped);
+    public static int Clone(string source, string target, long length) {
+        using (var src = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (var dst = new FileStream(target, FileMode.Create, FileAccess.ReadWrite, FileShare.None)) {
+            dst.SetLength(length);
+            var data = new DuplicateExtentsData { FileHandle = src.SafeFileHandle.DangerousGetHandle(), ByteCount = length };
+            int returned;
+            return DeviceIoControl(dst.SafeFileHandle, 0x00098344, ref data, Marshal.SizeOf(data), IntPtr.Zero, 0, out returned, IntPtr.Zero)
+                ? 0 : Marshal.GetLastWin32Error();
+        }
+    }
+}
+"@
+    }
+    [ZfsWinClone]::Clone($source, $target, $length)
 }
 
 function Manifest([string]$root) {
@@ -166,6 +196,20 @@ switch ($Stage) {
             Check $r "snapshot-create-s1" (Zfswin @('snapshot', 'create', "$pool/docs@s1")).exit 0
             $s1 = @(Manifest $docs)
             [IO.File]::WriteAllText((Join-Path $docs "after-s1.txt"), "written after s1")
+            # Block cloning: only synced blocks can be cloned, so flush and
+            # let the transaction group commit (5 s) first.
+            $cloneSrc = Join-Path $docs "clone-source.bin"
+            $cloneBytes = [byte[]]::new(8MB); [Random]::new(77).NextBytes($cloneBytes)
+            $fs = [IO.FileStream]::new($cloneSrc, 'Create'); $fs.Write($cloneBytes, 0, $cloneBytes.Length); $fs.Flush($true); $fs.Dispose()
+            Start-Sleep -Seconds 12
+            $before = [long](((Zfswin @('pool', 'get', $pool, 'bcloneused')).result.properties | Where-Object name -eq bcloneused).value)
+            $cloneResult = Clone-Extents $cloneSrc (Join-Path $docs "clone-target.bin") 8MB
+            Start-Sleep -Seconds 12
+            $afterUsed = [long](((Zfswin @('pool', 'get', $pool, 'bcloneused')).result.properties | Where-Object name -eq bcloneused).value)
+            Check $r "clone-ioctl" $cloneResult 0
+            Check $r "clone-identical" ((Get-FileHash $cloneSrc).Hash -eq (Get-FileHash (Join-Path $docs "clone-target.bin")).Hash) $true
+            Check $r "clone-shares-blocks" ($afterUsed -gt $before) $true
+            $r.cloneBytes = [ordered]@{ bcloneusedBefore = $before; bcloneusedAfter = $afterUsed }
             Remove-Item -LiteralPath (Join-Path $docs "file0.bin")
             Check $r "snapshot-create-s2" (Zfswin @('snapshot', 'create', "$pool/docs@s2")).exit 0
             $snaps = (Zfswin @('snapshot', 'list', "$pool/docs")).result.snapshots
@@ -178,7 +222,7 @@ switch ($Stage) {
             $docs = MountPath "$pool/docs"
             $after = @(Manifest $docs)
             @{ s1 = $s1; current = $after } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 "$work\manifest.json"
-            Check $r "files-after-remount" $after.Count 24
+            Check $r "files-after-remount" $after.Count 26	# 24 + the clone source and target
         } else {
             $r["mounted"] = [ordered]@{ value = $docs; expected = "a mount path"; pass = $false }
         }
@@ -199,6 +243,21 @@ switch ($Stage) {
         $leaves = @(($s.vdevs | Select-Object -First 1).children | Select-Object -First 1 | ForEach-Object { $_.children } | ForEach-Object { $_.path })
         Check $r "replaced-members" (($leaves | ForEach-Object { Split-Path -Leaf $_ }) -join ',') "a.img,d.img"
         Check $r "pool-state" $s.state "ONLINE"
+
+        # Write log (SLOG) and read cache (L2ARC): add, see, remove.
+        foreach ($n in "e", "f") { & fsutil.exe file createnew "$images\$n.img" (256MB) | Out-Null }
+        $e = "$images\e.img"; $f = "$images\f.img"
+        Check $r "add-log-unconfirmed" (Zfswin @('vdev', 'add-log', $pool, $e)).exit 6
+        Check $r "add-log" (Zfswin @('vdev', 'add-log', $pool, $e, '--yes')).exit 0
+        Check $r "add-cache" (Zfswin @('vdev', 'add-cache', $pool, $f, '--yes')).exit 0
+        $st = (Zfswin @('pool', 'status', $pool)).result.pools | Select-Object -First 1
+        Check $r "log-and-cache-listed" "$(@($st.logs).Count)/$(@($st.caches).Count)" "1/1"
+        Check $r "remove-cache" (Zfswin @('vdev', 'remove', $pool, $f, '--yes')).exit 0
+        Check $r "remove-log" (Zfswin @('vdev', 'remove', $pool, $e, '--yes')).exit 0
+        $st = (Zfswin @('pool', 'status', $pool)).result.pools | Select-Object -First 1
+        Check $r "log-and-cache-removed" "$(@($st.logs).Count)/$(@($st.caches).Count)" "0/0"
+        Check $r "dedup-on" (Zfswin @('dataset', 'set', "$pool/docs", 'dedup=on')).exit 0
+        Check $r "dedup-value" (((Zfswin @('dataset', 'get', "$pool/docs", 'dedup')).result.properties | Where-Object name -eq dedup).value) "on"
 
         Check $r "status-missing-pool" (Zfswin @('pool', 'status', 'nosuchpool')).exit 3
         Check $r "destroy-root-dataset" (Zfswin @('dataset', 'destroy', $pool, '--yes')).exit 2
@@ -312,6 +371,22 @@ Import-Module ZfsWin
         while (-not (Test-Path $result) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
         Unregister-ScheduledTask $task -Confirm:$false
         if (Test-Path $result) { Get-Content $result -Raw } else { '{"error":"the standard-user task produced no result"}' }
+    }
+
+    # The administration GUI, headless: the queries its windows make.
+    "gui" {
+        $gui = Join-Path $installDir "bin\ZfsWinGui.exe"
+        $out = "$work\gui-selfcheck.json"
+        Remove-Item $out -ErrorAction SilentlyContinue
+        $p = Start-Process $gui -ArgumentList '--self-check', $out -Wait -PassThru
+        if (Test-Path $out) {
+            $j = Get-Content $out -Raw | ConvertFrom-Json
+            $j | Add-Member exit $p.ExitCode
+            $j | Add-Member shortcuts @(Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\OpenZFS for Windows" -ErrorAction SilentlyContinue | ForEach-Object Name)
+            $j | ConvertTo-Json -Depth 6 -Compress
+        } else {
+            [ordered]@{ exit = $p.ExitCode; error = "no self-check report (is the .NET 10 Desktop Runtime installed?)" } | ConvertTo-Json -Compress
+        }
     }
 
     # Raw OpenZFS JSON for the schema-compatibility tests' fixtures.

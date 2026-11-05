@@ -311,6 +311,44 @@ public static class Operations
             await c.RunAsync(ZfsTool.Zpool, args, MutationTimeout);
             return new JsonObject { ["pool"] = pool, ["replaced"] = device, ["with"] = args.Count > 3 ? args[3] : device };
         });
+
+        // Read cache (L2ARC) or write log (SLOG) devices.  The devices are
+        // overwritten, so this is destructive like create; a log may be a
+        // mirror.  Data vdevs are not added here: a mistaken top-level data
+        // vdev cannot always be removed again.
+        yield return Mutation("vdev.add", ["pool", "role", "devices", "mirror"], destructive: true, async (c, a) =>
+        {
+            string pool = Validation.PoolName(Validation.OptionalString(a, "pool"));
+            string role = Validation.OptionalString(a, "role") ?? throw Validation.Invalid("role", "must be 'cache' or 'log'.");
+            if (role is not ("cache" or "log"))
+                throw Validation.Invalid("role", "must be 'cache' or 'log'.");
+            IReadOnlyList<string> devices = Validation.StringList(a, "devices").Select(d => Validation.DevicePath(d, "devices")).ToList();
+            if (devices.Count == 0)
+                throw Validation.Invalid("devices", "at least one device must be named explicitly.");
+            if (devices.Distinct(StringComparer.OrdinalIgnoreCase).Count() != devices.Count)
+                throw Validation.Invalid("devices", "a device is listed twice.");
+            bool mirror = Validation.Flag(a, "mirror");
+            if (mirror && role != "log")
+                throw Validation.Invalid("mirror", "only a log can be mirrored; cache devices are independent.");
+            if (mirror && devices.Count < 2)
+                throw Validation.Invalid("devices", "a mirror needs at least two devices.");
+            var args = new List<string> { "add", pool, role };
+            if (mirror)
+                args.Add("mirror");
+            args.AddRange(devices);
+            await c.RunAsync(ZfsTool.Zpool, args, MutationTimeout);
+            return new JsonObject { ["pool"] = pool, ["role"] = role, ["mirror"] = mirror, ["devices"] = new JsonArray(devices.Select(d => (JsonNode?)d).ToArray()) };
+        });
+
+        // zpool remove: cache and log devices go at once; a top-level data
+        // vdev is evacuated first (zpool refuses where that is impossible).
+        yield return Mutation("vdev.remove", ["pool", "device"], destructive: true, async (c, a) =>
+        {
+            string pool = Validation.PoolName(Validation.OptionalString(a, "pool"));
+            string device = Validation.DevicePath(Validation.OptionalString(a, "device"), "device", mustExist: false);
+            await c.RunAsync(ZfsTool.Zpool, ["remove", pool, device], MutationTimeout);
+            return new JsonObject { ["pool"] = pool, ["removed"] = device };
+        });
     }
 
     static OperationSpec Read(string name, string[] arguments, Func<OperationContext, JsonObject, Task<JsonNode?>> execute) =>

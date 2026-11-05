@@ -41,7 +41,8 @@ place.
 | Visual Studio 2026 (18) with MSVC 14.5x, x64 and ARM64 C++ tools, CMake and Ninja | native code | the scripts find it with `vswhere` |
 | Windows SDK and Windows Driver Kit (same version) | kernel driver, `signtool`, `inf2cat` | |
 | LLVM `clang-cl` in `C:\Program Files\LLVM` | OpenZFS userland, `libzpool`, `zfswin-um` | upstream builds userland with clang-cl |
-| OpenSSL 3 static libraries in `C:\Program Files\OpenSSL-Win64` (`lib\VC\x64\MTd`) | `zpool`/`zfs`/`zdb`, `libzpool` | the Shining Light "Win64 OpenSSL" developer package |
+| OpenSSL 3 static libraries in `C:\Program Files\OpenSSL-Win64` (`lib\VC\x64\MTd`) | x64 `zpool`/`zfs`/`zdb`, `libzpool` | the Shining Light "Win64 OpenSSL" developer package |
+| ARM64 OpenSSL in `out\vcpkg-openssl` | ARM64 builds | built with the vcpkg that ships with Visual Studio; see *ARM64* below |
 | .NET 10 SDK | administration suite (NativeAOT), WiX builds | WiX 5.0.2 comes from NuGet |
 | Python 3.12+ | upstream-validation tests | |
 | git | submodules | `git submodule update --init --recursive` |
@@ -66,6 +67,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1       # incre
 OpenZFS-for-Windows-1.0.N-x64-testsigned.msi   kernel-driver variant
 OpenZFS-for-Windows-1.0.N-x64-usermode.msi     user-mode (WinFsp) variant
 OpenZFS-for-Windows-1.0.N-x64.cdx.json         CycloneDX SBOM
+OpenZFS-for-Windows-1.0.N-arm64-*.msi, .cdx.json   the same for ARM64 (cross-built, untested)
 zfswindows-test.cer                            the test-signing certificate
 VERSION.json                                   version, commit, OpenZFS base
 SHA256SUMS                                     checksums of the above
@@ -75,6 +77,37 @@ Options:
 
 - `-BuildDriver` rebuilds the driver first.
 - `-NoIncrement` rebuilds without changing the version.
+
+## ARM64
+
+ARM64 packages are cross-compiled on the x64 machine:
+- the kernel driver with the MSVC ARM64 compiler and the WDK;
+- userland and `zfswin-um` with `clang-cl --target=aarch64-pc-windows-msvc`;
+- the administration suite with NativeAOT.
+
+First build OpenSSL for ARM64 once. It goes into `out\` and installs nothing
+system-wide:
+
+```powershell
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+mkdir out\vcpkg-openssl; cd out\vcpkg-openssl
+'{ "name": "zfswin-openssl", "version": "1.0.0", "dependencies": [ "openssl" ], "builtin-baseline": "29718cfec805208b4e2d80ed91e681143b488dd7" }' | Set-Content vcpkg.json
+& "$vs\VC\vcpkg\vcpkg.exe" install --triplet arm64-windows-static --x-install-root=$PWD\installed    # about 11 minutes
+cd ..\..
+powershell -File scripts\build-driver.ps1 -Architecture arm64            # out\driver-package-arm64
+powershell -File scripts\build-release.ps1                               # x64 and arm64 by default
+```
+
+Patches 0020–0023 make upstream's build cross-compile from x64:
+- OpenSSL paths can be overridden;
+- `tracewpp`, `signtool` and `stampinf` are chosen by the *host*
+  architecture;
+- the ARM64 Lua `setjmp` buffer type is fixed;
+- the ARM64 exception-context registers are used.
+
+The ARM64 packages are checked statically: machine type and signature of
+every binary, and the MSI contents. This project has no ARM64 test machine,
+so they are not installed or run anywhere yet.
 
 ## Building the parts
 

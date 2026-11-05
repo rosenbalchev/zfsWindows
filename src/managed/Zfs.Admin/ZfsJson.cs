@@ -63,6 +63,13 @@ public static partial class ZfsJson
                     ["errors"] = Number(scan["errors"]),
                 },
                 ["vdevs"] = Vdevs(pool?["vdevs"]),
+                // Separate maps in zpool status -j (class_vdevs_nvlist,
+                // l2cache_nvlist, spares_nvlist); empty when absent.
+                ["logs"] = Vdevs(pool?["logs"]),
+                ["caches"] = Vdevs(pool?["l2cache"]),
+                ["spares"] = Vdevs(pool?["spares"]),
+                ["special"] = Vdevs(pool?["special"]),
+                ["dedup"] = Vdevs(pool?["dedup"]),
             });
         }
         return new JsonObject { ["pools"] = pools };
@@ -87,7 +94,6 @@ public static partial class ZfsJson
                 ["children"] = Vdevs(v?["vdevs"]),
             });
         }
-        // Log, cache and spare vdevs are separate top-level maps in zpool status -j.
         return list;
     }
 
