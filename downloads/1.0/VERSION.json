@@ -1,0 +1,12 @@
+﻿{
+    "product":  "OpenZFS for Windows",
+    "version":  "1.0.1",
+    "architecture":  "x64",
+    "built":  "2026-11-05T15:20:08Z",
+    "repositoryCommit":  "8f4ad6547e3a526e3e8d1c69ff5f059f96108772",
+    "openzfs":  "zfs-2.4.4 (OpenZFS submodule); openzfs-windows zfswin-2.4.1rc17 + patches/openzfs-windows",
+    "variants":  {
+                     "kernel":  "OpenZFS-for-Windows-1.0.1-x64-testsigned.msi: kernel driver, test-signed (needs test signing and Secure Boot off)",
+                     "usermode":  "OpenZFS-for-Windows-1.0.1-x64-usermode.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
+                 }
+}

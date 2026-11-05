@@ -20,7 +20,10 @@ from zfstest import HOST, MANIFEST_PY, ROOT, log, scp, shell_quote, vm
 
 POOL, DATASET = 'zc_lz4', 'zc_lz4/data'
 REMOTE = '/root/zfswin-driver/written'
-LOCAL = os.path.join(ROOT, 'TestVolumes', 'vm', 'written')
+# TestVolumes/vm/written (kernel driver) or, with ZFS_WRITTEN_DIR,
+# e.g. TestVolumes/vm/written-usermode (Test-UserModeInVm.ps1, step 15).
+LOCAL = os.environ.get('ZFS_WRITTEN_DIR',
+                       os.path.join(ROOT, 'TestVolumes', 'vm', 'written'))
 
 
 def main():

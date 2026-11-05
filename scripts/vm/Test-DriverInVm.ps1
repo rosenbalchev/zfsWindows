@@ -29,6 +29,8 @@ Phases (default: all, in order):
            and a driver-created mirror repaired by scrub.  The images and
            expectations are copied to TestVolumes\vm\extended\ for
            scripts\vm\validate-extended.py.
+  bench    plan step 15: scripts\vm\guest-bench.ps1 on a fresh copy of the
+           lz4 fixture, for comparison with Test-UserModeInVm.ps1 -Phase bench.
   cache    plan step 13: run scripts\vm\guest-cache.ps1 stages (ARC, L2ARC,
            coherency), then two power cuts (Hyper-V TurnOff of the guest)
            while writers run under each sync mode and with a SLOG; check
@@ -59,7 +61,7 @@ $credential = New-Object PSCredential ($state.user,
 $results = Join-Path $repo "TestVolumes\vm\results.jsonl"
 $Phase = @($Phase | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 foreach ($p in $Phase) {
-    if ($p -notin "all", "prepare", "install", "tools", "read", "write", "extended", "cache") { throw "Unknown phase '$p'." }
+    if ($p -notin "all", "prepare", "install", "tools", "read", "write", "extended", "cache", "bench") { throw "Unknown phase '$p'." }
 }
 if ($Phase -contains "all") { $Phase = @("install", "read", "write", "extended", "cache") }
 
@@ -338,6 +340,40 @@ if ($Phase -contains "extended") {
     Remove-PSSession $s
     if (@($out.failures).Count -ne 0) { throw "extended phase failed: $($out.failures -join '; ')" }
     Write-Host "Extended images: $local (validate with scripts\vm\validate-extended.py)"
+}
+
+if ($Phase -contains "bench") {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $s = Open-Guest
+    Copy-ToGuest $s (Join-Path $PSScriptRoot "guest-bench.ps1") "C:\zfswin\guest-bench.ps1"
+    Copy-Item -ToSession $s (Join-Path $repo "out\driver-tools\Zfs.MountVerifier.exe") `
+        -Destination C:\zfswin\tools\Zfs.MountVerifier.exe -Force
+    Invoke-Command $s {
+        New-Item -ItemType Directory -Force -Path C:\zfswin\images\lz4 | Out-Null
+        Copy-Item C:\zfswin\images\lz4-pristine\lz4.raw C:\zfswin\images\lz4\lz4.raw -Force
+    }
+    $out = Invoke-Command $s {
+        param($findMount)
+        $ErrorActionPreference = "Continue"
+        $zpool = "C:\zfswin\driver\zpool.exe"
+        $t = [Diagnostics.Stopwatch]::StartNew()
+        $import = & $zpool import -d C:\zfswin\images\lz4 zc_lz4 2>&1 | Out-String
+        $mountSeconds = [math]::Round($t.Elapsed.TotalSeconds, 2)
+        $mount = & ([scriptblock]::Create($findMount)) "zc_lz4/data"
+        $bench = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\zfswin\guest-bench.ps1 -Root $mount 2>&1 | ForEach-Object { "$_" }
+        $t.Restart()
+        $export = & $zpool export zc_lz4 2>&1 | Out-String
+        [ordered]@{
+            variant = "kernel"; import = $import.Trim(); mountSeconds = $mountSeconds
+            bench = ($bench | Where-Object { $_.StartsWith('{') } | Select-Object -Last 1)
+            exportSeconds = [math]::Round($t.Elapsed.TotalSeconds, 2); export = $export.Trim()
+        }
+    } -ArgumentList $findMount.ToString()
+    Remove-PSSession $s
+    if ($out.bench) { $out.bench = $out.bench | ConvertFrom-Json }
+    $out.seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1)
+    Record "bench" $out
+    if (-not $out.bench) { throw "bench phase failed" }
 }
 
 if ($Phase -contains "cache") {

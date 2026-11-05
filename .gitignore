@@ -5,3 +5,6 @@
 **/bin/
 **/obj/
 __pycache__/
+
+# WinFsp release and extracted SDK (scripts/fetch-winfsp.ps1)
+third_party/winfsp/

@@ -10,9 +10,30 @@ kernel driver. Clone with `git clone --recurse-submodules`, or run
 `git submodule update --init` in an existing clone; the submodules' own
 nested submodules are not needed.
 
+## Download and install (1.0)
+
+[`downloads/1.0/`](downloads/1.0/) holds the current build, version `1.0.N`.
+The build number goes up with every release build. There are two packages,
+and you install one of them:
+
+| Package | What it is | Requirements |
+| --- | --- | --- |
+| `OpenZFS-for-Windows-1.0.N-x64-usermode.msi` | OpenZFS in a Windows service that serves datasets as volumes through [WinFsp](https://github.com/winfsp/winfsp) (WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos). No kernel driver of ours, so it works with Secure Boot on. | WinFsp 2.1+ |
+| `OpenZFS-for-Windows-1.0.N-x64-testsigned.msi` | The OpenZFS kernel driver with the `ZfsWinBroker` service, `zfswin.exe` and the `ZfsWin` PowerShell module | test signing on, Secure Boot off, `zfswindows-test.cer` trusted. Test machines only, until the driver is attestation-signed. |
+
+Verify the download against `SHA256SUMS`. Then follow
+[`docs/installation.md`](docs/installation.md) (install, mount, upgrade,
+uninstall, recovery) and [`docs/zfswin-cli.md`](docs/zfswin-cli.md) (the
+command reference). To build from source, including the release script and
+all test suites, see [`docs/building.md`](docs/building.md).
+
+Both packages are Debug builds, verified in disposable Windows 11 24H2 x64
+VMs and against upstream OpenZFS on Linux (plan steps 12–15). Windows 10,
+Windows Server and ARM64 have not been tested yet; that is plan step 16.
+
 ## Current status
 
-Steps 00–13 of the plan are complete: the read-only milestones, disposable-pool writes, failure recovery, the kernel driver in an isolated VM, and read and write caching through the driver, including power-loss durability. The repository now contains:
+Steps 00–14 of the plan are complete: the read-only milestones, disposable-pool writes, failure recovery, the kernel driver in an isolated VM, read and write caching through the driver (including power-loss durability), and the administration tools and kernel-driver installer. Step 15, the user-mode WinFsp variant and its installer, works end to end; its remaining items are listed in the step file. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;

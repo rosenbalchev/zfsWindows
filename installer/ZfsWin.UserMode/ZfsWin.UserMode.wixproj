@@ -1,0 +1,13 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!-- The user-mode (WinFsp) package; built by scripts/build-installer.ps1
+       -Variant usermode, which passes the staged payload and the platform. -->
+  <Import Project="..\..\build\ZfsWinVersion.props" />
+  <PropertyGroup>
+    <OutputName>OpenZFS-for-Windows-$(ZfsWinVersion)-$(Platform)-usermode</OutputName>
+    <Payload Condition="'$(Payload)' == ''">..\..\out\installer-payload\usermode-$(Platform)</Payload>
+    <DefineConstants>Version=$(ZfsWinVersion);Payload=$(Payload)</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+</Project>
