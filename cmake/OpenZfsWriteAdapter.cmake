@@ -21,5 +21,14 @@ endif()
 # that guard for assembly compilation only; do not expose it to the C ABI.
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -D_KERNEL")
 
+# Static CRT, as upstream's tools: the root CMakeLists adds /MT(d) only after
+# this overlay has run, and a clean Windows has no debug CRT DLLs.
+string(APPEND CMAKE_C_FLAGS_DEBUG " /MTd")
+string(APPEND CMAKE_C_FLAGS_RELEASE " /MT")
+
+add_subdirectory("${ZFSWINDOWS_ROOT}/src/native/ZfsUserMode"
+    "${CMAKE_BINARY_DIR}/zfs-user-mode")
 add_subdirectory("${ZFSWINDOWS_ROOT}/src/native/ZfsWriteCore"
     "${CMAKE_BINARY_DIR}/zfs-write-core")
+add_subdirectory("${ZFSWINDOWS_ROOT}/src/native/ZfsWinFsp"
+    "${CMAKE_BINARY_DIR}/zfswin-um")

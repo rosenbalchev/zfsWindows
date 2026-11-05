@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  OpenZFS for Windows, user-mode variant (plan step 15).
+
+  Installs zfswin-um.exe, which serves ZFS datasets as Windows volumes
+  through WinFsp, as the ZfsWinUserMode service.  No kernel driver of ours
+  is installed, so nothing here needs a Microsoft signature; WinFsp's own
+  driver is Microsoft-signed.  Requires WinFsp (WinFsp - Windows File System
+  Proxy, Copyright (C) Bill Zissimopoulos, https://github.com/winfsp/winfsp).
+
+  Mounts are configured under
+  HKLM\SOFTWARE\OpenZFS for Windows\UserMode\Mounts\<name>
+  (Source, Pool, Dataset, MountPoint, ReadOnly).  Stopping the service, and
+  so uninstalling, unmounts and exports every pool; pool data is never
+  touched.  Cannot be installed next to the kernel-driver package.
+
+  Public properties (all optional):
+    INSTALLFOLDER   default [ProgramFiles64Folder]OpenZFS for Windows (user mode)
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="OpenZFS for Windows (user mode)"
+           Manufacturer="zfsWindows contributors"
+           Version="$(var.Version)"
+           UpgradeCode="3C1F7A52-9E4B-4D6A-8B2E-6F0D1C5A9E47"
+           Scope="perMachine"
+           InstallerVersion="500"
+           Compressed="yes">
+    <SummaryInformation Description="OpenZFS for Windows $(var.Version), user mode: ZFS datasets as Windows volumes through WinFsp" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of OpenZFS for Windows (user mode) is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/winfsp/winfsp" />
+    <Property Id="ARPCOMMENTS" Value="OpenZFS in user mode, through WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- WinFsp records its install folder in the 32-bit registry view. -->
+    <Property Id="WINFSPINSTALLDIR">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\WinFsp" Name="InstallDir" Type="raw" Bitness="always32" />
+    </Property>
+    <!-- The kernel-driver package; the two variants never share a machine. -->
+    <Property Id="KERNELVARIANTFOLDER">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\OpenZFS for Windows" Name="InstallFolder" Type="raw" Bitness="always64" />
+    </Property>
+
+    <Launch Condition="Installed OR VersionNT64" Message="OpenZFS for Windows requires 64-bit Windows 10 version 1903 or later." />
+    <Launch Condition="Privileged" Message="Installing OpenZFS for Windows requires administrator rights." />
+    <Launch Condition="Installed OR WINFSPINSTALLDIR"
+            Message="REFUSED: WinFsp is not installed. Install WinFsp 2.1 or later from https://github.com/winfsp/winfsp (WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos), then run this setup again." />
+    <Launch Condition="Installed OR NOT KERNELVARIANTFOLDER"
+            Message="REFUSED: OpenZFS for Windows (kernel driver) is installed. Uninstall it first; the two variants cannot be installed together." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="OpenZFS for Windows (user mode)">
+        <Directory Id="BINFOLDER" Name="bin" />
+        <Directory Id="LICENSEFOLDER" Name="licenses" />
+        <Directory Id="SYMBOLSFOLDER" Name="symbols" />
+      </Directory>
+    </StandardDirectory>
+
+    <ComponentGroup Id="Service" Directory="BINFOLDER">
+      <Component Id="ZfsWinUserMode">
+        <File Id="zfswin_um.exe" Source="$(var.Payload)\bin\zfswin-um.exe" KeyPath="yes" />
+        <ServiceInstall Id="ZfsWinUserModeService" Name="ZfsWinUserMode" DisplayName="OpenZFS user-mode file system"
+                        Description="Mounts ZFS datasets as Windows volumes through WinFsp, as configured under HKLM\SOFTWARE\OpenZFS for Windows\UserMode\Mounts."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes">
+          <ServiceDependency Id="WinFsp.Launcher" />
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                              ThirdFailureActionType="none" RestartServiceDelayInSeconds="10" ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <!-- Stopping exports every pool, so uninstall leaves them importable
+             elsewhere; the service is not started by setup because mounts
+             are configured afterwards. -->
+        <ServiceControl Id="ZfsWinUserModeControl" Name="ZfsWinUserMode" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+      <Component Id="VersionMetadata">
+        <File Source="$(var.Payload)\VERSION.json" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows\UserMode" Name="Version" Value="$(var.Version)" Type="string" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows\UserMode" Name="InstallFolder" Value="[INSTALLFOLDER]" Type="string" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="Licenses" Directory="LICENSEFOLDER">
+      <Files Include="$(var.Payload)\licenses\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="Symbols" Directory="SYMBOLSFOLDER">
+      <Files Include="$(var.Payload)\symbols\**" />
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="OpenZFS for Windows (user mode)" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="Service" />
+      <ComponentGroupRef Id="Licenses" />
+      <ComponentGroupRef Id="Symbols" />
+    </Feature>
+  </Package>
+</Wix>

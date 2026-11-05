@@ -1,0 +1,29 @@
+// Version resource for zfswin-um.exe; configured by CMakeLists.txt from
+// ZFSWIN_VERSION (scripts/build-release.ps1 passes the build's version).
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     @ZUM_V1@,@ZUM_V2@,@ZUM_V3@,0
+PRODUCTVERSION  @ZUM_V1@,@ZUM_V2@,@ZUM_V3@,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "zfsWindows contributors"
+            VALUE "FileDescription",  "OpenZFS for Windows user-mode file system (WinFsp)"
+            VALUE "FileVersion",      "@ZFSWIN_VERSION@"
+            VALUE "InternalName",     "zfswin-um"
+            VALUE "LegalCopyright",   "Copyright 2026 Rosen Balchev and contributors. WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos"
+            VALUE "OriginalFilename", "zfswin-um.exe"
+            VALUE "ProductName",      "OpenZFS for Windows"
+            VALUE "ProductVersion",   "@ZFSWIN_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
