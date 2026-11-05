@@ -1,0 +1,16 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!-- Built by scripts/build-installer.ps1, which passes the staged payload
+       directory, the platform and the test-signing thumbprint. -->
+  <Import Project="..\..\build\ZfsWinVersion.props" />
+  <PropertyGroup>
+    <OutputName>OpenZFS-for-Windows-$(ZfsWinVersion)-$(Platform)</OutputName>
+    <Payload Condition="'$(Payload)' == ''">..\..\out\installer-payload\$(Platform)</Payload>
+    <DefineConstants>Version=$(ZfsWinVersion);Payload=$(Payload);TestSigningThumbprint=$(TestSigningThumbprint)</DefineConstants>
+    <!-- ICE03: the upstream tools' version resources use LANGID 0x4009, which
+         ICE03 does not accept; step 16 stamps real version resources. -->
+    <SuppressIces>ICE03</SuppressIces>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+</Project>

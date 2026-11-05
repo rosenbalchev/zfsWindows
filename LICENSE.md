@@ -81,7 +81,7 @@ the NuGet package licenses.
   `patches/openzfs-windows/`.
 - **License notices.** Release packages must include this file, the CDDL-1.0
   text, and the notices of every component in the table above that is
-  compiled into them (step 15 generates an SBOM for this).
+  compiled into them (step 16 generates an SBOM for this).
 - **C runtime.** Debug builds link the Microsoft debug C runtime, which is not
   redistributable. Only Release builds may be distributed.
 - **Not legal advice.** This summary describes how the repository is

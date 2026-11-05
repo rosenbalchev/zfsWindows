@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zfswindows.invalid/schemas/zfswin-output.schema.json",
+  "title": "zfswin --json output (schema zfswin/1)",
+  "description": "One object per zfswin invocation. Compatible changes only add optional properties; anything else changes the schema name.",
+  "type": "object",
+  "required": ["schema", "operation", "ok"],
+  "properties": {
+    "schema": { "const": "zfswin/1" },
+    "operation": { "type": ["string", "null"] },
+    "ok": { "type": "boolean" },
+    "result": {},
+    "error": { "$ref": "#/$defs/error" }
+  },
+  "allOf": [
+    { "if": { "properties": { "ok": { "const": false } } }, "then": { "required": ["error"] } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "pool.list" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/poolList" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "pool.status" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/poolStatus" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "enum": ["pool.get", "dataset.get"] } } }, "then": { "properties": { "result": { "$ref": "#/$defs/properties" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "dataset.list" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/datasetList" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "snapshot.list" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/snapshotList" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "mount.list" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/mountList" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "pool.discover" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/importable" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "scrub.status" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/scrubStatus" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "version" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/version" } } } }
+  ],
+  "$defs": {
+    "count": { "type": ["integer", "null"], "minimum": 0 },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "enum": ["command-failed", "usage", "invalid-argument", "not-found", "access-denied", "broker-unavailable", "confirmation-required", "timeout", "cancelled", "protocol-mismatch", "bad-request", "busy", "internal"] },
+        "message": { "type": "string" },
+        "detail": { "type": ["string", "null"] }
+      }
+    },
+    "poolList": {
+      "type": "object",
+      "required": ["pools"],
+      "properties": {
+        "pools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "guid", "health", "size", "allocated", "free"],
+            "properties": {
+              "name": { "type": "string" },
+              "guid": { "type": ["string", "null"] },
+              "health": { "type": ["string", "null"] },
+              "size": { "$ref": "#/$defs/count" },
+              "allocated": { "$ref": "#/$defs/count" },
+              "free": { "$ref": "#/$defs/count" },
+              "capacityPercent": { "$ref": "#/$defs/count" },
+              "fragmentationPercent": { "$ref": "#/$defs/count" },
+              "dedupRatio": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "scan": {
+      "type": ["object", "null"],
+      "required": ["function", "state"],
+      "properties": {
+        "function": { "type": ["string", "null"] },
+        "state": { "type": ["string", "null"] },
+        "paused": { "type": "boolean" },
+        "startTime": { "$ref": "#/$defs/count" },
+        "endTime": { "$ref": "#/$defs/count" },
+        "toExamine": { "$ref": "#/$defs/count" },
+        "examined": { "$ref": "#/$defs/count" },
+        "issued": { "$ref": "#/$defs/count" },
+        "errors": { "$ref": "#/$defs/count" }
+      }
+    },
+    "vdev": {
+      "type": "object",
+      "required": ["name", "type", "state", "readErrors", "writeErrors", "checksumErrors", "children"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": ["string", "null"] },
+        "class": { "type": ["string", "null"] },
+        "state": { "type": ["string", "null"] },
+        "path": { "type": ["string", "null"] },
+        "guid": { "type": ["string", "null"] },
+        "readErrors": { "type": "integer" },
+        "writeErrors": { "type": "integer" },
+        "checksumErrors": { "type": "integer" },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/vdev" } }
+      }
+    },
+    "poolStatus": {
+      "type": "object",
+      "required": ["pools"],
+      "properties": {
+        "pools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "state", "errorCount", "vdevs"],
+            "properties": {
+              "name": { "type": "string" },
+              "guid": { "type": ["string", "null"] },
+              "state": { "type": ["string", "null"] },
+              "status": { "type": ["string", "null"] },
+              "action": { "type": ["string", "null"] },
+              "errorCount": { "type": "integer" },
+              "scan": { "$ref": "#/$defs/scan" },
+              "vdevs": { "type": "array", "items": { "$ref": "#/$defs/vdev" } }
+            }
+          }
+        }
+      }
+    },
+    "properties": {
+      "type": "object",
+      "required": ["properties"],
+      "properties": {
+        "pool": { "type": "string" },
+        "dataset": { "type": "string" },
+        "properties": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "value", "source"],
+            "properties": {
+              "name": { "type": "string" },
+              "value": { "type": ["string", "integer", "number", "boolean", "null"] },
+              "source": { "type": ["string", "null"] },
+              "inheritedFrom": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "datasetList": {
+      "type": "object",
+      "required": ["datasets"],
+      "properties": {
+        "datasets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "type", "used", "available", "referenced", "mountpoint", "mounted"],
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "enum": ["filesystem", "volume", null] },
+              "pool": { "type": ["string", "null"] },
+              "used": { "$ref": "#/$defs/count" },
+              "available": { "$ref": "#/$defs/count" },
+              "referenced": { "$ref": "#/$defs/count" },
+              "mountpoint": { "type": ["string", "null"] },
+              "mounted": { "type": "boolean" },
+              "driveLetter": { "type": ["string", "null"] },
+              "compression": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "snapshotList": {
+      "type": "object",
+      "required": ["snapshots"],
+      "properties": {
+        "snapshots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "dataset", "snapshot", "used", "referenced", "creation"],
+            "properties": {
+              "name": { "type": "string", "pattern": "@" },
+              "dataset": { "type": ["string", "null"] },
+              "snapshot": { "type": ["string", "null"] },
+              "used": { "$ref": "#/$defs/count" },
+              "referenced": { "$ref": "#/$defs/count" },
+              "creation": { "$ref": "#/$defs/count" }
+            }
+          }
+        }
+      }
+    },
+    "mountList": {
+      "type": "object",
+      "required": ["mounts"],
+      "properties": {
+        "mounts": { "type": "array", "items": { "type": "object", "required": ["dataset", "mountpoint"], "properties": { "dataset": { "type": "string" }, "mountpoint": { "type": "string" } } } }
+      }
+    },
+    "importable": {
+      "type": "object",
+      "required": ["pools"],
+      "properties": {
+        "pools": { "type": "array", "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "guid": { "type": "string" }, "state": { "type": "string" }, "status": { "type": "string" }, "action": { "type": "string" } } } }
+      }
+    },
+    "scrubStatus": {
+      "type": "object",
+      "required": ["pool", "scan"],
+      "properties": { "pool": { "type": "string" }, "scan": { "$ref": "#/$defs/scan" } }
+    },
+    "version": {
+      "type": "object",
+      "required": ["broker", "protocol"],
+      "properties": {
+        "broker": { "type": ["string", "null"] },
+        "protocol": { "const": 1 },
+        "userland": { "type": ["string", "null"] },
+        "kernel": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

@@ -317,3 +317,19 @@ spinlock, so it waits until the exiting thread no longer touches the
 mutex. The wake-up protocol is unchanged: waiters register before their
 final compare-and-swap, so reading `m_waiters` after the release cannot
 miss one. This adds a spinlock acquire to every uncontended release.
+
+## 0019 — libspl: taskq_destroy() joins its worker threads
+
+User-space taskq workers were created detached. `taskq_destroy()` waited
+only until `tq_nthreads` reached zero, which each worker decrements just
+before `thread_exit()`. The workers were therefore still running their
+exit path, including the C runtime's per-thread teardown, when
+`taskq_destroy()` returned. `zpool import` creates and destroys such a
+taskq to scan devices, and then exits. Intermittently a worker was still
+in the CRT's fiber-local-storage teardown (`destroy_ptd`) while the main
+thread ran the process-exit teardown, and `zpool.exe` exited with
+0xC0000005 after a successful import (step 12, dump `zpool.exe.7212.dmp`).
+
+Taskq workers are now created `TS_JOINABLE`, and `taskq_destroy()` joins
+every one of them before it frees the taskq. Nothing else waits on these
+threads, and `taskq_member()` still compares the same thread handles.

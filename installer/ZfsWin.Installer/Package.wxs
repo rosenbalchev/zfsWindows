@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  OpenZFS for Windows setup package (plan step 14).
+
+  Installs the signed driver package (through zfsinstaller.exe, which uses the
+  Windows driver-package APIs), the ZfsWinBroker service, zfswin.exe, the
+  upstream zpool/zfs/zdb/kstat tools, the ZfsWin PowerShell module and the
+  licenses.  Pool data is never touched: before anything replaces or removes
+  the driver, setup refuses while pools are imported, or exports them (never
+  forced) when ZFSWIN_EXPORT_POOLS=1.
+
+  Public properties (all optional):
+    INSTALLFOLDER                 default [ProgramFiles64Folder]OpenZFS for Windows
+    ZFSWIN_EXPORT_POOLS=1         export imported pools instead of refusing
+    ZFSWIN_ALLOW_PENDING_REBOOT=1 install although Windows has a reboot pending
+    ADDTOPATH=0                   do not add the tools to the system PATH
+    WIXFAILWHENDEFERRED=1         fail at the end, to test rollback
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="OpenZFS for Windows"
+           Manufacturer="zfsWindows contributors"
+           Version="$(var.Version)"
+           UpgradeCode="7E3B6C1A-5D2F-4B8E-9C47-1F0A2D3E4B5C"
+           Scope="perMachine"
+           InstallerVersion="500"
+           Compressed="yes">
+    <SummaryInformation Description="OpenZFS for Windows $(var.Version): driver, ZfsWinBroker service, zfswin CLI and ZfsWin PowerShell module" />
+
+    <!-- The new version is installed first and the old product removed at
+         the end of the same transaction (component GUIDs are stable), so a
+         failure anywhere rolls back to the previous version.  The pool check
+         below runs before any file is replaced.  (afterInstallInitialize
+         would put RemoveExistingProducts after the deferred pool check,
+         which Windows Installer rejects: error 2613.) -->
+    <MajorUpgrade Schedule="afterInstallExecute"
+                  DowngradeErrorMessage="A newer version of OpenZFS for Windows is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/openzfsonwindows/openzfs" />
+    <Property Id="ARPCOMMENTS" Value="OpenZFS file system driver and administration tools" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ADDTOPATH" Value="1" />
+    <Property Id="ZFSWIN_TEST_SIGNING_THUMBPRINT" Value="$(var.TestSigningThumbprint)" />
+    <SetProperty Id="ZfsWinPreflightOptions" Value="--test-signing-thumbprint [ZFSWIN_TEST_SIGNING_THUMBPRINT]"
+                 Before="SetZfsWinPreflight" Sequence="execute" Condition="ZFSWIN_TEST_SIGNING_THUMBPRINT" />
+    <SetProperty Id="ZfsWinPreflightReboot" Value="--allow-pending-reboot"
+                 Before="SetZfsWinPreflight" Sequence="execute" Condition="ZFSWIN_ALLOW_PENDING_REBOOT = 1" />
+    <SetProperty Id="ZfsWinPreflightFresh" Value="--fresh-install"
+                 Before="SetZfsWinPreflight" Sequence="execute" Condition="NOT OLDINSTALLFOLDER" />
+    <SetProperty Id="ZfsWinExportOption" Value="--export"
+                 Before="SetZfsWinCheckPools" Sequence="execute" Condition="ZFSWIN_EXPORT_POOLS = 1" />
+
+    <!-- Where an installed version (this or an older one) keeps its tools. -->
+    <Property Id="OLDINSTALLFOLDER">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\OpenZFS for Windows" Name="InstallFolder" Type="directory" Bitness="always64" />
+    </Property>
+
+    <!-- The user-mode (WinFsp) package; the two variants never share a machine. -->
+    <Property Id="USERMODEVARIANTFOLDER">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\OpenZFS for Windows\UserMode" Name="InstallFolder" Type="raw" Bitness="always64" />
+    </Property>
+
+    <Launch Condition="Installed OR VersionNT64" Message="OpenZFS for Windows requires 64-bit Windows 10 version 1903 or later." />
+    <Launch Condition="Installed OR NOT USERMODEVARIANTFOLDER"
+            Message="REFUSED: OpenZFS for Windows (user mode) is installed. Uninstall it first; the two variants cannot be installed together." />
+    <Launch Condition="Privileged" Message="Installing OpenZFS for Windows requires administrator rights." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="OpenZFS for Windows">
+        <Directory Id="BINFOLDER" Name="bin" />
+        <Directory Id="DRIVERFOLDER" Name="driver" />
+        <Directory Id="LICENSEFOLDER" Name="licenses" />
+        <Directory Id="SYMBOLSFOLDER" Name="symbols" />
+      </Directory>
+      <Directory Id="PSFOLDER" Name="WindowsPowerShell">
+        <Directory Id="PSMODULES" Name="Modules">
+          <Directory Id="PSZFSWIN" Name="ZfsWin">
+            <Directory Id="PSMODULEFOLDER" Name="$(var.Version)" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <ComponentGroup Id="Tools" Directory="BINFOLDER">
+      <Component Id="ZfsWinBroker">
+        <File Id="ZfsWinBroker.exe" Source="$(var.Payload)\bin\ZfsWinBroker.exe" KeyPath="yes" />
+        <ServiceInstall Id="ZfsWinBrokerService" Name="ZfsWinBroker" DisplayName="OpenZFS broker"
+                        Description="Runs ZFS administration commands for zfswin.exe and the ZfsWin PowerShell module."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                              ThirdFailureActionType="none" RestartServiceDelayInSeconds="10" ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <!-- Least privilege: the service token (and the zpool/zfs processes it
+             starts) keeps only these privileges.  These are the values
+             ChangeServiceConfig2 stores; MSI's own ServiceConfig table is
+             documented as unreliable. -->
+        <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\ZfsWinBroker" Name="RequiredPrivileges" Type="multiString">
+          <MultiStringValue Value="SeChangeNotifyPrivilege" />
+          <MultiStringValue Value="SeImpersonatePrivilege" />
+          <MultiStringValue Value="SeCreateGlobalPrivilege" />
+          <MultiStringValue Value="SeManageVolumePrivilege" />
+          <MultiStringValue Value="SeBackupPrivilege" />
+          <MultiStringValue Value="SeRestorePrivilege" />
+        </RegistryValue>
+        <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\ZfsWinBroker" Name="ServiceSidType" Type="integer" Value="1" />
+        <ServiceControl Id="ZfsWinBrokerControl" Name="ZfsWinBroker" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <util:EventSource Name="ZfsWinBroker" Log="Application"
+                          EventMessageFile="[WindowsFolder]Microsoft.NET\Framework\v4.0.30319\EventLogMessages.dll" />
+      </Component>
+      <Component Id="ZfsWinCli">
+        <File Source="$(var.Payload)\bin\zfswin.exe" KeyPath="yes" />
+      </Component>
+      <Component><File Source="$(var.Payload)\bin\zpool.exe" KeyPath="yes" /></Component>
+      <Component><File Source="$(var.Payload)\bin\zfs.exe" KeyPath="yes" /></Component>
+      <Component><File Source="$(var.Payload)\bin\zdb.exe" KeyPath="yes" /></Component>
+      <Component><File Source="$(var.Payload)\bin\kstat.exe" KeyPath="yes" /></Component>
+      <Component><File Id="zfsinstaller.exe" Source="$(var.Payload)\bin\zfsinstaller.exe" KeyPath="yes" /></Component>
+      <Component Id="SystemPath" Condition="ADDTOPATH = 1">
+        <Environment Id="PathEntry" Name="PATH" Value="[BINFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows" Name="AddedToPath" Value="1" Type="integer" KeyPath="yes" />
+      </Component>
+      <Component Id="VersionMetadata">
+        <File Source="$(var.Payload)\VERSION.json" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows" Name="Version" Value="$(var.Version)" Type="string" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows" Name="InstallFolder" Value="[INSTALLFOLDER]" Type="string" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="Driver" Directory="DRIVERFOLDER">
+      <Component><File Id="OpenZFS.inf" Source="$(var.Payload)\driver\OpenZFS.inf" KeyPath="yes" /></Component>
+      <Component><File Source="$(var.Payload)\driver\OpenZFS.sys" KeyPath="yes" /></Component>
+      <Component><File Source="$(var.Payload)\driver\OpenZFS.cat" KeyPath="yes" /></Component>
+      <Component><File Source="$(var.Payload)\driver\OpenZFS.man" KeyPath="yes" /></Component>
+      <Component><File Id="OpenZVOL.inf" Source="$(var.Payload)\driver\OpenZVOL.inf" KeyPath="yes" /></Component>
+      <Component><File Source="$(var.Payload)\driver\OpenZVOL.sys" KeyPath="yes" /></Component>
+      <Component><File Source="$(var.Payload)\driver\OpenZVOL.cat" KeyPath="yes" /></Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="Licenses" Directory="LICENSEFOLDER">
+      <Files Include="$(var.Payload)\licenses\**" />
+    </ComponentGroup>
+
+    <!-- Symbols policy: PDBs for the shipped binaries are installed so crash
+         dumps from users can be analysed; they contain no secrets. -->
+    <ComponentGroup Id="Symbols" Directory="SYMBOLSFOLDER">
+      <Files Include="$(var.Payload)\symbols\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="PowerShellModule" Directory="PSMODULEFOLDER">
+      <Files Include="$(var.Payload)\ZfsWin\**" />
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="OpenZFS for Windows" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="Tools" />
+      <ComponentGroupRef Id="Driver" />
+      <ComponentGroupRef Id="Licenses" />
+      <ComponentGroupRef Id="Symbols" />
+      <ComponentGroupRef Id="PowerShellModule" />
+    </Feature>
+
+    <!-- Setup steps: ZfsWinBroker.exe in setup mode; WixQuietExec copies
+         their output into the MSI log. -->
+    <CustomAction Id="SetZfsWinPreflight" Property="ZfsWinPreflight"
+                  Value="&quot;[#ZfsWinBroker.exe]&quot; --setup preflight [ZfsWinPreflightOptions] [ZfsWinPreflightReboot] [ZfsWinPreflightFresh]" />
+    <CustomAction Id="ZfsWinPreflight" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="check" />
+
+    <!-- Runs the installed version's copy: it exists before this package
+         removes or replaces anything. -->
+    <CustomAction Id="SetZfsWinCheckPools" Property="ZfsWinCheckPools"
+                  Value="&quot;[OLDINSTALLFOLDER]bin\ZfsWinBroker.exe&quot; --setup check-pools [ZfsWinExportOption]" />
+    <CustomAction Id="ZfsWinCheckPools" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="check" />
+
+    <CustomAction Id="SetZfsWinDriverInstall" Property="ZfsWinDriverInstall"
+                  Value="&quot;[#ZfsWinBroker.exe]&quot; --setup driver-install --driver-dir &quot;[DRIVERFOLDER].&quot;" />
+    <CustomAction Id="ZfsWinDriverInstall" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="SetZfsWinDriverInstallRollback" Property="ZfsWinDriverInstallRollback"
+                  Value="&quot;[#ZfsWinBroker.exe]&quot; --setup driver-uninstall --driver-dir &quot;[DRIVERFOLDER].&quot;" />
+    <CustomAction Id="ZfsWinDriverInstallRollback" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixQuietExec"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+
+    <CustomAction Id="SetZfsWinDriverUninstall" Property="ZfsWinDriverUninstall"
+                  Value="&quot;[#ZfsWinBroker.exe]&quot; --setup driver-uninstall --driver-dir &quot;[DRIVERFOLDER].&quot;" />
+    <CustomAction Id="ZfsWinDriverUninstall" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="SetZfsWinDriverUninstallRollback" Property="ZfsWinDriverUninstallRollback"
+                  Value="&quot;[#ZfsWinBroker.exe]&quot; --setup driver-install --driver-dir &quot;[DRIVERFOLDER].&quot;" />
+    <CustomAction Id="ZfsWinDriverUninstallRollback" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixQuietExec"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+
+    <!-- Rollback testing (WiX's standard hook): with WIXFAILWHENDEFERRED=1
+         the install fails after every deferred action has run, so the
+         rollback actions must restore the previous state. -->
+    <util:FailWhenDeferred />
+
+    <InstallExecuteSequence>
+      <!-- Pools first: the first deferred action, so on repair, upgrade and
+           uninstall the installed copy checks (or exports) them before the
+           driver is touched (StopServices and the driver uninstall come
+           before InstallFiles on uninstall) or any file is replaced. -->
+      <Custom Action="SetZfsWinCheckPools" Before="ZfsWinCheckPools" Condition="OLDINSTALLFOLDER" />
+      <Custom Action="ZfsWinCheckPools" After="InstallInitialize" Condition="OLDINSTALLFOLDER" />
+
+      <!-- A major upgrade's removal of this (old) product keeps the driver:
+           the new product's driver-install keeps an identical build or
+           replaces it. -->
+      <Custom Action="SetZfsWinDriverUninstallRollback" Before="ZfsWinDriverUninstallRollback" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="ZfsWinDriverUninstallRollback" After="StopServices" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="SetZfsWinDriverUninstall" Before="ZfsWinDriverUninstall" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="ZfsWinDriverUninstall" After="ZfsWinDriverUninstallRollback" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+
+      <!-- Read-only system checks, after the files are copied (setup's own
+           copy runs them) and before the driver store changes; a refusal
+           only rolls back the copied files. -->
+      <Custom Action="SetZfsWinPreflight" Before="ZfsWinPreflight" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="ZfsWinPreflight" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <!-- Rolling back removes the driver only if this was a fresh install;
+           on repair or upgrade the installed product still needs it. -->
+      <Custom Action="SetZfsWinDriverInstallRollback" Before="ZfsWinDriverInstallRollback" Condition="NOT REMOVE~=&quot;ALL&quot; AND NOT OLDINSTALLFOLDER" />
+      <Custom Action="ZfsWinDriverInstallRollback" After="ZfsWinPreflight" Condition="NOT REMOVE~=&quot;ALL&quot; AND NOT OLDINSTALLFOLDER" />
+      <Custom Action="SetZfsWinDriverInstall" Before="ZfsWinDriverInstall" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="ZfsWinDriverInstall" After="ZfsWinDriverInstallRollback" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+
+      <!-- A loaded file-system driver is only unloaded at the next restart. -->
+      <ScheduleReboot After="InstallFinalize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

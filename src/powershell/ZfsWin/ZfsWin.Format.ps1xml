@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+  <ViewDefinitions>
+    <View>
+      <Name>ZfsWin.Pool</Name>
+      <ViewSelectedBy><TypeName>ZfsWin.Pool</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Name</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Health</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Size(GiB)</Label><Alignment>Right</Alignment></TableColumnHeader>
+          <TableColumnHeader><Label>Free(GiB)</Label><Alignment>Right</Alignment></TableColumnHeader>
+          <TableColumnHeader><Label>Cap%</Label><Alignment>Right</Alignment></TableColumnHeader>
+          <TableColumnHeader><Label>Dedup</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries><TableRowEntry><TableColumnItems>
+          <TableColumnItem><PropertyName>name</PropertyName></TableColumnItem>
+          <TableColumnItem><PropertyName>health</PropertyName></TableColumnItem>
+          <TableColumnItem><ScriptBlock>'{0:N2}' -f ($_.size / 1GB)</ScriptBlock></TableColumnItem>
+          <TableColumnItem><ScriptBlock>'{0:N2}' -f ($_.free / 1GB)</ScriptBlock></TableColumnItem>
+          <TableColumnItem><PropertyName>capacityPercent</PropertyName></TableColumnItem>
+          <TableColumnItem><PropertyName>dedupRatio</PropertyName></TableColumnItem>
+        </TableColumnItems></TableRowEntry></TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>ZfsWin.Dataset</Name>
+      <ViewSelectedBy><TypeName>ZfsWin.Dataset</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Name</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Used(MiB)</Label><Alignment>Right</Alignment></TableColumnHeader>
+          <TableColumnHeader><Label>Avail(MiB)</Label><Alignment>Right</Alignment></TableColumnHeader>
+          <TableColumnHeader><Label>Mounted</Label></TableColumnHeader>
+          <TableColumnHeader><Label>MountPoint</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries><TableRowEntry><TableColumnItems>
+          <TableColumnItem><PropertyName>name</PropertyName></TableColumnItem>
+          <TableColumnItem><ScriptBlock>'{0:N1}' -f ($_.used / 1MB)</ScriptBlock></TableColumnItem>
+          <TableColumnItem><ScriptBlock>'{0:N1}' -f ($_.available / 1MB)</ScriptBlock></TableColumnItem>
+          <TableColumnItem><PropertyName>mounted</PropertyName></TableColumnItem>
+          <TableColumnItem><PropertyName>mountpoint</PropertyName></TableColumnItem>
+        </TableColumnItems></TableRowEntry></TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>ZfsWin.Snapshot</Name>
+      <ViewSelectedBy><TypeName>ZfsWin.Snapshot</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Name</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Used(MiB)</Label><Alignment>Right</Alignment></TableColumnHeader>
+          <TableColumnHeader><Label>Created</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries><TableRowEntry><TableColumnItems>
+          <TableColumnItem><PropertyName>name</PropertyName></TableColumnItem>
+          <TableColumnItem><ScriptBlock>'{0:N1}' -f ($_.used / 1MB)</ScriptBlock></TableColumnItem>
+          <TableColumnItem><ScriptBlock>[DateTimeOffset]::FromUnixTimeSeconds($_.creation).LocalDateTime</ScriptBlock></TableColumnItem>
+        </TableColumnItems></TableRowEntry></TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>ZfsWin.Property</Name>
+      <ViewSelectedBy><TypeName>ZfsWin.Property</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Target</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Property</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Value</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Source</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries><TableRowEntry><TableColumnItems>
+          <TableColumnItem><PropertyName>Target</PropertyName></TableColumnItem>
+          <TableColumnItem><PropertyName>name</PropertyName></TableColumnItem>
+          <TableColumnItem><PropertyName>value</PropertyName></TableColumnItem>
+          <TableColumnItem><PropertyName>source</PropertyName></TableColumnItem>
+        </TableColumnItems></TableRowEntry></TableRowEntries>
+      </TableControl>
+    </View>
+  </ViewDefinitions>
+</Configuration>

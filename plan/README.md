@@ -54,6 +54,7 @@ verification and update the step rather than creating duplicate work.
 | 11 | `11-crash-recovery_completed.md` | Failure injection and durability | complete |
 | 12 | `12-windows-driver_completed.md` | WDK filesystem driver in VM | complete |
 | 13 | `13-read-and-write-caching_completed.md` | ARC, L2ARC, Cache Manager, sync and SLOG through the driver | complete |
-| 14 | `14-userspace-tools-and-installer.md` | Administration tools and Windows setup package | planned |
-| 15 | `15-documentation-and-1.0-distribution.md` | 1.0 docs, x64/ARM64 downloads, Windows support matrix, ZFS vs NTFS/ReFS | planned |
+| 14 | `14-userspace-tools-and-installer_completed.md` | Administration tools and Windows setup package | complete |
+| 15 | `15-user-mode-filesystem.md` | User-mode variant: libzpool engine bridged to WinFsp, service and installer; no Microsoft driver signature needed | in-progress |
+| 16 | `16-documentation-and-1.0-distribution.md` | 1.0 docs, x64/ARM64 downloads of both variants, Windows support matrix, ZFS vs NTFS/ReFS | planned |
 

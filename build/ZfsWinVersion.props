@@ -1,0 +1,20 @@
+<Project>
+  <!-- The single version source (plan steps 14-16): <prefix>.<build number>.
+       build/BUILD_NUMBER is incremented once per release build by
+       scripts/build-release.ps1; every other build reuses the current value.
+       Scripts read the same two inputs through scripts/Get-ZfsWinVersion.ps1.
+       A build may pass -p:ZfsWinVersion=... to override (upgrade tests). -->
+  <PropertyGroup>
+    <ZfsWinVersionPrefix>1.0</ZfsWinVersionPrefix>
+    <ZfsWinBuildNumber>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)BUILD_NUMBER').Trim())</ZfsWinBuildNumber>
+    <ZfsWinVersion Condition="'$(ZfsWinVersion)' == ''">$(ZfsWinVersionPrefix).$(ZfsWinBuildNumber)</ZfsWinVersion>
+    <Version>$(ZfsWinVersion)</Version>
+    <AssemblyVersion>$(ZfsWinVersion).0</AssemblyVersion>
+    <FileVersion>$(ZfsWinVersion).0</FileVersion>
+    <InformationalVersion>$(ZfsWinVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Company>zfsWindows contributors</Company>
+    <Product>OpenZFS for Windows</Product>
+    <Copyright>Copyright 2026 Rosen Balchev and contributors</Copyright>
+  </PropertyGroup>
+</Project>
