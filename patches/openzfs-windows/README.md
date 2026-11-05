@@ -333,3 +333,39 @@ thread ran the process-exit teardown, and `zpool.exe` exited with
 Taskq workers are now created `TS_JOINABLE`, and `taskq_destroy()` joins
 every one of them before it frees the taskq. Nothing else waits on these
 threads, and `taskq_member()` still compares the same thread handles.
+
+## 0020 — CMake: explicit OpenSSL libraries take precedence
+
+The root `CMakeLists.txt` hard-codes the OpenSSL static libraries per
+architecture with plain `set()` calls:
+`C:/Program Files/OpenSSL-Win64/...` for x64 and
+`C:/Program Files/OpenSSL-Win64-ARM/...` for ARM64. A `-D` option cannot
+override a normal variable, so an ARM64 build could only use an OpenSSL
+installed at exactly that system path. When `OPENSSL_CRYPTO_LIBRARY` and
+`OPENSSL_SSL_LIBRARY` are both given on the command line, they are now
+used as they are. The ARM64 build (plan step 17) passes a vcpkg
+`arm64-windows-static` OpenSSL that way. Without them, nothing changes.
+## 0021 — CMake: run host build tools when cross-compiling
+
+`tracewpp`, `signtool` and `stampinf` were chosen from the WDK `bin`
+folder of the *target* architecture (`CMAKE_SYSTEM_PROCESSOR`). An ARM64
+build on an x64 machine therefore tried to run the ARM64 tools, and failed
+("not compatible with the version of Windows you're running"). These tools
+run on the build machine, so they are now selected by
+`CMAKE_HOST_SYSTEM_PROCESSOR`. Native builds are unchanged.
+
+## 0022 — Lua: ARM64 Windows kernel setjmp buffer type
+
+On Windows ARM64 the kernel Lua uses the WDK's `setjmp`/`longjmp`, which
+take a `jmp_buf` (an `unsigned __int64` array). `LUAI_TRY` and
+`LUAI_THROW` passed `&(c)->b`, a `label_t *`. Current clang rejects
+that as an error (`-Wincompatible-pointer-types`). They now pass the
+array `(c)->b.val`, which has room for 64 values, more than the ARM64
+`jmp_buf` needs. Other architectures are unchanged.
+
+## 0023 — ARM64: exception context registers in the write fault filter
+
+`zfs_write_fault_filter()` records the faulting instruction and stack
+pointers for diagnosis. It read `ContextRecord->Rip` and `->Rsp`, which
+exist only in the x64 `CONTEXT`. ARM64 uses `Pc` and `Sp` through a
+small macro. The recorded values and their meaning are unchanged.

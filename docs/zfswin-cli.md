@@ -62,6 +62,9 @@ zfswin [--json] [--timeout <seconds>] <command>
 | `vdev attach <pool> <device> <new-device> --yes` | Mirror `<device>` onto `<new-device>`; resilvering starts automatically (admin) |
 | `vdev detach <pool> <device> --yes` | Remove one side of a mirror (admin) |
 | `vdev replace <pool> <device> [<new-device>] --yes` | Replace a device and resilver onto the new one (admin) |
+| `vdev add-cache <pool> <device>... --yes` | Add read cache (L2ARC) devices; they hold data evicted from RAM (admin) |
+| `vdev add-log <pool> [--mirror] <device>... --yes` | Add a write log (SLOG) for synchronous writes; mirror it (admin) |
+| `vdev remove <pool> <device> --yes` | Remove a cache or log device, or evacuate and remove a top-level data vdev where ZFS allows it (admin) |
 | `version` | Versions of zfswin, the broker protocol, and the OpenZFS userland and kernel module |
 
 Snapshots are read-only under `<mountpoint>\.zfs\snapshot\<name>`.
@@ -109,6 +112,21 @@ Sizes are bytes and times are Unix seconds. A compatible change only adds
 optional properties; any other change gets a new schema name. The
 compatibility tests check the schema against real `zpool`/`zfs` output that
 was captured in the test VM (`tests/Zfs.Admin.Tests/samples`).
+
+## Graphical tool
+
+`ZfsWinGui.exe`, in the Start menu as **OpenZFS for Windows**, does the same
+through the broker:
+- pool status and the vdev tree, including log, cache and spare devices;
+- scrub;
+- compression, dedup and sync per dataset;
+- adding and removing mirror members;
+- adding and removing read caches and write logs.
+
+It asks for elevation when it starts. Destructive actions ask for
+confirmation and name the devices first. It needs the
+[.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0);
+if the runtime is missing, Windows offers the download.
 
 ## PowerShell
 

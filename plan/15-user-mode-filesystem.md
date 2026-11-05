@@ -6,7 +6,7 @@ Prerequisites:
 - Steps 10, 11 and 14 are complete: the user-mode `libzpool` write core
   (`src/native/ZfsWriteCore`) is verified against upstream OpenZFS, and the
   broker, `zfswin.exe` and the WiX installer pipeline exist.
-- Step 16 (documentation and 1.0 distribution) follows this step and ships
+- Step 17 (documentation and 1.0 distribution) follows this step and ships
   both variants.
 
 ## Why

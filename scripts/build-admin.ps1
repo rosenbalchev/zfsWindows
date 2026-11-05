@@ -12,12 +12,14 @@ the Visual Studio Installer directory is put on PATH first.  Runs the unit
 and mocked-protocol tests unless -SkipTests.
 #>
 param(
-    [ValidateSet("x64", "arm64")]
+    # x64, arm64, or both ("x64,arm64" also works through -File).
     [string[]]$Architecture = @("x64"),
     [switch]$SkipTests
 )
 
 $ErrorActionPreference = "Stop"
+$Architecture = @($Architecture | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+foreach ($a in $Architecture) { if ($a -notin "x64", "arm64") { throw "Unknown architecture '$a'." } }
 $root = Split-Path -Parent $PSScriptRoot
 $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
 if (-not (Test-Path (Join-Path $vsInstaller "vswhere.exe"))) { throw "vswhere.exe not found in $vsInstaller." }
@@ -42,6 +44,10 @@ foreach ($arch in $Architecture) {
         & dotnet publish (Join-Path $root "src\managed\$project\$project.csproj") -c Release -r "win-$arch" -o $out
         if ($LASTEXITCODE -ne 0) { throw "Publishing $project for $arch failed." }
     }
+    # ZfsWinGui.exe: one framework-dependent file (needs the .NET 10 Desktop
+    # Runtime; WinForms cannot be NativeAOT-compiled).
+    & dotnet publish (Join-Path $root "src\managed\Zfs.Admin.Gui\Zfs.Admin.Gui.csproj") -c Release -r "win-$arch" --self-contained false -o $out
+    if ($LASTEXITCODE -ne 0) { throw "Publishing Zfs.Admin.Gui for $arch failed." }
     # Only the executables ship; symbols are kept beside them for the symbols policy.
     New-Item -ItemType Directory -Force (Join-Path $out "symbols") | Out-Null
     Get-ChildItem $out -Filter *.pdb | Move-Item -Destination (Join-Path $out "symbols") -Force

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenZFS for Windows: getting started</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1d1d1f; --muted: #5c5c66; --code: #f3f3f6; --border: #d9d9e0; --accent: #0b5cad; --warn: #8a5300; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #17171a; --fg: #ececf1; --muted: #a3a3ad; --code: #24242a; --border: #34343c; --accent: #6cb2ff; --warn: #f0b860; } }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.55 "Segoe UI", system-ui, sans-serif; margin: 0 auto; max-width: 860px; padding: 24px 16px 48px; }
+  h1 { font-size: 26px; margin: 0 0 4px; } h2 { font-size: 19px; margin-top: 32px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  p.lead { color: var(--muted); margin-top: 0; }
+  code, pre { font-family: "Cascadia Mono", Consolas, monospace; font-size: 13.5px; background: var(--code); border-radius: 4px; }
+  code { padding: 1px 4px; } pre { padding: 10px 12px; overflow-x: auto; border: 1px solid var(--border); }
+  table { border-collapse: collapse; width: 100%; } th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .warn { color: var(--warn); } a { color: var(--accent); }
+</style>
+</head>
+<body>
+<h1>OpenZFS for Windows</h1>
+<p class="lead">Kernel-driver edition: the OpenZFS file system driver, the <b>ZfsWinBroker</b> service, <code>zfswin.exe</code> and the <code>ZfsWin</code> PowerShell module.</p>
+
+<p class="warn"><b>Test-signed preview.</b> The driver loads only with test signing on (<code>bcdedit /set testsigning on</code>, Secure Boot off) and the project certificate trusted. Use it on test machines only. Make sure a disk does not hold data you need before you give it to ZFS.</p>
+
+<h2>The graphical tool</h2>
+<p>Start <b>OpenZFS for Windows</b> from the Start menu (<code>ZfsWinGui.exe</code>). It shows:</p>
+<ul>
+  <li>pool health, capacity and devices;</li>
+  <li>scrubs;</li>
+  <li>compression, deduplication and sync per dataset;</li>
+  <li>adding and removing <b>mirror</b> disks, <b>read caches</b> (L2ARC) and <b>write logs</b> (SLOG).</li>
+</ul>
+<p>It needs the <a href="https://dotnet.microsoft.com/download/dotnet/10.0">.NET 10 Desktop Runtime</a>; Windows offers it on first start if it is missing. Everything below can also be done from a terminal.</p>
+
+<h2>1. Check the installation</h2>
+<p>Open a new terminal, so the updated PATH applies, and run:</p>
+<pre>zfswin version
+sc query OpenZFS
+sc query ZfsWinBroker</pre>
+<p>Read-only commands work for every user. Commands that change something need a terminal opened with <b>Run as administrator</b>.</p>
+
+<h2>2. Create a pool</h2>
+<p>Identify the disk first. Creating a pool <b>erases the disk</b>.</p>
+<pre>Get-Disk                                   # note the number of the empty disk, e.g. 2
+zfswin pool create tank \\?\PhysicalDrive2 -O compression=lz4 --yes
+zfswin pool create tank --mirror \\?\PhysicalDrive2 \\?\PhysicalDrive3 --yes   # two disks
+</pre>
+<p>To experiment without a disk, use a file (it must already exist at full size):</p>
+<pre>fsutil file createnew D:\pools\disk1.img 1073741824
+zfswin pool create lab D:\pools\disk1.img --yes</pre>
+<p>Without <code>--yes</code>, every destructive command stops with exit code 6 and changes nothing.</p>
+
+<h2>3. Datasets, mounting and files</h2>
+<pre>zfswin dataset create tank/home -o compression=zstd
+zfswin mount list                          # where each dataset is mounted (drive letter or folder)
+zfswin dataset set tank/home atime=off com.example:owner=me
+zfswin dataset get tank/home compression used available</pre>
+<p>Use the mounted drive or folder like any other: Explorer, robocopy, applications.</p>
+
+<h2>4. Snapshots</h2>
+<pre>zfswin snapshot create tank/home@before-upgrade
+zfswin snapshot list tank/home
+zfswin snapshot destroy tank/home@before-upgrade --yes</pre>
+<p>Snapshot contents are readable under <code>&lt;mountpoint&gt;\.zfs\snapshot\&lt;name&gt;</code>.</p>
+
+<h2>5. Health, scrub, mirrors</h2>
+<pre>zfswin pool status tank
+zfswin scrub start tank        # verifies every block; repairs from redundancy
+zfswin scrub status tank
+zfswin vdev attach tank \\?\PhysicalDrive2 \\?\PhysicalDrive3 --yes   # turn a single disk into a mirror
+zfswin vdev add-cache tank \\?\PhysicalDrive4 --yes                    # read cache (L2ARC) on an SSD
+zfswin vdev add-log tank --mirror \\?\PhysicalDrive5 \\?\PhysicalDrive6 --yes   # write log (SLOG)
+zfswin vdev remove tank \\?\PhysicalDrive4 --yes                        # remove a cache or log device</pre>
+
+<h2>6. Move a pool to another computer</h2>
+<pre>zfswin pool export tank        # on this computer
+zfswin pool discover           # on the other one (Windows), then:
+zfswin pool import tank</pre>
+<p>Linux, FreeBSD and macOS with OpenZFS 2.4 import the same pools with <code>zpool import</code>.</p>
+
+<h2>7. PowerShell</h2>
+<pre>Import-Module ZfsWin
+Get-ZfsPool
+Get-ZfsDataset tank -Recurse
+New-ZfsSnapshot tank/home@daily
+Get-Command -Module ZfsWin     # all 26 cmdlets</pre>
+<p>Destructive cmdlets prompt for confirmation and support <code>-WhatIf</code>.</p>
+
+<h2>8. Upstream tools</h2>
+<p><code>zpool.exe</code>, <code>zfs.exe</code>, <code>zdb.exe</code> and <code>kstat.exe</code> are in the same <code>bin</code> folder, for anything <code>zfswin</code> does not cover. Run them from an elevated terminal.</p>
+
+<h2>Exit codes</h2>
+<table>
+<tr><th>Code</th><th>Meaning</th></tr>
+<tr><td>0</td><td>success</td></tr>
+<tr><td>1</td><td>the ZFS command failed</td></tr>
+<tr><td>2</td><td>bad command line or argument</td></tr>
+<tr><td>3</td><td>not found</td></tr>
+<tr><td>4</td><td>access denied (run as administrator)</td></tr>
+<tr><td>5</td><td>broker not running (<code>net start ZfsWinBroker</code>)</td></tr>
+<tr><td>6</td><td><code>--yes</code> required</td></tr>
+<tr><td>7</td><td>timeout or cancelled</td></tr>
+<tr><td>9</td><td>busy</td></tr>
+</table>
+
+<h2>More</h2>
+<p>This folder contains <code>licenses\</code>, <code>symbols\</code> (for crash-dump analysis) and <code>VERSION.json</code>. The full documentation, with the command reference, upgrade and uninstall steps, recovery and manual driver removal, is in the project repository under <code>docs/</code>. Events: Event Viewer &gt; Windows Logs &gt; Application, source <code>ZfsWinBroker</code>.</p>
+<p>Uninstall in <b>Settings &gt; Apps</b>. Setup refuses while pools are imported, and never deletes pool data.</p>
+</body>
+</html>

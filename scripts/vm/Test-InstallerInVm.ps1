@@ -24,7 +24,7 @@ Each stage is recorded in TestVolumes\vm\results.jsonl; the script throws at
 the end if any check failed.
 #>
 param(
-    [string]$Name = "zfswin-driver-test",
+    [string]$Name = "zfsTest",
     [string]$Msi = "",
     [string]$UpgradeMsi = ""
 )
@@ -128,6 +128,12 @@ Invoke-Command $s {
 foreach ($f in $Msi, $UpgradeMsi, (Join-Path $repo "out\driver-package\zfswindows-test.cer"), (Join-Path $PSScriptRoot "guest-installer.ps1")) {
     Copy-Item -ToSession $s -Path $f -Destination "C:\zfswin\installer\$(Split-Path -Leaf $f)" -Force
 }
+# The .NET 10 Desktop Runtime for ZfsWinGui.exe (framework-dependent):
+# the official, signed installer, verified on the host.
+$runtime = Get-ChildItem (Join-Path $repo "out\dotnet-runtime") -Filter "windowsdesktop-runtime-*-win-x64.exe" | Select-Object -First 1
+if (-not $runtime -or (Get-AuthenticodeSignature $runtime.FullName).Status -ne "Valid") { throw "out\dotnet-runtime\windowsdesktop-runtime-*-win-x64.exe is missing or not validly signed." }
+Copy-Item -ToSession $s -Path $runtime.FullName -Destination "C:\zfswin\installer\dotnet-desktop-runtime.exe" -Force
+Invoke-Command $s { $p = Start-Process C:\zfswin\installer\dotnet-desktop-runtime.exe -ArgumentList "/install", "/quiet", "/norestart" -Wait -PassThru; if ($p.ExitCode -notin 0, 3010) { throw "runtime install: $($p.ExitCode)" } }
 Remove-PSSession $s
 Restart-Guest
 $clean = Guest "state"
@@ -181,6 +187,11 @@ Expect "zfswin talks to the broker" ($installed.zfswinVersion.protocol -eq 1)
 $cli = Guest "cli"
 Record "installer-cli" $cli
 Expect "CLI workflow" (@($cli.failed).Count -eq 0) ($cli.failed -join ', ')
+$gui = Guest "gui"
+Record "installer-gui" $gui
+Expect "GUI self-check" ($gui.exit -eq 0 -and @($gui.failures).Count -eq 0 -and -not $gui.brokerError) "exit $($gui.exit) $($gui.brokerError) $($gui.error)"
+Expect "Start menu shortcuts" (@($gui.shortcuts).Count -eq 2) ($gui.shortcuts -join ', ')
+Expect "GUI sees the pool and its datasets" ((@($gui.pools | Where-Object name -eq "zwin").Count -eq 1) -and (@($gui.datasets | Where-Object { $_.name -eq "zwin/docs" -and $_.dedup -eq "on" }).Count -eq 1))
 $samples = Guest "samples"
 $sampleDir = Join-Path $repo "tests\Zfs.Admin.Tests\samples"
 New-Item -ItemType Directory -Force $sampleDir | Out-Null

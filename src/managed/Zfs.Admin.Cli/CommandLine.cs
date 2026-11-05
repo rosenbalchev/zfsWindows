@@ -45,6 +45,9 @@ internal static class CommandLine
           vdev attach <pool> <device> <new-device> --yes               (admin)
           vdev detach <pool> <device> --yes                            (admin)
           vdev replace <pool> <device> [<new-device>] --yes            (admin)
+          vdev add-cache <pool> <device>... --yes                      (admin; read cache, L2ARC)
+          vdev add-log <pool> [--mirror] <device>... --yes             (admin; write log, SLOG)
+          vdev remove <pool> <device> --yes                            (admin; cache, log or data vdev)
         Other
           version
           help
@@ -181,6 +184,16 @@ internal static class CommandLine
             case "vdev replace":
                 Options("--yes"); AtLeast(2); AtMost(3); a["pool"] = positional[0]; a["device"] = positional[1]; Optional("newDevice", 2);
                 operation = "vdev.replace"; destructive = true; break;
+            case "vdev add-cache": case "vdev add-log":
+                Options("--mirror", "--yes"); AtLeast(2); a["pool"] = positional[0];
+                a["role"] = verb == "add-cache" ? "cache" : "log";
+                a["devices"] = new JsonArray(positional.Skip(1).Select(d => (JsonNode?)d).ToArray());
+                // --mirror set "layout" above; vdev.add takes a flag.
+                if (a.Remove("layout")) a["mirror"] = true;
+                operation = "vdev.add"; destructive = true; break;
+            case "vdev remove":
+                Options("--yes"); Exactly(2); a["pool"] = positional[0]; a["device"] = positional[1];
+                operation = "vdev.remove"; destructive = true; break;
             default:
                 throw Bad($"Unknown command '{group} {verb}'; see 'zfswin help'.");
         }

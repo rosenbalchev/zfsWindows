@@ -18,14 +18,27 @@ trust.  Nothing is installed or loaded on this machine.
 #>
 param(
     [ValidateSet("Debug", "Release")]
-    [string]$Configuration = "Debug"
+    [string]$Configuration = "Debug",
+    # arm64 cross-compiles with the MSVC/WDK ARM64 tools and the vcpkg
+    # arm64-windows-static OpenSSL in out\vcpkg-openssl (plan step 17).
+    [ValidateSet("x64", "arm64")]
+    [string]$Architecture = "x64"
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $openZfs = Join-Path $root "third_party\openzfs-windows"
-$build = Join-Path $root "out\openzfs-driver-$($Configuration.ToLowerInvariant())"
-$package = Join-Path $root "out\driver-package"
+$suffix = if ($Architecture -eq "x64") { "" } else { "-$Architecture" }
+$build = Join-Path $root "out\openzfs-driver-$($Configuration.ToLowerInvariant())$suffix"
+$package = Join-Path $root "out\driver-package$suffix"
+$cmakeArch = '-DOPENSSL_ROOT_DIR="C:/Program Files/OpenSSL-Win64"'
+if ($Architecture -eq "arm64") {
+    $ssl = (Join-Path $root "out\vcpkg-openssl\installed\arm64-windows-static") -replace '\\', '/'
+    if (-not (Test-Path "$ssl/debug/lib/libcrypto.lib")) { throw "ARM64 OpenSSL is missing: build it with vcpkg into out\vcpkg-openssl (see docs/building.md)." }
+    $sslLib = if ($Configuration -eq "Debug") { "$ssl/debug/lib" } else { "$ssl/lib" }
+    $cmakeArch = ('-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=ARM64 -DOPENSSL_ROOT_DIR="{0}" -DOPENSSL_INCLUDE_DIR="{0}/include" ' +
+        '-DOPENSSL_CRYPTO_LIBRARY="{1}/libcrypto.lib" -DOPENSSL_SSL_LIBRARY="{1}/libssl.lib" -DCRYPTO_STATIC_TEST="{1}/libcrypto.lib"') -f $ssl, $sslLib
+}
 $targets = "OpenZFS", "OpenZVOL", "zfsinstaller", "zpool", "zfs", "zdb", "kstat"
 
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -41,8 +54,8 @@ New-Item -ItemType Directory -Force -Path (Join-Path $openZfs "out\build") | Out
 
 $commands = @(
     'set "PATH={0};C:\Program Files\LLVM\bin;%PATH%"' -f (Split-Path -Parent $vswhere)
-    'call "{0}" -arch=x64 -host_arch=x64' -f $devShell
-    '"{0}" -S "{1}" -B "{2}" -G Ninja -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} -DOPENSSL_ROOT_DIR="C:/Program Files/OpenSSL-Win64"' -f $cmake, $openZfs, $build, $ninja, $Configuration
+    'call "{0}" -arch={1} -host_arch=x64' -f $devShell, $Architecture
+    '"{0}" -S "{1}" -B "{2}" -G Ninja -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} {5}' -f $cmake, $openZfs, $build, $ninja, $Configuration, $cmakeArch
     '"{0}" --build "{1}" --target {2} --parallel 8' -f $cmake, $build, ($targets -join ' ')
 ) -join ' && '
 & cmd.exe /d /s /c $commands

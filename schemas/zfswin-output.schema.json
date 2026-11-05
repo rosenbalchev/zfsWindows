@@ -107,7 +107,12 @@
               "action": { "type": ["string", "null"] },
               "errorCount": { "type": "integer" },
               "scan": { "$ref": "#/$defs/scan" },
-              "vdevs": { "type": "array", "items": { "$ref": "#/$defs/vdev" } }
+              "vdevs": { "type": "array", "items": { "$ref": "#/$defs/vdev" } },
+              "logs": { "type": "array", "items": { "$ref": "#/$defs/vdev" } },
+              "caches": { "type": "array", "items": { "$ref": "#/$defs/vdev" } },
+              "spares": { "type": "array", "items": { "$ref": "#/$defs/vdev" } },
+              "special": { "type": "array", "items": { "$ref": "#/$defs/vdev" } },
+              "dedup": { "type": "array", "items": { "$ref": "#/$defs/vdev" } }
             }
           }
         }

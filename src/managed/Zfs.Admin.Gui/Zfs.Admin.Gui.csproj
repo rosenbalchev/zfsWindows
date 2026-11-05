@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- ZfsWinGui.exe: the graphical administration tool (plan step 16).
+       Framework-dependent: WinForms cannot be trimmed or AOT-compiled, and a
+       self-contained copy would add about 60 MB to every package.  It needs
+       the .NET 10 Desktop Runtime; the .NET launcher offers the download if
+       it is missing.  It runs elevated (app.manifest) and talks to
+       ZfsWinBroker like zfswin.exe. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ZfsWinGui</AssemblyName>
+    <RootNamespace>Zfs.Admin.Gui</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <!-- The rid-specific apphost; the runtime itself is shared. -->
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Zfs.Admin\Zfs.Admin.csproj" />
+    <PackageReference Include="System.Management" Version="10.0.0" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0" />
+  </ItemGroup>
+  <Import Project="..\..\..\build\ZfsWinVersion.props" />
+</Project>

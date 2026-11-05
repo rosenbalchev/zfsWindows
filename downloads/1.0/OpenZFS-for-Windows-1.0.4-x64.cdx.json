@@ -3,18 +3,18 @@
     "specVersion":  "1.5",
     "version":  1,
     "metadata":  {
-                     "timestamp":  "2026-11-05T15:19:44Z",
+                     "timestamp":  "2026-11-05T19:56:01Z",
                      "component":  {
                                        "type":  "application",
                                        "name":  "OpenZFS for Windows",
-                                       "version":  "1.0.1"
+                                       "version":  "1.0.4"
                                    }
                  },
     "components":  [
                        {
                            "type":  "application",
                            "name":  "kstat.exe",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -32,7 +32,7 @@
                        {
                            "type":  "application",
                            "name":  "zdb.exe",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -50,7 +50,7 @@
                        {
                            "type":  "application",
                            "name":  "zfs.exe",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -68,7 +68,7 @@
                        {
                            "type":  "application",
                            "name":  "zfsinstaller.exe",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -86,11 +86,11 @@
                        {
                            "type":  "application",
                            "name":  "zfswin.exe",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
-                                              "content":  "4d8202c8278c0013300629ef4490ab3d920b353c91e4b630aa4e18aa1daf08d8"
+                                              "content":  "057f84b82d24ed91858b935377c933b0ac588006857df32bdecec3b8dad95293"
                                           }
                                       ],
                            "licenses":  [
@@ -104,11 +104,29 @@
                        {
                            "type":  "application",
                            "name":  "ZfsWinBroker.exe",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
-                                              "content":  "72bae7c9f377e09bad6f8d58cd06115c018dc1e23fa635c270bc0a28028bad0a"
+                                              "content":  "7aba8f993cdbfa39a1ed3d2cf0dd593153c3ced24dee48062660afc409edc586"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "MIT"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "ZfsWinGui.exe",
+                           "version":  "1.0.4",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "e06cec4b303a74d6b8897b278589122a74ef12da6fc69a869855829613ab47bf"
                                           }
                                       ],
                            "licenses":  [
@@ -122,7 +140,7 @@
                        {
                            "type":  "application",
                            "name":  "zpool.exe",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -140,7 +158,7 @@
                        {
                            "type":  "file",
                            "name":  "OpenZFS.cat",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -158,7 +176,7 @@
                        {
                            "type":  "file",
                            "name":  "OpenZFS.inf",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -176,7 +194,7 @@
                        {
                            "type":  "application",
                            "name":  "OpenZFS.sys",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -194,7 +212,7 @@
                        {
                            "type":  "file",
                            "name":  "OpenZVOL.cat",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -212,7 +230,7 @@
                        {
                            "type":  "file",
                            "name":  "OpenZVOL.inf",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -230,7 +248,7 @@
                        {
                            "type":  "application",
                            "name":  "OpenZVOL.sys",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
@@ -248,11 +266,11 @@
                        {
                            "type":  "file",
                            "name":  "ZfsWin.psd1",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",
-                                              "content":  "3d77d634a1a9859cdf719dbd791081977524a9951045aedbdcb5607ef0ca3ce0"
+                                              "content":  "11ddf0c669fcf80be6cf516f77a69effcfb667c441031d605d7dd8eb2f961f84"
                                           }
                                       ],
                            "licenses":  [
@@ -266,7 +284,7 @@
                        {
                            "type":  "file",
                            "name":  "ZfsWin.psm1",
-                           "version":  "1.0.1",
+                           "version":  "1.0.4",
                            "hashes":  [
                                           {
                                               "alg":  "SHA-256",

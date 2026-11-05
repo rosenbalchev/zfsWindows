@@ -27,9 +27,174 @@ uninstall, recovery) and [`docs/zfswin-cli.md`](docs/zfswin-cli.md) (the
 command reference). To build from source, including the release script and
 all test suites, see [`docs/building.md`](docs/building.md).
 
-Both packages are Debug builds, verified in disposable Windows 11 24H2 x64
-VMs and against upstream OpenZFS on Linux (plan steps 12–15). Windows 10,
-Windows Server and ARM64 have not been tested yet; that is plan step 16.
+Each package exists for **x64** and **ARM64** (`…-arm64-usermode.msi`,
+`…-arm64-testsigned.msi`). After an interactive install, each opens its own
+getting-started guide (`README.html` in the install folder).
+
+Both packages include **OpenZFS for Windows**, a graphical administration
+tool in the Start menu (`ZfsWinGui.exe`, needs the .NET 10 Desktop Runtime).
+- **Kernel edition:**
+  - pool status and the vdev tree;
+  - scrubs;
+  - compression, deduplication and sync per dataset;
+  - adding and removing mirror disks, read caches (L2ARC) and write logs
+    (SLOG).
+- **User-mode edition:** user-mode mounts and the service.
+
+All packages are Debug builds.
+- **x64:** verified in disposable Windows 11 24H2 x64 VMs and against
+  upstream OpenZFS on Linux (plan steps 12–15).
+- **ARM64:** cross-compiled and statically checked. Every binary is ARM64 and
+  correctly signed, and the MSIs contain what they should. They have
+  **not** been installed or run: this project has no ARM64 test machine yet.
+  Treat them as untested.
+- Windows 10 and Windows Server have not been tested yet (plan step 17).
+
+## User mode or kernel mode? Feature matrix
+
+Both editions run the same OpenZFS engine and write the same on-disk format,
+so a pool moves freely between them and to Linux, FreeBSD or macOS. They
+differ in how Windows reaches the file system, and in how much of ZFS is
+exposed so far.
+
+✅ tested in this project's VM or Linux validation ·
+☑️ implemented, not yet tested here · ❌ not available
+
+| Area | Feature | Kernel mode (`…-testsigned.msi`) | User mode (`…-usermode.msi`) |
+| --- | --- | --- | --- |
+| **Install** | Works with Secure Boot on | ❌ needs test signing until the driver is Microsoft-signed | ✅ only WinFsp's Microsoft-signed driver loads |
+| | Prerequisites | test signing, project certificate trusted | WinFsp 2.1+ |
+| | Install, upgrade, repair, uninstall without touching pools | ✅ | ✅ install, uninstall (upgrade, repair ☑️) |
+| | Getting-started page, Start-menu shortcuts | ✅ | ✅ |
+| | x64 | ✅ | ✅ |
+| | ARM64 | ☑️ built and checked statically, not run | ☑️ built and checked statically, not run |
+| **Files** | Read and write files and folders | ✅ | ✅ |
+| | Read-only mount (image stays byte-identical) | ✅ | ✅ |
+| | Durable after flush or write-through (power-cut test) | ✅ | ✅ |
+| | Case-insensitive datasets | ☑️ | ☑️ |
+| | Windows ACLs stored on the pool | ✅ | ❌ fixed permissions (SYSTEM, Administrators full; users modify) |
+| | Alternate data streams | ✅ | ❌ |
+| | Snapshots browsable in `.zfs\snapshot` | ✅ | ❌ |
+| | Zero-copy block cloning (`FSCTL_DUPLICATE_EXTENTS_TO_FILE`) | ✅ | ❌ |
+| | Unbuffered I/O (`FILE_FLAG_NO_BUFFERING`) | ✅ | ✅ |
+| | zvols (ZFS block devices) | ☑️ | ❌ |
+| **Data features** | Read and write compressed datasets (lz4, zstd, gzip, …) | ✅ | ✅ |
+| | Read and write deduplicated datasets | ✅ | ☑️ |
+| | Read mirrored pools, self-healing from the good copy | ✅ | ☑️ |
+| | Native encryption | ☑️ not tested | ❌ |
+| **Administration** | Import and export pools | ✅ `zfswin`, GUI, PowerShell | ✅ through the service's mount configuration |
+| | Mount at boot | ☑️ | ☑️ the service mounts its configured datasets at start |
+| | Create pools and datasets | ✅ | ❌ |
+| | Change compression, dedup, sync and other properties | ✅ | ❌ |
+| | Create, destroy and roll back snapshots | ✅ create and destroy with `zfswin`; rollback with `zfs rollback` (step 12) | ❌ |
+| | Scrub (verify and repair) | ✅ | ❌ |
+| | Add and remove mirror disks; replace a disk | ✅ | ❌ |
+| | Add and remove read cache (L2ARC) and write log (SLOG) | ✅ | ❌ |
+| | `zfswin` CLI, `ZfsWin` PowerShell module | ✅ | ❌ |
+| | GUI (`ZfsWinGui.exe`) | ✅ status, scrub, properties, mirrors, read cache and write log (self-check tested; the windows themselves not yet clicked through) | ✅ mounts and service (self-check tested) |
+| **Behaviour** | A bug can… | crash Windows (bugcheck) | stop the service; the volume disappears, Windows keeps running |
+| | Performance (step-15 benchmark, Debug builds) | faster cached and unbuffered reads (2.1 GB/s, 367 MB/s) | similar large writes (≈37–42 MB/s, disk-bound); faster small-file metadata in this test; reads 0.9 GB/s, 305 MB/s |
+| | Interoperability with Linux OpenZFS | ✅ every pool written in the tests imported and verified | ✅ every pool written in the tests imported and verified |
+
+**Which one?**
+- **User mode** if you want ZFS data disks on a normal, Secure-Boot machine
+  today, and can create or administer pools elsewhere (Linux, a NAS, or the
+  kernel edition on a test machine).
+- **Kernel mode** for the full feature set and the best read performance, on
+  a test machine, until the driver is Microsoft-signed.
+
+## Why ZFS on Windows? NTFS, ReFS and ZFS compared
+
+NTFS and ReFS are Microsoft's file systems, and for most Windows machines
+they are the right default. ZFS earns its place when your data must stay
+correct over years, when you want instant snapshots, or when the same disks
+must also work on Linux, FreeBSD, macOS or a NAS.
+
+The table compares the file systems as shipped:
+- **Measured:** results this project measured in its VM tests (plan steps
+  06–15).
+- **Not tested here:** features this project has not exercised itself.
+- Everything else is documented behaviour of the respective file system.
+
+| | NTFS | ReFS | ZFS (this project) |
+| --- | --- | --- | --- |
+| **Checksums** | none on data or metadata | metadata always; data only with *integrity streams*, off by default on most volumes | every block, data and metadata, verified on every read |
+| **Silent-corruption repair** | no (chkdsk repairs structure, not file contents) | with integrity streams on a Storage Spaces mirror or parity | automatic from a mirror, raidz or `copies=2`. **Measured:** a scrub repaired 83.4 MB of deliberately corrupted mirror data (step 12). |
+| **Snapshots** | Volume Shadow Copy (VSS), volume-wide | no general volume snapshot and rollback on client Windows | instant, read-only, per dataset; browse `.zfs\snapshot`, roll back, send elsewhere |
+| **Replication** | none built in | none built in | `zfs send`/`receive`, full or incremental (not tested here) |
+| **Copy-on-write / cloning** | no | block cloning (Dev Drive uses it for fast copies) | always copy-on-write; zero-copy block cloning through the same Windows call as ReFS (`FSCTL_DUPLICATE_EXTENTS_TO_FILE`, kernel edition). **Measured:** an 8 MiB clone shared every block with its source (`bcloneused` 8 MiB), confirmed by Linux OpenZFS. |
+| **Compression** | per-file LZNT1 or "compact" | Windows Server 2025 | inline lz4, zstd or gzip per dataset. **Measured:** 5.29× (zstd) and 6.34× (gzip) on text |
+| **Deduplication** | Windows Server Data Deduplication role | Windows Server | inline, per dataset. **Measured:** 4.00× on duplicate data |
+| **Pooling and RAID** | Storage Spaces (separate layer) | Storage Spaces | built in: mirror, raidz1/2/3, hot spares; datasets share one pool |
+| **Encryption** | BitLocker, EFS | BitLocker | native per-dataset encryption (not tested here); BitLocker does not apply |
+| **Same disk on Linux, FreeBSD, macOS** | Linux read/write through ntfs3 or ntfs-3g | Windows only, and the on-disk version changes with Windows releases | yes: every pool written in this project's tests was imported and verified by upstream OpenZFS on Linux |
+| **Boot / system volume** | yes | no on client Windows | no |
+| **Microsoft-supported** | yes | yes | no: open source, test-signed kernel driver or user mode through WinFsp |
+
+### Async operations, like ReFS Dev Drive?
+
+A **Dev Drive** is a ReFS volume that Windows trusts for development
+workloads. Its "performance mode" lets Microsoft Defender scan files
+*asynchronously*, instead of holding up every file open, and that is where
+most of its speed-up comes from. Windows grants this only to ReFS Dev Drives.
+**A ZFS volume does not get it:** Defender scans files on ZFS volumes the
+normal, synchronous way, with both the kernel driver and the user-mode
+edition. You can add a Defender exclusion for a ZFS path yourself, at your
+own risk.
+
+ZFS is asynchronous in a different place, its write path:
+- Writes collect in memory and are committed together as one transaction
+  group, every few seconds.
+- An application that needs durability flushes the file or opens it
+  write-through. Those calls wait for the ZFS intent log or the commit.
+  **Measured:** after a hard power-off, every flushed and every write-through
+  file was intact in both editions (steps 13 and 15).
+- The `sync` property tunes this per dataset. `sync=standard` is the default.
+  `sync=disabled` makes everything asynchronous, which is faster but loses
+  the last seconds of writes on a power cut. `sync=always` makes every write
+  durable before it returns.
+
+### Zero-copy
+
+**Block cloning (kernel edition).** The driver implements
+`FSCTL_DUPLICATE_EXTENTS_TO_FILE`, the call ReFS and Dev Drive use for
+instant copies. It reports `FILE_SUPPORTS_BLOCK_REFCOUNTING` on pools with
+the `block_cloning` feature, which every pool created by OpenZFS 2.2 or later
+has.
+- A cloned range shares the existing blocks through ZFS's block reference
+  table. Nothing is read or rewritten, and the copy uses no extra space until
+  one side changes.
+- **Measured (step 16):**
+  - an 8 MiB clone was byte-identical to its source;
+  - `bcloneused` went from 0 to 8,388,608 bytes;
+  - Linux OpenZFS confirmed the shared blocks after import.
+- Whether Explorer or `CopyFile` uses this automatically depends on the
+  Windows version. Tools that call the FSCTL directly always can.
+
+**Other forms:**
+- The user-mode edition copies data the ordinary way: the WinFsp bridge does
+  not implement the clone call.
+- Unbuffered I/O (`FILE_FLAG_NO_BUFFERING`) skips the Windows cache in both
+  editions.
+- OpenZFS's own Direct I/O, which also bypasses the ARC, is not wired up on
+  Windows.
+
+**Choose NTFS or ReFS** for:
+- the system and boot volume;
+- BitLocker-encrypted system disks;
+- software that relies on NTFS-only features (EFS, transactional NTFS, some
+  backup and antivirus products);
+- Windows Server roles that need ReFS or Storage Spaces Direct;
+- anything that must be a Microsoft-supported, WHQL-certified file system;
+- small-memory machines (ZFS's ARC cache wants RAM);
+- Dev Drive workloads that depend on Defender's asynchronous scanning.
+
+**Choose ZFS** for:
+- data disks where silent corruption is unacceptable;
+- data that benefits from cheap snapshots and rollback;
+- disks shared with Linux or a NAS;
+- compression- and dedup-friendly datasets;
+- home-lab and development pools.
 
 ## Current status
 
