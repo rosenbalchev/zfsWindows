@@ -41,7 +41,10 @@ TestVolumes\vm\results.jsonl as "usermode-*".
 [CmdletBinding()]
 param(
     [string[]]$Phase = @("all"),
-    [string]$Name = "zfsTest"
+    [string]$Name = "zfsTest",
+    # Which build of out\release\<version> to test (...-usermode-debug.msi or ...-usermode.msi).
+    [ValidateSet("Debug", "Release")]
+    [string]$Configuration = "Debug"
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,7 +56,7 @@ $Phase = @($Phase | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if ($Phase -contains "all") { $Phase = @("setup", "read", "write", "bench", "powercut", "admin", "uninstall") }
 $winfsp = Join-Path $repo "third_party\winfsp\download\winfsp-2.1.25156.msi"
 $version = & (Join-Path $repo "scripts\Get-ZfsWinVersion.ps1")
-$msi = Join-Path $repo "out\release\$version\OpenZFS-for-Windows-$version-x64-usermode.msi"
+$msi = Join-Path $repo ("out\release\$version\OpenZFS-for-Windows-$version-x64-usermode" + $(if ($Configuration -eq "Debug") { "-debug" } else { "" }) + ".msi")
 $failures = [Collections.Generic.List[string]]::new()
 
 function Open-Guest {

@@ -2,18 +2,20 @@
 
 ## Choose a variant
 
-The release in `downloads/1.0/` has two packages. Install one of them; each
-refuses to install next to the other.
+The release in `downloads/1.0/release/` (optimized) and
+`downloads/1.0/debug/` (debug checks, file names ending in `-debug`) has two
+packages. Install one of them; each refuses to install next to the other.
 
-| | **User mode** (`â€¦-x64-usermode.msi`) | **Kernel mode** (`â€¦-x64-testsigned.msi`) |
+| | **User mode** (`…-x64-usermode.msi`) | **Kernel mode** (`…-x64-testsigned.msi`) |
 | --- | --- | --- |
 | Needs | [WinFsp](https://github.com/winfsp/winfsp) 2.1 or later | test signing on, Secure Boot off, `zfswindows-test.cer` trusted |
 | Secure Boot | stays on | must be off |
 | Our code runs as | a normal Windows service | a kernel driver |
 | A bug can | stop the service (the volume disappears) | crash Windows |
 | Speed | lower: every file operation crosses into user mode (see the benchmarks in plan step 15) | native |
-| Pool creation, snapshots, `zfswin`/PowerShell administration | not yet: pools are created and administered elsewhere (kernel variant, Linux, FreeBSD, macOS) | yes |
-| zvols, ADS, Windows ACLs | no | yes |
+| Pool creation, snapshots, `zfswin`/PowerShell/GUI administration | yes (through the service's ZFS bridge) | yes |
+| Windows ACLs, alternate data streams, `.zfs\snapshot` | yes; ACLs enforced | yes; ACLs stored but not enforced on open |
+| zvols | no | yes |
 
 Both use the same OpenZFS engine and on-disk format. A pool written by
 either variant imports anywhere OpenZFS 2.4 runs. The README's *User mode
@@ -23,7 +25,7 @@ tested, implemented or missing in each edition.
 First verify the download:
 
 ```powershell
-cd downloads\1.0
+cd downloads\1.0\release      # or downloads\1.0\debug
 Get-Content SHA256SUMS | ForEach-Object {
     $hash, $name = $_ -split '\s+', 2
     if ((Get-FileHash $name -Algorithm SHA256).Hash -ne $hash) { "MISMATCH $name" } else { "ok $name" }

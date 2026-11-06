@@ -30,7 +30,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $openZfs = Join-Path $root "third_party\openzfs-windows"
 $suffix = if ($Architecture -eq "x64") { "" } else { "-$Architecture" }
 $build = Join-Path $root "out\openzfs-driver-$($Configuration.ToLowerInvariant())$suffix"
-$package = Join-Path $root "out\driver-package$suffix"
+# Debug keeps the original folder (the VM tests' default); Release has its own.
+$package = Join-Path $root ("out\driver-package" + $(if ($Configuration -eq "Release") { "-release" } else { "" }) + $suffix)
 $cmakeArch = '-DOPENSSL_ROOT_DIR="C:/Program Files/OpenSSL-Win64"'
 if ($Architecture -eq "arm64") {
     $ssl = (Join-Path $root "out\vcpkg-openssl\installed\arm64-windows-static") -replace '\\', '/'

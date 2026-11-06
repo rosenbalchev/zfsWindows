@@ -26,21 +26,27 @@ param(
     [string]$Variant = "kernel",
     # Overrides build\ZfsWinVersion.props for the MSI only, to produce a
     # second package for the VM upgrade test.
-    [string]$Version = ""
+    [string]$Version = "",
+    # Which native build to package: Debug (out\driver-package, the MSI named
+    # ...-debug.msi) or Release (out\driver-package-release, plain names).
+    # The .NET tools are always Release builds.
+    [ValidateSet("Debug", "Release")]
+    [string]$Configuration = "Debug"
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $version = if ($Version) { $Version } else { & (Join-Path $PSScriptRoot "Get-ZfsWinVersion.ps1") }
-$driver = Join-Path $root ("out\driver-package" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }))
+$tag = if ($Configuration -eq "Debug") { "-debug" } else { "" }
+$driver = Join-Path $root ("out\driver-package" + $(if ($Configuration -eq "Release") { "-release" } else { "" }) + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }))
 $admin = Join-Path $root "out\admin-$Architecture"
-$payload = Join-Path $root "out\installer-payload\$Architecture"
+$payload = Join-Path $root "out\installer-payload\$Architecture-$($Configuration.ToLowerInvariant())"
 $release = Join-Path $root "out\release\$version"
 $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
 
 if ($Variant -eq "usermode") {
-    & (Join-Path $PSScriptRoot "build-installer-usermode.ps1") -Architecture $Architecture -Version $version
+    & (Join-Path $PSScriptRoot "build-installer-usermode.ps1") -Architecture $Architecture -Version $version -Configuration $Configuration
     return
 }
 
@@ -78,7 +84,7 @@ $commit = (& git -C $root rev-parse HEAD).Trim()
 $openzfsCommit = (& git -C (Join-Path $root "third_party\openzfs-windows") rev-parse HEAD).Trim()
 [ordered]@{
     product = "OpenZFS for Windows"; version = $version; architecture = $Architecture
-    signing = "test"; testSigningThumbprint = $cert.Thumbprint
+    configuration = $Configuration; signing = "test"; testSigningThumbprint = $cert.Thumbprint
     repositoryCommit = $commit; openzfsWindowsCommit = $openzfsCommit
     driverVersion = ((Get-Content (Join-Path $driver "OpenZFS.inf") | Select-String '^DriverVer').ToString() -replace '^DriverVer\s*=\s*', '')
     patches = @(Get-ChildItem (Join-Path $root "patches\openzfs-windows") -Filter *.patch | ForEach-Object Name)
@@ -104,11 +110,13 @@ if ($unsigned) { throw "Unsigned or foreign-signed files in the payload: $($unsi
 
 # --- MSI ------------------------------------------------------------------------------
 $wixproj = Join-Path $root "installer\ZfsWin.Installer\ZfsWin.Installer.wixproj"
-$bin = Join-Path $root "out\installer-build\$Architecture"
-& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:TestSigningThumbprint=$($cert.Thumbprint)" "-p:ZfsWinVersion=$version" "-p:OutputPath=$bin\"
+$bin = Join-Path $root "out\installer-build\$Architecture-$($Configuration.ToLowerInvariant())"
+# Its own intermediate folder per build: a shared obj\ makes WiX skip the
+# link step for the second configuration and then miss the MSI (MSB3030).
+& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:TestSigningThumbprint=$($cert.Thumbprint)" "-p:ZfsWinVersion=$version" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
 if ($LASTEXITCODE -ne 0) { throw "WiX build failed." }
 New-Item -ItemType Directory -Force $release | Out-Null
-$msi = Join-Path $release "OpenZFS-for-Windows-$version-$Architecture-testsigned.msi"
+$msi = Join-Path $release "OpenZFS-for-Windows-$version-$Architecture-testsigned$tag.msi"
 Copy-Item (Join-Path $bin "OpenZFS-for-Windows-$version-$Architecture.msi") $msi -Force
 & $signtool sign /q /fd sha256 /sha1 $cert.Thumbprint /d "OpenZFS for Windows $version" $msi
 if ($LASTEXITCODE -ne 0) { throw "signtool failed for the MSI" }
@@ -134,7 +142,7 @@ $components += [ordered]@{ type = "framework"; name = ".NET NativeAOT runtime (i
         component = [ordered]@{ type = "application"; name = "OpenZFS for Windows"; version = $version }
     }
     components = @($components)
-} | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 (Join-Path $release "OpenZFS-for-Windows-$version-$Architecture.cdx.json")
+} | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 (Join-Path $release "OpenZFS-for-Windows-$version-$Architecture$tag.cdx.json")
 
 Get-ChildItem $release -File | Where-Object Name -ne "SHA256SUMS.txt" | ForEach-Object {
     "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name

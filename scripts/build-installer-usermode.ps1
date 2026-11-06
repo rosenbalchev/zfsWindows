@@ -15,13 +15,17 @@ Nothing is installed on this machine.
 param(
     [ValidateSet("x64", "arm64")]
     [string]$Architecture = "x64",
-    [Parameter(Mandatory)][string]$Version
+    [Parameter(Mandatory)][string]$Version,
+    # Debug: ...-usermode-debug.msi from the debug trees; Release: plain names.
+    [ValidateSet("Debug", "Release")]
+    [string]$Configuration = "Debug"
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$build = Join-Path $root ("out\openzfs-write-debug" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }) + "\zfswin-um")
-$payload = Join-Path $root "out\installer-payload\usermode-$Architecture"
+$tag = if ($Configuration -eq "Debug") { "-debug" } else { "" }
+$build = Join-Path $root ("out\openzfs-write-$($Configuration.ToLowerInvariant())" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }) + "\zfswin-um")
+$payload = Join-Path $root "out\installer-payload\usermode-$Architecture-$($Configuration.ToLowerInvariant())"
 $release = Join-Path $root "out\release\$Version"
 $winfspLicense = Join-Path $root "third_party\winfsp\sdk-2.1\DYNAMIC\License.txt"
 $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
@@ -44,7 +48,7 @@ Copy-Item $exe (Join-Path $payload "bin")
 # PowerShell module as the kernel edition, and the same zpool.exe/zfs.exe,
 # which reach zfswin-um's engine through the ZFS bridge pipe.
 $admin = Join-Path $root "out\admin-$Architecture"
-$driver = Join-Path $root ("out\driver-package" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }))
+$driver = Join-Path $root ("out\driver-package" + $(if ($Configuration -eq "Release") { "-release" } else { "" }) + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }))
 foreach ($required in (Join-Path $admin "ZfsWinGui.exe"), (Join-Path $admin "zfswin.exe"), (Join-Path $admin "ZfsWinBroker.exe"), (Join-Path $driver "zpool.exe"), (Join-Path $driver "zfs.exe")) {
     if (-not (Test-Path $required)) { throw "$required is missing; run build-admin.ps1 and build-driver.ps1 -Architecture $Architecture first." }
 }
@@ -66,7 +70,7 @@ Copy-Item (Join-Path $root "third_party\openzfs-windows\NOTICE") (Join-Path $pay
 Copy-Item $winfspLicense (Join-Path $payload "licenses\WinFsp-License.txt")
 [ordered]@{
     product = "OpenZFS for Windows (user mode)"; version = $Version; architecture = $Architecture
-    variant = "usermode"; requires = "WinFsp 2.1 or later (https://github.com/winfsp/winfsp)"
+    variant = "usermode"; configuration = $Configuration; requires = "WinFsp 2.1 or later (https://github.com/winfsp/winfsp)"
     repositoryCommit = (& git -C $root rev-parse HEAD).Trim()
     openzfsWindowsCommit = (& git -C (Join-Path $root "third_party\openzfs-windows") rev-parse HEAD).Trim()
     patches = @(Get-ChildItem (Join-Path $root "patches\openzfs-windows") -Filter *.patch | ForEach-Object Name)
@@ -84,11 +88,11 @@ foreach ($script in Get-ChildItem (Join-Path $payload "ZfsWin") -Include *.psm1,
 }
 
 $wixproj = Join-Path $root "installer\ZfsWin.UserMode\ZfsWin.UserMode.wixproj"
-$bin = Join-Path $root "out\installer-build\usermode-$Architecture"
-& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:ZfsWinVersion=$Version" "-p:OutputPath=$bin\"
+$bin = Join-Path $root "out\installer-build\usermode-$Architecture-$($Configuration.ToLowerInvariant())"
+& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:ZfsWinVersion=$Version" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
 if ($LASTEXITCODE -ne 0) { throw "WiX build failed." }
 New-Item -ItemType Directory -Force $release | Out-Null
-$msi = Join-Path $release "OpenZFS-for-Windows-$Version-$Architecture-usermode.msi"
+$msi = Join-Path $release "OpenZFS-for-Windows-$Version-$Architecture-usermode$tag.msi"
 Copy-Item (Join-Path $bin "OpenZFS-for-Windows-$Version-$Architecture-usermode.msi") $msi -Force
 & $signtool sign /q /fd sha256 /sha1 $cert.Thumbprint /d "OpenZFS for Windows $Version (user mode)" $msi
 if ($LASTEXITCODE -ne 0) { throw "signtool failed for the MSI" }
