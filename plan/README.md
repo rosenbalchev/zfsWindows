@@ -58,5 +58,5 @@ verification and update the step rather than creating duplicate work.
 | 15 | `15-user-mode-filesystem.md` | User-mode variant: libzpool engine bridged to WinFsp, service and installer; no Microsoft driver signature needed | in-progress |
 | 16 | `16-gui-administration-tool.md` | ZfsWinGui: status, compression/dedup/sync, mirrors, read/write caches, user-mode mounts | in-progress |
 | 17 | `17-documentation-and-1.0-distribution.md` | 1.0 docs, x64/ARM64 downloads of both variants, Windows support matrix, ZFS vs NTFS/ReFS | planned |
-| 18 | `18-user-mode-feature-parity.md` | User mode: ACLs, streams, `.zfs\snapshot`, block cloning, pool/dataset administration through an ioctl bridge, image files | in-progress |
+| 18 | `18-user-mode-feature-parity_completed.md` | User mode: ACLs, streams, `.zfs\snapshot`, block cloning, pool/dataset administration through an ioctl bridge, image files | complete |
 

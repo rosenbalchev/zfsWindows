@@ -66,8 +66,14 @@ zfswin [--json] [--timeout <seconds>] <command>
 | `vdev add-log <pool> [--mirror] <device>... --yes` | Add a write log (SLOG) for synchronous writes; mirror it (admin) |
 | `vdev remove <pool> <device> --yes` | Remove a cache or log device, or evacuate and remove a top-level data vdev where ZFS allows it (admin) |
 | `version` | Versions of zfswin, the broker protocol, and the OpenZFS userland and kernel module |
+| `clone <source> <target> [--force]` | Copy a file instantly by sharing its blocks (block cloning). Runs as you, not through the broker. Both files must be on the same ZFS dataset, and the pool needs the `block_cloning` feature. `--force` replaces an existing target. It uses `FSCTL_DUPLICATE_EXTENTS_TO_FILE` on the kernel edition and the user-mode edition's own control code there (WinFsp does not pass the standard call). |
 
 Snapshots are read-only under `<mountpoint>\.zfs\snapshot\<name>`.
+
+Both editions accept every command. In the user-mode edition, `zpool` and
+`zfs` reach the ZFS engine inside the `ZfsWinUserMode` service through its
+local bridge pipe, so the service must be running. `zfs send`/`receive` and
+`zpool events` are not available there.
 
 ## Exit codes
 

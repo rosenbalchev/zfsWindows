@@ -158,7 +158,14 @@ zum_engine_stop(void)
             result = error;
         }
     }
-    engine_rele();
+    /*
+     * kernel_fini() under a pool that is still imported (something still
+     * owns one of its datasets) does not return, and a service stop then
+     * times out (step-18 VM run).  The process is ending anyway; the pool
+     * imports normally next time, as after a crash.
+     */
+    if (result == 0)
+        engine_rele();
     return (result);
 }
 

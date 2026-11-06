@@ -20,7 +20,10 @@ from zfstest import HOST, MANIFEST_PY, ROOT, log, scp, shell_quote, vm
 
 POOL, DATASET = 'zwin', 'zwin/docs'
 REMOTE = '/root/zfswin-driver/installer'
-LOCAL = os.path.join(ROOT, 'TestVolumes', 'vm', 'installer')
+# ZFSWIN_POOL_DIR: the same layout from the user-mode suite (step 18),
+# TestVolumes/vm/crossedition-usermode.
+LOCAL = os.environ.get('ZFSWIN_POOL_DIR') or os.path.join(
+    ROOT, 'TestVolumes', 'vm', 'installer')
 
 
 def compare(label, expected, actual, failures):
