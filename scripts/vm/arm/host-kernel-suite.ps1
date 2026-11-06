@@ -3,7 +3,10 @@
 # rollback, install, workflows) in the ARM64 VM from "testsigning-ready",
 # plus a cross-check of the ARM64 user-mode pool (C:\zfswin-arm\stage\out),
 # an import/export loop (the x64 Release export hang) and the uninstall.
-$Msi = 'C:\zfswin\installer\OpenZFS-for-Windows-1.0.11-arm64-testsigned.msi'
+# $Version may be set by a line prepended to this script; the MSI, the test
+# certificate and guest-installer.ps1 are taken from C:\zfswin-arm\stage.
+if (-not $Version) { $Version = '1.0.11' }
+$Msi = "C:\zfswin\installer\OpenZFS-for-Windows-$Version-arm64-testsigned.msi"
 $results = [Collections.Generic.List[object]]::new()
 $full = [ordered]@{}
 function Note($stage, $ok, $detail) { $results.Add([ordered]@{ stage = $stage; ok = [bool]$ok; detail = $detail }) }
@@ -43,6 +46,9 @@ $deadline = (Get-Date).AddMinutes(2)
 while ((Get-VM $Guest).State -notin 'Saved', 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
 Start-VM -Name $Guest
 Start-Sleep -Seconds 30
+$s = Open-ArmGuest 10
+foreach ($f in (Split-Path -Leaf $Msi), 'zfswindows-test.cer', 'guest-installer.ps1') { Copy-Item -ToSession $s "C:\zfswin-arm\stage\$f" "C:\zfswin\installer\$f" -Force }
+Remove-PSSession $s
 
 $clean = Guest "state"; $full.clean = $clean
 Note "clean guest" ($null -eq $clean.services.OpenZFS) "OpenZFS service: $($clean.services.OpenZFS)"

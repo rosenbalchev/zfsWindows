@@ -444,6 +444,15 @@ PASS: 9 datasets (gzip-9, lz4, lzjb, off, off, zle, zstd, zstd, zstd-19) verifie
 1.0.12 x64 Release is the first Release build that passed every suite. It
 becomes the latest stable.
 
+### zfsTest: 6 → 8 CPUs (2026-11-06, after the 1.0.12 suites)
+
+The host has 12 logical processors. With the VM off, each of `clean`,
+`fixtures` and `usermode` (all taken with the VM off, so no saved state)
+was restored, set to 8 CPUs, renamed to `<name>-6cpu` and taken again
+under its own name. Nothing was deleted. The scripts look checkpoints up
+by exact name, so they now use the 8-CPU ones. A boot from the new
+`usermode` checkpoint reported 8 logical processors in the guest.
+
 ## Releases built in this step
 
 | Version | Change | Status |
@@ -506,6 +515,12 @@ A separate agent ran these tests, driven over SSH by the helper scripts in
 - **The read and power-cut phases** with the 5 GB fixture.
 - **Repair, upgrade and uninstall:** blocked by the hung export, and no
   ARM64 upgrade package exists.
+- **The kernel import/export loop with 1.0.12 (patch 0029):** prepared.
+  `host-kernel-suite.ps1` now takes `$Version` and copies that MSI, the
+  certificate and `guest-installer.ps1` from the stage folder into the
+  guest after restoring `testsigning-ready`. At 2026-11-06 ~23:30 the ARM PC
+  did not answer (`ssh: connect to host 192.168.195.59 port 22: Connection
+  timed out`), so the run has not happened yet.
 
 ## Sporadic `zpool.exe` crashes (Release userland, open)
 
