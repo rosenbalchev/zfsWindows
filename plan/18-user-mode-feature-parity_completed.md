@@ -214,6 +214,33 @@ The `admin` phase ran the kernel suite's own guest stages
   - scrub clean; `zdb -bcc`: no leaks.
 - **Kernel pool** of the same run: the same checks pass.
 
+**Compression and deduplication in user mode** (follow-up run
+`-Phase setup,admin` on 1.0.7, new `datafeatures` stage, 54/54 checks):
+- One dataset per compression setting, each with the same corpus (text,
+  random data, zeros):
+
+  | Setting | `compressratio` |
+  | --- | --- |
+  | off | 1.00× |
+  | lz4 | 2.65× |
+  | gzip-9 | 2.81× |
+  | zstd | 2.98× |
+  | zstd-19 | 2.98× |
+  | lzjb | 2.80× |
+  | zle | 1.01× (only zero runs) |
+
+- Deduplication:
+  - `zwin/dd` (dedup=on): four identical 16 MiB writes take the pool's
+    `dedupratio` from 1.00 to 4.00;
+  - after deleting three of them it is 1.01, and the survivor is intact;
+  - `zwin/ddz` (dedup and zstd) compresses as well.
+- Every file of every dataset is identical after an unmount and mount.
+- **Linux (`validate-datafeatures.py 192.168.195.61`):**
+  - the same compression and dedup settings, and the same ratios;
+  - all 25 files byte-identical;
+  - DDT: 164 entries;
+  - scrub clean, no leaks.
+
 **Remaining:**
 - User-mode `zfs rollback` of a mounted dataset (implemented: suspend,
   rollback, resume) is not exercised by the suite.

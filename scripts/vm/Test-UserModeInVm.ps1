@@ -367,6 +367,9 @@ if ($Phase -contains "admin") {
     $t.Restart(); $fs = Guest "filesystem"; $timings.filesystem = [math]::Round($t.Elapsed.TotalSeconds, 1)
     Record "admin-filesystem" $fs
     Expect "admin: ACLs, streams and .zfs" (@($fs.failed).Count -eq 0) ($fs.failed -join ', ')
+    $t.Restart(); $df = Guest "datafeatures"; $timings.datafeatures = [math]::Round($t.Elapsed.TotalSeconds, 1)
+    Record "admin-datafeatures" $df
+    Expect "admin: compression algorithms and deduplication" (@($df.failed).Count -eq 0) ($df.failed -join ', ')
 
     # Pools and mounts come back when the service restarts (as at boot).
     $t.Restart()
@@ -418,7 +421,7 @@ if ($Phase -contains "admin") {
     $local = Join-Path $repo "TestVolumes\vm\crossedition-usermode"
     New-Item -ItemType Directory -Force $local | Out-Null
     $s = Open-Guest
-    foreach ($f in "images\a.img", "images\d.img", "fs-expected.json", "manifest.json") { Copy-Item -FromSession $s "C:\zfswin\installer\$f" (Join-Path $local (Split-Path -Leaf $f)) -Force }
+    foreach ($f in "images\a.img", "images\d.img", "fs-expected.json", "manifest.json", "datafeatures.json") { Copy-Item -FromSession $s "C:\zfswin\installer\$f" (Join-Path $local (Split-Path -Leaf $f)) -Force }
     $dumps = Invoke-Command $s { @(Get-ChildItem C:\zfswin\dumps -ErrorAction SilentlyContinue | ForEach-Object Name) }
     Remove-PSSession $s
     Record "admin" @{ timings = $timings; dumps = $dumps; seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1) }
