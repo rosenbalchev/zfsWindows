@@ -25,6 +25,10 @@ set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -D_KERNEL")
 # this overlay has run, and a clean Windows has no debug CRT DLLs.
 string(APPEND CMAKE_C_FLAGS_DEBUG " /MTd")
 string(APPEND CMAKE_C_FLAGS_RELEASE " /MT")
+# Release keeps full symbols (the packages ship them for crash analysis);
+# /OPT:REF,ICF keep the optimized image as small as without /DEBUG.
+string(APPEND CMAKE_C_FLAGS_RELEASE " /Zi")
+string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE " /DEBUG /OPT:REF /OPT:ICF")
 
 add_subdirectory("${ZFSWINDOWS_ROOT}/src/native/ZfsUserMode"
     "${CMAKE_BINARY_DIR}/zfs-user-mode")

@@ -1,0 +1,339 @@
+﻿{
+    "bomFormat":  "CycloneDX",
+    "specVersion":  "1.5",
+    "version":  1,
+    "metadata":  {
+                     "timestamp":  "2026-11-06T14:22:54Z",
+                     "component":  {
+                                       "type":  "application",
+                                       "name":  "OpenZFS for Windows",
+                                       "version":  "1.0.8"
+                                   }
+                 },
+    "components":  [
+                       {
+                           "type":  "application",
+                           "name":  "kstat.exe",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "760131863d5a2a37d0c419dda366093b321c5243432abda4b401b30de3a64314"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "zdb.exe",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "fdaeba1b8ae20858f92a7d8c0e670595521a6b383815931e59220bb107aea92b"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "zfs.exe",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "a2821fab6bc8416f3531ca5d8746e4535f36a1579cd2b7dbe724340f1c266509"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "zfsinstaller.exe",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "24efc42db55dd342fc951bc54e0be85febe754ca143d1fa33e0e13ccc6bf860e"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "zfswin.exe",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "7da0722c0e2c44ab8a2aae63fe9f17b12a6ff3e11b9ebc06453bb581bba46cfc"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "MIT"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "ZfsWinBroker.exe",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "682e6b389471303c85441368616b21d5a38da329c3899ec3df9552410930e3e0"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "MIT"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "ZfsWinGui.exe",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "81824c92c22261d484a9da68a3e1a5f9bddba45a3f9293eb87fecf0bda36e3fd"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "MIT"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "zpool.exe",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "07bed5cfd65fa588ded90607880a4a01ed2cc14ebc0fd3172b89f9f75321928d"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "file",
+                           "name":  "OpenZFS.cat",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "666afab788bbe0d0f89a5eb7f401c4d0482e3baf6116095a70fdd97e05ccca0c"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "file",
+                           "name":  "OpenZFS.inf",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "3e5dbb6a9181a76091657c580ba609d9aae4da41920846382791df6b180dbb1f"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "OpenZFS.sys",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "708fbe686ecf1c846178500d4a95655de90c2d57238232b61a36c1bbc5b6a757"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "file",
+                           "name":  "OpenZVOL.cat",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "de8c6c4bd05ccc86d2ab15a8d1cffe3f4e2b2a92e7af85f20faafc6a3f1b6989"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "file",
+                           "name":  "OpenZVOL.inf",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "74c3813123ff5a5f89d9d97bd03ebfdf7de530af0db285c104ba873a9c40d546"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "application",
+                           "name":  "OpenZVOL.sys",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "9abf2fb5fc7d4540bb43ea9130993e054343a70c6fcb9420b189589e073ba6b0"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "file",
+                           "name":  "ZfsWin.psd1",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "ac5d63110a9db053c5c353c54f8985ff28723593ef9735962c16aa98606a322b"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "MIT"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "file",
+                           "name":  "ZfsWin.psm1",
+                           "version":  "1.0.8",
+                           "hashes":  [
+                                          {
+                                              "alg":  "SHA-256",
+                                              "content":  "70012dd5b1825f974bd41fb216885f6020ffe10411cf0833a08b3393bc41019f"
+                                          }
+                                      ],
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "MIT"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "OpenZFS on Windows",
+                           "version":  "zfswin-2.4.1rc17+patches",
+                           "purl":  "pkg:github/openzfsonwindows/openzfs@7704679572413a8f4851be80d1687ff6df92065e",
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "CDDL-1.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "OpenSSL libcrypto (static, in zpool/zfs/zdb)",
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "Apache-2.0"
+                                                            }
+                                            }
+                                        ]
+                       },
+                       {
+                           "type":  "framework",
+                           "name":  ".NET NativeAOT runtime (in zfswin/ZfsWinBroker)",
+                           "version":  "10.0",
+                           "licenses":  [
+                                            {
+                                                "license":  {
+                                                                "id":  "MIT"
+                                                            }
+                                            }
+                                        ]
+                       }
+                   ]
+}

@@ -57,11 +57,13 @@ copies files and installs no driver.
 ```powershell
 git submodule update --init --recursive
 powershell -ExecutionPolicy Bypass -File scripts\fetch-winfsp.ps1
-powershell -ExecutionPolicy Bypass -File scripts\build-driver.ps1        # first time, or after driver changes
-powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1       # increments the build number
+powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 -BuildDriver   # increments the build number
 ```
 
-`build-release.ps1` writes `downloads\1.0\`:
+`build-release.ps1` builds every package twice, Release and Debug, and
+writes two self-contained folders.
+
+`downloads\1.0\release\` (optimized native code):
 
 ```text
 OpenZFS-for-Windows-1.0.N-x64-testsigned.msi   kernel-driver variant
@@ -69,14 +71,36 @@ OpenZFS-for-Windows-1.0.N-x64-usermode.msi     user-mode (WinFsp) variant
 OpenZFS-for-Windows-1.0.N-x64.cdx.json         CycloneDX SBOM
 OpenZFS-for-Windows-1.0.N-arm64-*.msi, .cdx.json   the same for ARM64 (cross-built, untested)
 zfswindows-test.cer                            the test-signing certificate
-VERSION.json                                   version, commit, OpenZFS base
+VERSION.json                                   version, configuration, commit, OpenZFS base
 SHA256SUMS                                     checksums of the above
 ```
 
+`downloads\1.0\debug\` holds the same files, but built unoptimized with full
+debug checks. Their names end in `-debug`, such as
+`OpenZFS-for-Windows-1.0.N-x64-usermode-debug.msi`.
+
+The native trees are built per configuration:
+
+| Configuration | Driver build | Driver package | User-mode engine |
+| --- | --- | --- | --- |
+| Debug | `out\openzfs-driver-debug` | `out\driver-package` | `out\openzfs-write-debug` |
+| Release | `out\openzfs-driver-release` | `out\driver-package-release` | `out\openzfs-write-release` |
+
+The .NET tools are Release builds in both.
+
+The user-mode engine keeps OpenZFS's own consistency checks (`ZFS_DEBUG`) in
+Release too, as upstream libzpool always does. Only the compiler
+optimization differs.
+
 Options:
 
-- `-BuildDriver` rebuilds the driver first.
+- `-BuildDriver` rebuilds the driver trees first.
 - `-NoIncrement` rebuilds without changing the version.
+- `-Configuration Release` or `-Configuration Debug` builds only one; the
+  default is both.
+- `build-installer.ps1 -Configuration` and the VM suites'
+  `-Configuration` (the default is Debug) select the build to package or
+  test.
 
 ## ARM64
 

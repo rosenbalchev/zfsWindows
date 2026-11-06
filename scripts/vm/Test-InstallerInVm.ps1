@@ -26,7 +26,11 @@ the end if any check failed.
 param(
     [string]$Name = "zfsTest",
     [string]$Msi = "",
-    [string]$UpgradeMsi = ""
+    [string]$UpgradeMsi = "",
+    # Which build of out\release\<version> to test (...-testsigned-debug.msi
+    # or ...-testsigned.msi); the upgrade package must be the same build.
+    [ValidateSet("Debug", "Release")]
+    [string]$Configuration = "Debug"
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,8 +39,9 @@ $state = Get-Content (Join-Path $repo "TestVolumes\vm\$Name.json") -Raw | Conver
 $credential = New-Object PSCredential ($state.user, (ConvertTo-SecureString $state.password -AsPlainText -Force))
 $results = Join-Path $repo "TestVolumes\vm\results.jsonl"
 $version = & (Join-Path $repo "scripts\Get-ZfsWinVersion.ps1")
-if (-not $Msi) { $Msi = Join-Path $repo "out\release\$version\OpenZFS-for-Windows-$version-x64-testsigned.msi" }
-if (-not $UpgradeMsi) { $UpgradeMsi = Get-ChildItem (Join-Path $repo "out\release") -Recurse -Filter "OpenZFS-for-Windows-*-x64-testsigned.msi" | Where-Object FullName -ne $Msi | Sort-Object LastWriteTime | Select-Object -Last 1 -ExpandProperty FullName }
+$tag = if ($Configuration -eq "Debug") { "-debug" } else { "" }
+if (-not $Msi) { $Msi = Join-Path $repo "out\release\$version\OpenZFS-for-Windows-$version-x64-testsigned$tag.msi" }
+if (-not $UpgradeMsi) { $UpgradeMsi = Get-ChildItem (Join-Path $repo "out\release") -Recurse -Filter "OpenZFS-for-Windows-*-x64-testsigned$tag.msi" | Where-Object FullName -ne $Msi | Sort-Object LastWriteTime | Select-Object -Last 1 -ExpandProperty FullName }
 if (-not $UpgradeMsi) { throw "No upgrade package: build one with build-installer.ps1 -Version <higher>." }
 $guestMsi = "C:\zfswin\installer\" + (Split-Path -Leaf $Msi)
 $guestUpgradeMsi = "C:\zfswin\installer\" + (Split-Path -Leaf $UpgradeMsi)
@@ -269,7 +274,7 @@ Expect "upgrade exported the pool" (($r.setup -join ' ') -match 'Exported zwin')
 Restart-Guest
 $upgraded = Guest "state"
 Record "installer-state-upgraded" $upgraded
-$newVersion = (Split-Path -Leaf $UpgradeMsi) -replace '^OpenZFS-for-Windows-', '' -replace '-x64-testsigned\.msi$', ''
+$newVersion = (Split-Path -Leaf $UpgradeMsi) -replace '^OpenZFS-for-Windows-', '' -replace '-x64-testsigned(-debug)?\.msi$', ''
 Expect "upgraded version" ($upgraded.arp.DisplayVersion -eq $newVersion -and @($upgraded.arp).Count -eq 1) "$($upgraded.arp.DisplayVersion)"
 Expect "upgraded driver and broker run" ($upgraded.services.OpenZFS.state -eq 'Running' -and $upgraded.services.ZfsWinBroker.state -eq 'Running' -and @($upgraded.driverPackages).Count -eq 2)
 $imp = Guest "import"

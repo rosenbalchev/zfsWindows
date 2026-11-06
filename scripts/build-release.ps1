@@ -25,11 +25,18 @@ param(
     # Both by default.  ARM64 is cross-compiled and statically checked
     # (machine type, signatures) but cannot be run on an x64 build host.
     [ValidateSet("x64", "arm64")]
-    [string[]]$Architecture = @("x64", "arm64")
+    [string[]]$Architecture = @("x64", "arm64"),
+    # Both by default, published to downloads\<series>\release and \debug.
+    # Release: optimized native code (plain file names); Debug: unoptimized
+    # with full checks (file names end in -debug).  The .NET tools are
+    # Release builds in both.
+    [ValidateSet("Debug", "Release")]
+    [string[]]$Configuration = @("Release", "Debug")
 )
 
 $ErrorActionPreference = "Stop"
 $Architecture = @($Architecture | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$Configuration = @($Configuration | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $root = Split-Path -Parent $PSScriptRoot
 $version = if ($NoIncrement) { & (Join-Path $PSScriptRoot "Get-ZfsWinVersion.ps1") } else { & (Join-Path $PSScriptRoot "Get-ZfsWinVersion.ps1") -Next }
 $series = ($version -split '\.')[0..1] -join '.'
@@ -51,41 +58,51 @@ function Run($script, [string[]]$arguments) {
 }
 
 Step "administration suite" { Run "build-admin.ps1" @("-Architecture", ($Architecture -join ',')) }
-foreach ($arch in $Architecture) {
-    if ($BuildDriver) { Step "driver ($arch)" { Run "build-driver.ps1" @("-Architecture", $arch) } }
-    Step "user-mode file system ($arch)" { Run "build-write-core.ps1" @("-Targets", "zfs-write-core,zfswin-um", "-Architecture", $arch) }
-    Step "kernel-driver MSI ($arch)" { Run "build-installer.ps1" @("-Architecture", $arch, "-Variant", "kernel") }
-    Step "user-mode MSI ($arch)" { Run "build-installer.ps1" @("-Architecture", $arch, "-Variant", "usermode") }
+foreach ($config in $Configuration) {
+    foreach ($arch in $Architecture) {
+        if ($BuildDriver) { Step "driver ($arch, $config)" { Run "build-driver.ps1" @("-Architecture", $arch, "-Configuration", $config) } }
+        Step "user-mode file system ($arch, $config)" { Run "build-write-core.ps1" @("-Targets", "zfs-write-core,zfswin-um", "-Architecture", $arch, "-Configuration", $config) }
+        Step "kernel-driver MSI ($arch, $config)" { Run "build-installer.ps1" @("-Architecture", $arch, "-Variant", "kernel", "-Configuration", $config) }
+        Step "user-mode MSI ($arch, $config)" { Run "build-installer.ps1" @("-Architecture", $arch, "-Variant", "usermode", "-Configuration", $config) }
+    }
 }
 
-# --- publish ---------------------------------------------------------------
+# --- publish: downloads\<series>\release and \debug, each self-contained ----
 $release = Join-Path $root "out\release\$version"
-$downloads = Join-Path $root "downloads\$series"
-New-Item -ItemType Directory -Force $downloads | Out-Null
-Get-ChildItem $downloads -File | Remove-Item
-$artifacts = @("zfswindows-test.cer")
-foreach ($arch in $Architecture) {
-    $artifacts += "OpenZFS-for-Windows-$version-$arch-testsigned.msi", "OpenZFS-for-Windows-$version-$arch-usermode.msi", "OpenZFS-for-Windows-$version-$arch.cdx.json"
-}
-foreach ($a in $artifacts) {
-    $source = Join-Path $release $a
-    if (-not (Test-Path $source)) { throw "Missing release artifact: $source" }
-    Copy-Item $source $downloads
-}
+$series = Join-Path $root "downloads\$series"
+New-Item -ItemType Directory -Force $series | Out-Null
+# The flat layout of releases before 1.0.8 is replaced by the two folders.
+Get-ChildItem $series -File | Remove-Item
 $dirty = [bool](& git -C $root status --porcelain --untracked-files=no -- . ':!third_party' ':!OpenZFS')
-[ordered]@{
-    product = "OpenZFS for Windows"; version = $version; architectures = $Architecture
-    built = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    builtFromCommit = (& git -C $root rev-parse HEAD).Trim(); workingTreeModified = $dirty
-    openzfs = "zfs-2.4.4 (OpenZFS submodule); openzfs-windows zfswin-2.4.1rc17 + patches/openzfs-windows"
-    variants = [ordered]@{
-        kernel = "OpenZFS-for-Windows-$version-<arch>-testsigned.msi: kernel driver, test-signed (needs test signing and Secure Boot off)"
-        usermode = "OpenZFS-for-Windows-$version-<arch>-usermode.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
+foreach ($config in $Configuration) {
+    $tag = if ($config -eq "Debug") { "-debug" } else { "" }
+    $downloads = Join-Path $series $config.ToLowerInvariant()
+    New-Item -ItemType Directory -Force $downloads | Out-Null
+    Get-ChildItem $downloads -File | Remove-Item
+    $artifacts = @("zfswindows-test.cer")
+    foreach ($arch in $Architecture) {
+        $artifacts += "OpenZFS-for-Windows-$version-$arch-testsigned$tag.msi", "OpenZFS-for-Windows-$version-$arch-usermode$tag.msi", "OpenZFS-for-Windows-$version-$arch$tag.cdx.json"
     }
-    tested = "x64: Windows 11 24H2 VM suites (scripts/vm) and upstream OpenZFS validation on Linux. arm64: built and statically verified only (PE machine type, signatures); not run."
-} | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $downloads "VERSION.json")
-Get-ChildItem $downloads -File | Where-Object Name -ne "SHA256SUMS" | Sort-Object Name | ForEach-Object {
-    "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
-} | Set-Content -Encoding ascii (Join-Path $downloads "SHA256SUMS")
-Get-ChildItem $downloads -File | Select-Object Name, @{ n = "MB"; e = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize | Out-String | Write-Host
-Write-Output $downloads
+    foreach ($a in $artifacts) {
+        $source = Join-Path $release $a
+        if (-not (Test-Path $source)) { throw "Missing release artifact: $source" }
+        Copy-Item $source $downloads
+    }
+    [ordered]@{
+        product = "OpenZFS for Windows"; version = $version; configuration = $config; architectures = $Architecture
+        built = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        builtFromCommit = (& git -C $root rev-parse HEAD).Trim(); workingTreeModified = $dirty
+        openzfs = "zfs-2.4.4 (OpenZFS submodule); openzfs-windows zfswin-2.4.1rc17 + patches/openzfs-windows"
+        variants = [ordered]@{
+            kernel = "OpenZFS-for-Windows-$version-<arch>-testsigned$tag.msi: kernel driver, test-signed (needs test signing and Secure Boot off)"
+            usermode = "OpenZFS-for-Windows-$version-<arch>-usermode$tag.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
+        }
+        build = $(if ($config -eq "Release") { "optimized native code (/O2); OpenZFS keeps its own consistency checks (ZFS_DEBUG) in the user-mode engine, as upstream libzpool does" } else { "unoptimized native code with full debug checks; larger and slower, for diagnosing problems" })
+        tested = "x64 Debug: Windows 11 24H2 VM suites (scripts/vm) and upstream OpenZFS validation on Linux. x64 Release: see the README. arm64: built and statically verified only (PE machine type, signatures); not run."
+    } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $downloads "VERSION.json")
+    Get-ChildItem $downloads -File | Where-Object Name -ne "SHA256SUMS" | Sort-Object Name | ForEach-Object {
+        "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+    } | Set-Content -Encoding ascii (Join-Path $downloads "SHA256SUMS")
+    Get-ChildItem $downloads -File | Select-Object Name, @{ n = "MB"; e = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize | Out-String | Write-Host
+    Write-Output $downloads
+}

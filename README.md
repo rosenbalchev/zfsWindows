@@ -1,9 +1,9 @@
 # ZFS for Windows
 
 This repository contains an independent Windows implementation around the
-upstream OpenZFS source in [`OpenZFS/`](OpenZFS/). That directory is a git
-submodule pinned to upstream tag `zfs-2.4.4` (branch `zfs-2.4-release`,
-commit `71a9f957`). It is kept unchanged and is treated as the on-disk format
+upstream OpenZFS source in `OpenZFS/`. That directory is a git submodule
+pinned to upstream tag `zfs-2.4.4` (branch `zfs-2.4-release`, commit
+[`71a9f957`](https://github.com/openzfs/zfs/tree/71a9f9578616a90c3c14bb59629fb4d31bfd68d1)). It is kept unchanged and is treated as the on-disk format
 and algorithm reference. `third_party/openzfs-windows` is the pinned
 OpenZFS-on-Windows port (`zfswin-2.4.1rc17`) used for the write core and the
 kernel driver. Clone with `git clone --recurse-submodules`, or run
@@ -12,9 +12,22 @@ nested submodules are not needed.
 
 ## Download and install (1.0)
 
-[`downloads/1.0/`](downloads/1.0/) holds the current build, version `1.0.N`.
-The build number goes up with every release build. There are two packages,
-and you install one of them:
+> **Latest stable: 1.0.8** (2026-11-06), in
+> [`downloads/1.0/release/`](downloads/1.0/release/). The engine sources are
+> the same as 1.0.7, which passed every VM suite and the Linux validation
+> (plan step 18). Its Debug build is in
+> [`downloads/1.0/debug/`](downloads/1.0/debug/).
+
+Versions are `1.0.N`; the build number goes up with every release build.
+Each version comes in two builds:
+
+| Folder | Build | For |
+| --- | --- | --- |
+| [`downloads/1.0/release/`](downloads/1.0/release/) | **Release**: optimized native code; file names as below | normal use |
+| [`downloads/1.0/debug/`](downloads/1.0/debug/) | **Debug**: unoptimized native code with full debug checks; file names end in `-debug` | diagnosing problems; this is the build the VM test suites ran on |
+
+Each folder has its own `SHA256SUMS`, `VERSION.json` and the test
+certificate. There are two packages, and you install one of them:
 
 | Package | What it is | Requirements |
 | --- | --- | --- |
@@ -41,9 +54,12 @@ tool in the Start menu (`ZfsWinGui.exe`, needs the .NET 10 Desktop Runtime).
     (SLOG).
 - **User-mode edition, in addition:** its service and mounts.
 
-All packages are Debug builds.
-- **x64:** verified in disposable Windows 11 24H2 x64 VMs and against
-  upstream OpenZFS on Linux (plan steps 12–15).
+What has been tested:
+- **x64 Debug:** verified in disposable Windows 11 24H2 x64 VMs and against
+  upstream OpenZFS on Linux (plan steps 12–18).
+- **x64 Release:** built from the same sources with optimization (since
+  1.0.8). It has not been through the VM suites yet; use the Debug build if
+  you need the tested one.
 - **ARM64:** cross-compiled and statically checked. Every binary is ARM64 and
   correctly signed, and the MSIs contain what they should. They have
   **not** been installed or run: this project has no ARM64 test machine yet.

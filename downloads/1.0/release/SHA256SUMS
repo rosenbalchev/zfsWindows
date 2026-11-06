@@ -1,0 +1,8 @@
+0d19b859b1b5d28f63825dbb739564482f30fc183c8883dea7412bb0427e071e  OpenZFS-for-Windows-1.0.8-arm64.cdx.json
+52fa1e62be2abf58d3f62958b45365bd15ba289a3778e94d0580a19e8f1ab73b  OpenZFS-for-Windows-1.0.8-arm64-testsigned.msi
+1b4c2c0ebc3619ab598267b080e71159496feedf13e9cd327f43ef08ddd4e7eb  OpenZFS-for-Windows-1.0.8-arm64-usermode.msi
+5e08bc0d5e9e04985a3e0b91323a06a89b30cd39adc6853050b0641e5e7da104  OpenZFS-for-Windows-1.0.8-x64.cdx.json
+877c0a13d5e679e14738d8778da44d5a29080a1a88d040e480f7266221b42fd7  OpenZFS-for-Windows-1.0.8-x64-testsigned.msi
+e2ae926f0f7da6b62eeeba41903ad4fe84927a1660e2f9776b5839b1a41a2b59  OpenZFS-for-Windows-1.0.8-x64-usermode.msi
+bcf7475b6afea66a7c46c92e50abbcf1e822c8673f9c802deb0cd6a9e49dd582  VERSION.json
+592d5cd9d3539881217161e844034feedab184059c2a418db737e817b470ca6c  zfswindows-test.cer
