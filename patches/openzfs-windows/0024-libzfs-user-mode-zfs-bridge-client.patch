@@ -1,0 +1,396 @@
+diff --git a/lib/libspl/include/os/windows/sys/zfs_bridge.h b/lib/libspl/include/os/windows/sys/zfs_bridge.h
+new file mode 100644
+index 000000000..c991e32bb
+--- /dev/null
++++ b/lib/libspl/include/os/windows/sys/zfs_bridge.h
+@@ -0,0 +1,79 @@
++/*
++ * CDDL HEADER START
++ *
++ * The contents of this file are subject to the terms of the
++ * Common Development and Distribution License (the "License").
++ * You may not use this file except in compliance with the License.
++ *
++ * CDDL HEADER END
++ */
++
++/*
++ * The user-mode ZFS bridge.
++ *
++ * Without the kernel driver (no \\.\ZFS), the ZFS engine can run inside a
++ * user-mode service instead (OpenZFS for Windows, user-mode edition).  It
++ * answers the same ZFS ioctls on a local named pipe, so zpool.exe, zfs.exe
++ * and everything built on libzfs work unchanged against either.
++ *
++ * One request per connection.  A request is a header followed by the
++ * sections whose lengths it gives: the zfs_cmd_t, the src and conf
++ * nvlists and the zc_history input string.  The response is a header
++ * followed by the zfs_cmd_t, the zc_history output (POOL_GET_HISTORY) and
++ * the zc_nvlist_dst contents, never longer than the capacities the
++ * request named.  Buffer pointers inside zfs_cmd_t are the client's and
++ * are only carried; the server substitutes its own.
++ */
++
++#ifndef _SPL_ZFS_BRIDGE_H
++#define	_SPL_ZFS_BRIDGE_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define	ZFS_BRIDGE_PIPE		"\\\\.\\pipe\\OpenZFS-UserMode"
++#define	ZFS_BRIDGE_PIPE_W	L"\\\\.\\pipe\\OpenZFS-UserMode"
++#define	ZFS_BRIDGE_MAGIC	0x315a4252U	/* "RBZ1" */
++#define	ZFS_BRIDGE_MAX_SECTION	(256ULL << 20)
++
++#define	ZFS_BRIDGE_OP_IOCTL	1	/* zb_request: ZFS_IOC_* */
++/* dst: "dataset\tmountpoint\tflags\n"..., flags 1 read-only, 2 noatime */
++#define	ZFS_BRIDGE_OP_MNTTAB	2
++
++/* Section indexes. */
++#define	ZFS_BRIDGE_CMD		0
++#define	ZFS_BRIDGE_SRC		1	/* request only */
++#define	ZFS_BRIDGE_CONF		2	/* request only */
++#define	ZFS_BRIDGE_HISTORY	3	/* request: input; response: output */
++#define	ZFS_BRIDGE_DST		4	/* response only */
++#define	ZFS_BRIDGE_SECTIONS	5
++
++typedef struct zfs_bridge_hdr {
++	uint32_t	zb_magic;
++	uint32_t	zb_op;
++	uint64_t	zb_request;
++	int64_t		zb_error;	/* response: errno, 0 for success */
++	uint64_t	zb_len[ZFS_BRIDGE_SECTIONS];
++	uint64_t	zb_cap[ZFS_BRIDGE_SECTIONS];	/* request: room */
++} zfs_bridge_hdr_t;
++
++/*
++ * Client side (libspl): one round trip.  sect[i] holds zb_len[i] bytes to
++ * send; on return it holds the response's zb_len[i] bytes (at most
++ * zb_cap[i], as the request said).  Returns 0, or the transport errno
++ * (ENXIO when no service listens).
++ */
++extern int zfs_bridge_call(zfs_bridge_hdr_t *hdr,
++    void *sect[ZFS_BRIDGE_SECTIONS]);
++
++/* Whether an open(ZFS_DEV) descriptor is the bridge rather than \\.\ZFS. */
++extern int zfs_bridge_is_fd(int fd);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* _SPL_ZFS_BRIDGE_H */
+diff --git a/lib/libspl/os/windows/getmntany.c b/lib/libspl/os/windows/getmntany.c
+index dddbc1cb5..6d7d7ac3d 100644
+--- a/lib/libspl/os/windows/getmntany.c
++++ b/lib/libspl/os/windows/getmntany.c
+@@ -46,6 +46,8 @@
+ #endif
+ 
+ #include <sys/fs/zfs.h>
++#include <sys/zfs_bridge.h>
++#include <stdlib.h>
+ 
+ #include <windows.h>
+ #include <winternl.h>
+@@ -332,6 +334,69 @@ backslash2slash(char *s)
+ 	}
+ }
+ 
++/*
++ * Datasets mounted by the user-mode ZFS bridge (sys/zfs_bridge.h).  Their
++ * volumes belong to the bridge's filesystem, not to the ZFS driver, so the
++ * volume walk below cannot recognize them.  Appends to buf like that walk
++ * (or only counts, with buf NULL); 0 when no bridge is running.
++ */
++static int
++bridge_getfsstat(struct statfs *buf, int bufsize)
++{
++	zfs_bridge_hdr_t hdr = { 0 };
++	void *sect[ZFS_BRIDGE_SECTIONS] = { 0 };
++	char *text, *line, *next, *tab1, *tab2;
++	int count = 0;
++
++	if ((text = calloc(1, 65536)) == NULL)
++		return (0);
++	hdr.zb_op = ZFS_BRIDGE_OP_MNTTAB;
++	hdr.zb_cap[ZFS_BRIDGE_DST] = 65535;
++	sect[ZFS_BRIDGE_DST] = text;
++	if (zfs_bridge_call(&hdr, sect) != 0 || hdr.zb_error != 0) {
++		free(text);
++		return (0);
++	}
++	for (line = text; *line != '\0'; line = next) {
++		if ((next = strchr(line, '\n')) == NULL)
++			next = line + strlen(line);
++		else
++			*next++ = '\0';
++		if ((tab1 = strchr(line, '\t')) == NULL ||
++		    (tab2 = strchr(tab1 + 1, '\t')) == NULL)
++			continue;
++		*tab1++ = '\0';
++		*tab2++ = '\0';
++		if (buf != NULL) {
++			if (bufsize < (int)sizeof (struct statfs))
++				break;
++			memset(buf, 0, sizeof (*buf));
++			strlcpy(buf->f_mntfromname, line,
++			    sizeof (buf->f_mntfromname));
++			strlcpy(buf->f_fstypename, MNTTYPE_ZFS,
++			    sizeof (buf->f_fstypename));
++			/* "E:" is reported as "E:\", as the volume walk does */
++			if (strlen(tab1) == 2 && tab1[1] == ':')
++				snprintf(buf->f_mntonname,
++				    sizeof (buf->f_mntonname), "%s\\", tab1);
++			else
++				strlcpy(buf->f_mntonname, tab1,
++				    sizeof (buf->f_mntonname));
++			/* 1: read-only, 2: noatime (zfs get shows these) */
++			if (atoi(tab2) & 1)
++				buf->f_flags |= MNT_RDONLY;
++			if (atoi(tab2) & 2)
++				buf->f_flags |= MNT_NOATIME;
++			backslash2slash(buf->f_mntonname);
++			buf++;
++			bufsize -= sizeof (*buf);
++		}
++		count++;
++	}
++	free(text);
++	return (count);
++}
++
+ int
+ getfsstat(struct statfs *buf, int bufsize, int flags)
+ {
+@@ -529,7 +594,7 @@ getfsstat(struct statfs *buf, int bufsize, int flags)
+ 
+ 	FindVolumeClose(vh);
+ 	vh = INVALID_HANDLE_VALUE;
+-	return (count);
++	return (count + bridge_getfsstat(buf, bufsize));
+ }
+ 
+ 
+diff --git a/lib/libspl/os/windows/posix.c b/lib/libspl/os/windows/posix.c
+index 003f28d75..8ac223e74 100644
+--- a/lib/libspl/os/windows/posix.c
++++ b/lib/libspl/os/windows/posix.c
+@@ -47,6 +47,7 @@
+ #include <wfunopen.h>
+ #include <pwd.h>
+ #include <grp.h>
++#include <sys/zfs_bridge.h>
+ 
+ /* Magic instruction to compiler to add library */
+ #pragma comment(lib, "ws2_32.lib")
+@@ -1131,6 +1132,83 @@ wosix_fsync(int fd)
+ 	return (0);
+ }
+ 
++/* A connection to the user-mode ZFS bridge, waiting briefly if busy. */
++static HANDLE
++zfs_bridge_connect(void)
++{
++	HANDLE h;
++	int tries;
++
++	for (tries = 0; tries < 50; tries++) {
++		h = CreateFileA(ZFS_BRIDGE_PIPE, GENERIC_READ | GENERIC_WRITE,
++		    0, NULL, OPEN_EXISTING, 0, NULL);
++		if (h != INVALID_HANDLE_VALUE)
++			return (h);
++		if (GetLastError() != ERROR_PIPE_BUSY)
++			return (INVALID_HANDLE_VALUE);
++		(void) WaitNamedPipeA(ZFS_BRIDGE_PIPE, 200);
++	}
++	return (INVALID_HANDLE_VALUE);
++}
++
++int
++zfs_bridge_is_fd(int fd)
++{
++	return (GetFileType(ITOH(fd)) == FILE_TYPE_PIPE);
++}
++
++static int
++zfs_bridge_io(HANDLE h, void *buf, uint64_t len, int write)
++{
++	char *p = buf;
++	DWORD n;
++
++	while (len > 0) {
++		DWORD chunk = (DWORD)(len > (1U << 30) ? (1U << 30) : len);
++		BOOL ok = write ? WriteFile(h, p, chunk, &n, NULL) :
++		    ReadFile(h, p, chunk, &n, NULL);
++
++		if (!ok || n == 0)
++			return (EPIPE);
++		p += n;
++		len -= n;
++	}
++	return (0);
++}
++
++int
++zfs_bridge_call(zfs_bridge_hdr_t *hdr, void *sect[ZFS_BRIDGE_SECTIONS])
++{
++	zfs_bridge_hdr_t resp;
++	HANDLE h;
++	int i, error = 0;
++
++	if ((h = zfs_bridge_connect()) == INVALID_HANDLE_VALUE)
++		return (ENXIO);
++	hdr->zb_magic = ZFS_BRIDGE_MAGIC;
++	hdr->zb_error = 0;
++	error = zfs_bridge_io(h, hdr, sizeof (*hdr), 1);
++	for (i = 0; error == 0 && i < ZFS_BRIDGE_SECTIONS; i++)
++		if (hdr->zb_len[i] > 0)
++			error = zfs_bridge_io(h, sect[i], hdr->zb_len[i], 1);
++	if (error == 0)
++		error = zfs_bridge_io(h, &resp, sizeof (resp), 0);
++	if (error == 0 && resp.zb_magic != ZFS_BRIDGE_MAGIC)
++		error = EPROTO;
++	for (i = 0; error == 0 && i < ZFS_BRIDGE_SECTIONS; i++) {
++		if (resp.zb_len[i] == 0)
++			continue;
++		if (resp.zb_len[i] > hdr->zb_cap[i] || sect[i] == NULL)
++			error = EPROTO;
++		else
++			error = zfs_bridge_io(h, sect[i], resp.zb_len[i], 0);
++	}
++	CloseHandle(h);
++	if (error == 0)
++		*hdr = resp;
++	return (error);
++}
++
+ int
+ wosix_open(const char *inpath, int oflag, ...)
+ {
+@@ -1302,6 +1380,22 @@ wosix_open(const char *inpath, int oflag, ...)
+ 		    FILE_ATTRIBUTE_NORMAL, NULL);
+ 	}
+ 
++	/*
++	 * No ZFS driver: the user-mode engine answers the same ioctls on a
++	 * named pipe (sys/zfs_bridge.h).  This connection only identifies the
++	 * descriptor; every ioctl makes its own.
++	 */
++	if (h == INVALID_HANDLE_VALUE && strcmp(inpath, "\\\\.\\ZFS") == 0 &&
++	    (GetLastError() == ERROR_FILE_NOT_FOUND ||
++	    GetLastError() == ERROR_PATH_NOT_FOUND)) {
++		HANDLE p = zfs_bridge_connect();
++
++		if (p != INVALID_HANDLE_VALUE)
++			h = p;
++		else
++			SetLastError(ERROR_FILE_NOT_FOUND);
++	}
++
+ 	// If we failed, translate error to posix
+ 	if (h == INVALID_HANDLE_VALUE) {
+ 		errno = EINVAL;
+diff --git a/lib/libzfs/os/windows/libzfs_util_os.c b/lib/libzfs/os/windows/libzfs_util_os.c
+index a39edbcf5..b43dd0ea1 100644
+--- a/lib/libzfs/os/windows/libzfs_util_os.c
++++ b/lib/libzfs/os/windows/libzfs_util_os.c
+@@ -123,6 +123,11 @@ zfs_version_kernel(void)
+ 	LSTATUS status = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+ 	    "SYSTEM\\ControlSet001\\Services\\OpenZFS", 0, KEY_READ, &hKey);
+ 
++	/* No driver: the user-mode engine's service (sys/zfs_bridge.h). */
++	if (status != ERROR_SUCCESS)
++		status = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
++		    "SYSTEM\\CurrentControlSet\\Services\\ZfsWinUserMode", 0,
++		    KEY_READ, &hKey);
+ 	if (status != ERROR_SUCCESS)
+ 		return (NULL);
+ 
+diff --git a/lib/libzfs_core/os/windows/libzfs_core_ioctl.c b/lib/libzfs_core/os/windows/libzfs_core_ioctl.c
+index 43598e03f..a5bce8155 100644
+--- a/lib/libzfs_core/os/windows/libzfs_core_ioctl.c
++++ b/lib/libzfs_core/os/windows/libzfs_core_ioctl.c
+@@ -28,6 +28,8 @@
+ #include <sys/zfs_ioctl.h>
+ #include <os/windows/zfs/sys/zfs_ioctl_compat.h>
+ #include <libzfs_core.h>
++#include <string.h>
++#include <sys/zfs_bridge.h>
+ 
+ int
+ ioctl_impl(int fd, unsigned long request, zfs_iocparm_t *wrap)
+@@ -117,6 +119,58 @@ zcmd_ioctl_compat(int fd, int request, zfs_cmd_t *zc, const int cflag)
+ 	return (ret);
+ }
+ 
++/*
++ * The same ioctl through the user-mode ZFS bridge (sys/zfs_bridge.h): the
++ * buffers zfs_cmd_t points at travel with it, and zfs_cmd_t and the output
++ * buffers come back as the driver would have left them.
++ */
++static int
++zcmd_ioctl_bridge(unsigned long request, zfs_cmd_t *zc)
++{
++	zfs_bridge_hdr_t hdr = { 0 };
++	void *sect[ZFS_BRIDGE_SECTIONS] = { 0 };
++	uint64_t dst = zc->zc_nvlist_dst, history = zc->zc_history;
++	uint64_t src = zc->zc_nvlist_src, conf = zc->zc_nvlist_conf;
++	int error;
++
++	hdr.zb_op = ZFS_BRIDGE_OP_IOCTL;
++	hdr.zb_request = request;
++	sect[ZFS_BRIDGE_CMD] = zc;
++	hdr.zb_len[ZFS_BRIDGE_CMD] = sizeof (*zc);
++	hdr.zb_cap[ZFS_BRIDGE_CMD] = sizeof (*zc);
++	if (zc->zc_nvlist_src != 0) {
++		sect[ZFS_BRIDGE_SRC] = (void *)(uintptr_t)zc->zc_nvlist_src;
++		hdr.zb_len[ZFS_BRIDGE_SRC] = zc->zc_nvlist_src_size;
++	}
++	if (zc->zc_nvlist_conf != 0) {
++		sect[ZFS_BRIDGE_CONF] = (void *)(uintptr_t)zc->zc_nvlist_conf;
++		hdr.zb_len[ZFS_BRIDGE_CONF] = zc->zc_nvlist_conf_size;
++	}
++	if (history != 0) {
++		sect[ZFS_BRIDGE_HISTORY] = (void *)(uintptr_t)history;
++		if (request == ZFS_IOC_POOL_GET_HISTORY)
++			hdr.zb_cap[ZFS_BRIDGE_HISTORY] = zc->zc_history_len;
++		else
++			hdr.zb_len[ZFS_BRIDGE_HISTORY] =
++			    strlen((const char *)(uintptr_t)history) + 1;
++	}
++	if (dst != 0) {
++		sect[ZFS_BRIDGE_DST] = (void *)(uintptr_t)dst;
++		hdr.zb_cap[ZFS_BRIDGE_DST] = zc->zc_nvlist_dst_size;
++	}
++	if ((error = zfs_bridge_call(&hdr, sect)) != 0) {
++		errno = error;
++		return (-1);
++	}
++	/* Our pointers again, over the server's. */
++	zc->zc_nvlist_src = src;
++	zc->zc_nvlist_conf = conf;
++	zc->zc_nvlist_dst = dst;
++	zc->zc_history = history;
++	errno = (int)hdr.zb_error;
++	return (hdr.zb_error != 0 ? -1 : 0);
++}
++
+ /*
+  * This is the Windows version of ioctl(). Because the XNU kernel
+  * handles copyin() and copyout(), we must return success from the
+@@ -130,7 +184,10 @@ lzc_ioctl_fd_os(int fd, unsigned long request, zfs_cmd_t *zc)
+ 	int ret, cflag = ZFS_CMD_COMPAT_NONE;
+ 
+ 	oldsize = zc->zc_nvlist_dst_size;
+-	ret = zcmd_ioctl_compat(fd, request, zc, cflag);
++	if (zfs_bridge_is_fd(fd))
++		ret = zcmd_ioctl_bridge(request, zc);
++	else
++		ret = zcmd_ioctl_compat(fd, request, zc, cflag);
+ 
+ 	if (ret == 0 && oldsize < zc->zc_nvlist_dst_size) {
+ 		ret = -1;

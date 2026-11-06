@@ -8,14 +8,21 @@
   driver is Microsoft-signed.  Requires WinFsp (WinFsp - Windows File System
   Proxy, Copyright (C) Bill Zissimopoulos, https://github.com/winfsp/winfsp).
 
-  Mounts are configured under
-  HKLM\SOFTWARE\OpenZFS for Windows\UserMode\Mounts\<name>
-  (Source, Pool, Dataset, MountPoint, ReadOnly).  Stopping the service, and
-  so uninstalling, unmounts and exports every pool; pool data is never
-  touched.  Cannot be installed next to the kernel-driver package.
+  Administration (plan step 18): the same ZfsWinBroker service, zfswin.exe,
+  ZfsWinGui, ZfsWin PowerShell module and upstream zpool.exe/zfs.exe as the
+  kernel edition.  Without the driver, zpool/zfs reach zfswin-um's engine
+  through the ZFS bridge pipe (SYSTEM and Administrators only).
+
+  Pools created or imported with zpool are recorded under
+  HKLM\SOFTWARE\OpenZFS for Windows\UserMode\Pools, and mounts under
+  ...\UserMode\Mounts\<name> (Source, Pool, Dataset, MountPoint, ReadOnly),
+  so both come back at boot.  Stopping the service, and so uninstalling,
+  unmounts and exports every pool; pool data is never touched.  Cannot be
+  installed next to the kernel-driver package.
 
   Public properties (all optional):
     INSTALLFOLDER   default [ProgramFiles64Folder]OpenZFS for Windows (user mode)
+    ADDTOPATH=0     do not add the tools to the system PATH
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
@@ -34,6 +41,7 @@
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/winfsp/winfsp" />
     <Property Id="ARPCOMMENTS" Value="OpenZFS in user mode, through WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos" />
     <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ADDTOPATH" Value="1" />
 
     <!-- WinFsp records its install folder in the 32-bit registry view. -->
     <Property Id="WINFSPINSTALLDIR">
@@ -57,6 +65,13 @@
         <Directory Id="LICENSEFOLDER" Name="licenses" />
         <Directory Id="SYMBOLSFOLDER" Name="symbols" />
       </Directory>
+      <Directory Id="PSFOLDER" Name="WindowsPowerShell">
+        <Directory Id="PSMODULES" Name="Modules">
+          <Directory Id="PSZFSWIN" Name="ZfsWin">
+            <Directory Id="PSMODULEFOLDER" Name="$(var.Version)" />
+          </Directory>
+        </Directory>
+      </Directory>
     </StandardDirectory>
 
     <ComponentGroup Id="Service" Directory="BINFOLDER">
@@ -69,13 +84,44 @@
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="none" RestartServiceDelayInSeconds="10" ResetPeriodInDays="1" />
         </ServiceInstall>
-        <!-- Stopping exports every pool, so uninstall leaves them importable
-             elsewhere; the service is not started by setup because mounts
-             are configured afterwards. -->
-        <ServiceControl Id="ZfsWinUserModeControl" Name="ZfsWinUserMode" Stop="both" Remove="uninstall" Wait="yes" />
+        <!-- Started at install: zpool and zfs need its engine.  Stopping
+             exports every pool, so uninstall leaves them importable
+             elsewhere. -->
+        <ServiceControl Id="ZfsWinUserModeControl" Name="ZfsWinUserMode" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+      <Component Id="ZfsWinBroker">
+        <File Id="ZfsWinBroker.exe" Source="$(var.Payload)\bin\ZfsWinBroker.exe" KeyPath="yes" />
+        <ServiceInstall Id="ZfsWinBrokerService" Name="ZfsWinBroker" DisplayName="OpenZFS broker"
+                        Description="Runs ZFS administration commands for zfswin.exe, ZfsWinGui and the ZfsWin PowerShell module."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                              ThirdFailureActionType="none" RestartServiceDelayInSeconds="10" ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <!-- Least privilege, as in the kernel edition. -->
+        <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\ZfsWinBroker" Name="RequiredPrivileges" Type="multiString">
+          <MultiStringValue Value="SeChangeNotifyPrivilege" />
+          <MultiStringValue Value="SeImpersonatePrivilege" />
+          <MultiStringValue Value="SeCreateGlobalPrivilege" />
+          <MultiStringValue Value="SeManageVolumePrivilege" />
+          <MultiStringValue Value="SeBackupPrivilege" />
+          <MultiStringValue Value="SeRestorePrivilege" />
+        </RegistryValue>
+        <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\ZfsWinBroker" Name="ServiceSidType" Type="integer" Value="1" />
+        <ServiceControl Id="ZfsWinBrokerControl" Name="ZfsWinBroker" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <util:EventSource Name="ZfsWinBroker" Log="Application"
+                          EventMessageFile="[WindowsFolder]Microsoft.NET\Framework\v4.0.30319\EventLogMessages.dll" />
+      </Component>
+      <Component Id="ZfsWinCli">
+        <File Source="$(var.Payload)\bin\zfswin.exe" KeyPath="yes" />
       </Component>
       <Component Id="ZfsWinGui">
         <File Id="ZfsWinGui.exe" Source="$(var.Payload)\bin\ZfsWinGui.exe" KeyPath="yes" />
+      </Component>
+      <Component><File Source="$(var.Payload)\bin\zpool.exe" KeyPath="yes" /></Component>
+      <Component><File Source="$(var.Payload)\bin\zfs.exe" KeyPath="yes" /></Component>
+      <Component Id="SystemPath" Condition="ADDTOPATH = 1">
+        <Environment Id="PathEntry" Name="PATH" Value="[BINFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\OpenZFS for Windows\UserMode" Name="AddedToPath" Value="1" Type="integer" KeyPath="yes" />
       </Component>
       <Component Id="VersionMetadata">
         <File Source="$(var.Payload)\VERSION.json" KeyPath="yes" />
@@ -112,8 +158,13 @@
       <Files Include="$(var.Payload)\symbols\**" />
     </ComponentGroup>
 
+    <ComponentGroup Id="PowerShellModule" Directory="PSMODULEFOLDER">
+      <Files Include="$(var.Payload)\ZfsWin\**" />
+    </ComponentGroup>
+
     <Feature Id="Main" Title="OpenZFS for Windows (user mode)" Level="1" AllowAbsent="no">
       <ComponentGroupRef Id="Service" />
+      <ComponentGroupRef Id="PowerShellModule" />
       <ComponentGroupRef Id="Licenses" />
       <ComponentGroupRef Id="Symbols" />
       <ComponentGroupRef Id="ReadMe" />

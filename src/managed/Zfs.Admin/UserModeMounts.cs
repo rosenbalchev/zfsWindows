@@ -57,8 +57,10 @@ public sealed class UserModeMounts(RegistryKey root, string path = UserModeMount
     {
         if (string.IsNullOrWhiteSpace(m.Name) || m.Name.Contains('\\') || m.Name.Length > 64)
             throw Validation.Invalid("name", "a mount name of up to 64 characters, without '\\', is required.");
-        if (!Path.IsPathFullyQualified(m.Source) && !m.Source.StartsWith(@"\\?\PhysicalDrive", StringComparison.OrdinalIgnoreCase))
-            throw Validation.Invalid("source", "the source must be a full folder path (image files) or \\\\?\\PhysicalDriveN.");
+        // Empty: the pool is one the service imports anyway (created or
+        // imported with zpool, recorded under UserMode\Pools).
+        if (m.Source.Length > 0 && !Path.IsPathFullyQualified(m.Source) && !m.Source.StartsWith(@"\\?\PhysicalDrive", StringComparison.OrdinalIgnoreCase))
+            throw Validation.Invalid("source", "the source must be empty (a pool created or imported with zpool), a full folder or image-file path, or \\\\?\\PhysicalDriveN.");
         Validation.PoolName(m.Pool);
         Validation.DatasetName(m.Dataset);
         if (!m.Dataset.Equals(m.Pool, StringComparison.Ordinal) && !m.Dataset.StartsWith(m.Pool + "/", StringComparison.Ordinal))

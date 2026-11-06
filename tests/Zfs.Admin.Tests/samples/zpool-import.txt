@@ -1,5 +1,5 @@
   pool: zwin
-    id: 5080469978184658400
+    id: 3524840032135599746
  state: ONLINE
 action: The pool can be imported using its name or numeric identifier.
 config:

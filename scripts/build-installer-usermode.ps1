@@ -38,13 +38,27 @@ $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object Subje
 if (-not $cert) { throw "The zfsWindows code-signing certificate is missing; run build-driver.ps1 first." }
 
 if (Test-Path $payload) { Remove-Item -Recurse -Force $payload }
-foreach ($d in "bin", "licenses", "symbols") { New-Item -ItemType Directory -Force (Join-Path $payload $d) | Out-Null }
+foreach ($d in "bin", "licenses", "symbols", "ZfsWin") { New-Item -ItemType Directory -Force (Join-Path $payload $d) | Out-Null }
 Copy-Item $exe (Join-Path $payload "bin")
-# The administration tool (its User mode tab manages this edition).
-$gui = Join-Path $root "out\admin-$Architecture\ZfsWinGui.exe"
-if (-not (Test-Path $gui)) { throw "$gui is missing; run build-admin.ps1 -Architecture $Architecture first." }
-Copy-Item $gui (Join-Path $payload "bin")
+# Administration (plan step 18): the same broker, zfswin.exe, GUI and
+# PowerShell module as the kernel edition, and the same zpool.exe/zfs.exe,
+# which reach zfswin-um's engine through the ZFS bridge pipe.
+$admin = Join-Path $root "out\admin-$Architecture"
+$driver = Join-Path $root ("out\driver-package" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }))
+foreach ($required in (Join-Path $admin "ZfsWinGui.exe"), (Join-Path $admin "zfswin.exe"), (Join-Path $admin "ZfsWinBroker.exe"), (Join-Path $driver "zpool.exe"), (Join-Path $driver "zfs.exe")) {
+    if (-not (Test-Path $required)) { throw "$required is missing; run build-admin.ps1 and build-driver.ps1 -Architecture $Architecture first." }
+}
+Copy-Item (Join-Path $admin "zfswin.exe"), (Join-Path $admin "ZfsWinBroker.exe"), (Join-Path $admin "ZfsWinGui.exe") (Join-Path $payload "bin")
+foreach ($tool in "zpool.exe", "zfs.exe") { Copy-Item (Join-Path $driver $tool) (Join-Path $payload "bin") }
 Copy-Item (Join-Path $build "zfswin-um.pdb") (Join-Path $payload "symbols")
+Copy-Item (Join-Path $admin "symbols\*.pdb") (Join-Path $payload "symbols")
+foreach ($pdb in "zpool.pdb", "zfs.pdb") {
+    $p = Join-Path $driver "symbols\$pdb"
+    if (Test-Path $p) { Copy-Item $p (Join-Path $payload "symbols") }
+}
+Copy-Item (Join-Path $root "src\powershell\ZfsWin\*") (Join-Path $payload "ZfsWin")
+$psd1 = Join-Path $payload "ZfsWin\ZfsWin.psd1"
+[IO.File]::WriteAllText($psd1, ([IO.File]::ReadAllText($psd1) -replace "ModuleVersion(\s*)=(\s*)'[^']*'", "ModuleVersion`$1=`$2'$Version'"))
 Copy-Item (Join-Path $root "installer\ZfsWin.UserMode\README.html") $payload
 Copy-Item (Join-Path $root "LICENSE.md") (Join-Path $payload "licenses\LICENSE.md")
 Copy-Item (Join-Path $root "third_party\openzfs-windows\LICENSE") (Join-Path $payload "licenses\OpenZFS-LICENSE.txt")
@@ -58,9 +72,15 @@ Copy-Item $winfspLicense (Join-Path $payload "licenses\WinFsp-License.txt")
     patches = @(Get-ChildItem (Join-Path $root "patches\openzfs-windows") -Filter *.patch | ForEach-Object Name)
 } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $payload "VERSION.json")
 
-foreach ($bin in "zfswin-um.exe", "ZfsWinGui.exe") {
-    & $signtool sign /q /fd sha256 /sha1 $cert.Thumbprint (Join-Path $payload "bin\$bin")
-    if ($LASTEXITCODE -ne 0) { throw "signtool failed for $bin" }
+foreach ($exeFile in Get-ChildItem (Join-Path $payload "bin") -Filter *.exe) {
+    if ((Get-AuthenticodeSignature $exeFile.FullName).SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
+        & $signtool sign /q /fd sha256 /sha1 $cert.Thumbprint $exeFile.FullName
+        if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($exeFile.Name)" }
+    }
+}
+foreach ($script in Get-ChildItem (Join-Path $payload "ZfsWin") -Include *.psm1, *.psd1, *.ps1xml -Recurse) {
+    $r = Set-AuthenticodeSignature -FilePath $script.FullName -Certificate $cert -HashAlgorithm SHA256
+    if (-not $r.SignerCertificate) { throw "Signing $($script.Name) failed: $($r.StatusMessage)" }
 }
 
 $wixproj = Join-Path $root "installer\ZfsWin.UserMode\ZfsWin.UserMode.wixproj"

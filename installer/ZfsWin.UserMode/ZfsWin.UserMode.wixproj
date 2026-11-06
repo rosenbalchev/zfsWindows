@@ -6,9 +6,11 @@
     <OutputName>OpenZFS-for-Windows-$(ZfsWinVersion)-$(Platform)-usermode</OutputName>
     <Payload Condition="'$(Payload)' == ''">..\..\out\installer-payload\usermode-$(Platform)</Payload>
     <DefineConstants>Version=$(ZfsWinVersion);Payload=$(Payload)</DefineConstants>
-    <!-- ICE38/ICE43/ICE57 treat the Start-menu shortcuts of this per-machine
+    <!-- ICE03: the upstream zpool/zfs version resources use LANGID 0x4009,
+         which ICE03 does not accept (as in the kernel package).
+         ICE38/ICE43/ICE57 treat the Start-menu shortcuts of this per-machine
          package as per-user data; with ALLUSERS=1 they go to the common Start menu. -->
-    <SuppressIces>ICE38;ICE43;ICE57</SuppressIces>
+    <SuppressIces>ICE03;ICE38;ICE43;ICE57</SuppressIces>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />

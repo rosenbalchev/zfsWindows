@@ -21,52 +21,66 @@
 <p class="lead">ZFS datasets as Windows drives, served by the <b>ZfsWinUserMode</b> service through <a href="https://github.com/winfsp/winfsp">WinFsp</a>. No kernel driver of ours is involved, so this works with Secure Boot on.</p>
 <p>WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos, <a href="https://github.com/winfsp/winfsp">https://github.com/winfsp/winfsp</a>.</p>
 
+
 <h2>1. What you need</h2>
 <ul>
-  <li>A ZFS pool, on a disk or in image files. This edition does not create pools yet. Create them with the kernel-driver edition, or on Linux, FreeBSD or macOS with OpenZFS 2.4. The pool must be exported there first (<code>zpool export</code>).</li>
   <li>WinFsp 2.1 or later. Setup refused to install without it.</li>
+  <li>Disks or image files for a new pool, or an existing ZFS pool (from Linux, FreeBSD, macOS or the kernel-driver edition, exported there first with <code>zpool export</code>).</li>
 </ul>
 
-<h2>2. Mount a dataset</h2>
-<p><b>The easy way:</b> start <b>OpenZFS for Windows (user mode)</b> from the Start menu. On its <b>User mode</b> tab you can add, edit and remove mounts and start, stop or restart the service. It needs the <a href="https://dotnet.microsoft.com/download/dotnet/10.0">.NET 10 Desktop Runtime</a>; Windows offers it if it is missing. The other tabs (pool features, mirrors, caches) need the kernel-driver edition.</p>
-<p><b>By hand:</b></p>
-<p>In <b>PowerShell as administrator</b>, describe the mount once. It is mounted every time the service starts, including at boot:</p>
+<h2>2. Create or import a pool</h2>
+<p>This edition has the same administration tools as the kernel-driver edition: the <b>OpenZFS for Windows (user mode)</b> program in the Start menu, <code>zfswin</code>, the <code>ZfsWin</code> PowerShell module, and <code>zpool</code>/<code>zfs</code>. They talk to the ZFS engine inside the <b>ZfsWinUserMode</b> service. From <b>PowerShell as administrator</b>:</p>
+<pre># a mirrored pool on two image files
+fsutil file createnew D:\pools\a.img 1073741824
+fsutil file createnew D:\pools\b.img 1073741824
+zfswin pool create tank --mirror D:\pools\a.img D:\pools\b.img -O compression=lz4 --yes
+zfswin dataset create tank/data
+
+# or an existing pool
+zfswin pool import tank --dir D:\pools</pre>
+<p>The pool's root and each dataset appear as drives with the file system name <b>ZFS</b>. In this edition a child dataset gets its own drive letter: WinFsp cannot mount a drive inside another WinFsp drive. <code>zfswin mount list</code> shows where each dataset is. Pools and mounts come back by themselves when the service starts, including at boot.</p>
+<p>Snapshots, scrubs, properties (compression, dedup, sync, ...), mirror disks, read caches and write logs work as described in the zfswin command reference: <code>zfswin help</code>.</p>
+
+<h2>3. Use it</h2>
+<ul>
+  <li>Use the drive like any other: Explorer, copy and paste, robocopy, applications.</li>
+  <li><b>Permissions</b> are real Windows ACLs, stored in the pool the same way the kernel-driver edition stores them. Use Explorer's Security tab or <code>icacls</code>.</li>
+  <li><b>Alternate data streams</b> work, for example <code>Zone.Identifier</code> and <code>Get-Content -Stream</code>.</li>
+  <li><b>Snapshots</b> are browsable under <code>.zfs\snapshot\&lt;name&gt;</code>, read-only. <code>zfs set snapdir=visible tank/data</code> also shows <code>.zfs</code> in the listing.</li>
+  <li><b>Block cloning:</b> <code>zfswin clone &lt;source&gt; &lt;target&gt;</code> copies a file instantly by sharing its blocks. Windows' own clone call (<code>FSCTL_DUPLICATE_EXTENTS_TO_FILE</code>) cannot reach a WinFsp file system, so Explorer and <code>copy</code> still copy the data.</li>
+</ul>
+<p>Writes are safe on disk after an application flushes, after a write-through write, or once the service stops. That is the same promise as any Windows drive. A power cut does not corrupt the pool: ZFS is always consistent on disk.</p>
+
+<h2>4. Unmount and move the pool</h2>
+<pre>zfswin pool export tank</pre>
+<p>This unmounts the pool's datasets and exports it, so you can take the disks or image files to another computer. Stopping the service (<code>Stop-Service ZfsWinUserMode</code>) does the same for every pool, but they come back when it starts again.</p>
+
+<h2>5. Mount configuration by hand</h2>
+<p>Mounts live under <code>HKLM\SOFTWARE\OpenZFS for Windows\UserMode\Mounts</code>, one key per dataset. Keys named <code>auto-…</code> are made by <code>zfs mount</code> and <code>zpool import</code>. The program's <b>User mode</b> tab edits them. A key with a <code>Source</code> (image folder, image file or device) also imports its pool:</p>
 <pre>$key = "HKLM:\SOFTWARE\OpenZFS for Windows\UserMode\Mounts\tank"
 New-Item -Force $key | Out-Null
-Set-ItemProperty $key Source     'D:\pools'          # folder with the pool's image files (whole disks: not tested yet)
+Set-ItemProperty $key Source     'D:\pools'          # folder or image file; empty for a pool the service already imports
 Set-ItemProperty $key Pool       'tank'
-Set-ItemProperty $key Dataset    'tank/data'         # the file system to show
+Set-ItemProperty $key Dataset    'tank/data'
 Set-ItemProperty $key MountPoint 'Z:'                # a free drive letter, or a folder path that does not exist yet
 New-ItemProperty $key -Name ReadOnly -PropertyType DWord -Value 0 -Force | Out-Null
 Restart-Service ZfsWinUserMode</pre>
-<p>Drive <code>Z:</code> then appears, with the file system name <b>ZFS</b>. Add one key per dataset. Use <code>ReadOnly = 1</code> to look at a pool without changing a single byte.</p>
-
-<h2>3. Use it</h2>
-<p>Use the drive like any other: Explorer, copy and paste, robocopy, applications. Writes are safe on disk after an application flushes, after a write-through write, or once the service stops. That is the same promise as any Windows drive. A power cut does not corrupt the pool: ZFS is always consistent on disk.</p>
-
-<h2>4. Unmount and move the pool</h2>
-<pre>Stop-Service ZfsWinUserMode</pre>
-<p>This unmounts every dataset and <b>exports</b> the pools, so you can take the disk or image files to another computer. Linux, FreeBSD, macOS or the kernel-driver edition then imports them. To stop mounting one dataset, delete its key under <code>Mounts</code> and restart the service.</p>
-
-<h2>5. A quick look without the service</h2>
-<p>From an elevated terminal, with the service stopped:</p>
+<p>Use <code>ReadOnly = 1</code> to look at a pool without changing a single byte. For a quick look without the service, run this from an elevated terminal with the service stopped. Ctrl+C unmounts and exports.</p>
 <pre>"C:\Program Files\OpenZFS for Windows (user mode)\bin\zfswin-um.exe" mount D:\pools tank tank/data Y: --readonly</pre>
-<p>Ctrl+C unmounts and exports. <code>zfswin-um --version</code> prints the version.</p>
 
 <h2>6. Status and problems</h2>
 <ul>
-  <li><b>Event Viewer &gt; Windows Logs &gt; Application</b>, source <code>WinFsp</code>, records every mount, unmount (with the export result) and error, such as "cannot import …".</li>
-  <li><code>Get-Service ZfsWinUserMode</code> shows the service state. It restarts by itself after a failure.</li>
-  <li>If the drive does not appear, check that <code>Source</code> contains the pool, that the pool was exported elsewhere, and that the drive letter is free.</li>
+  <li><b>Event Viewer &gt; Windows Logs &gt; Application</b>: source <code>WinFsp</code> for mounts, unmounts and engine errors, and <code>ZfsWinBroker</code> for every administrative command.</li>
+  <li><code>Get-Service ZfsWinUserMode, ZfsWinBroker</code> shows both services. Both restart by themselves after a failure.</li>
+  <li><code>zfswin pool status</code> shows the health of each pool.</li>
 </ul>
 
-<h2>Not available in this edition yet</h2>
+<h2>Not available in this edition</h2>
 <table>
-<tr><td>Creating pools, datasets or snapshots; changing properties</td><td>use the kernel-driver edition or another OpenZFS system</td></tr>
-<tr><td>Windows permissions (ACLs)</td><td>every file shows: SYSTEM and Administrators full control, Authenticated Users modify</td></tr>
-<tr><td>Alternate data streams, <code>.zfs\snapshot</code>, zvols</td><td>not supported</td></tr>
-<tr><td><code>zfswin.exe</code> / PowerShell module</td><td>kernel-driver edition only</td></tr>
-<tr><td>Child datasets</td><td>add a mount key for each one</td></tr>
+<tr><td>zvols (ZFS block devices)</td><td>kernel-driver edition</td></tr>
+<tr><td>Windows' own block-clone call (Explorer, <code>copy</code>)</td><td>use <code>zfswin clone</code></td></tr>
+<tr><td><code>zfs send</code> / <code>receive</code>, <code>zpool events</code></td><td>not yet: they pass file handles into the engine</td></tr>
+<tr><td>Child dataset in a folder of its parent's drive</td><td>it gets its own drive letter instead</td></tr>
 </table>
 
 <h2>Uninstall</h2>

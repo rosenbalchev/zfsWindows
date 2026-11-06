@@ -31,7 +31,23 @@ target_link_libraries(zfs-um-internal INTERFACE
 add_library(zfs-um-core STATIC
     zum_zpl.c
     zum_api.c
+    zum_xattr.c
     zum_pool_um.c
 )
 target_link_libraries(zfs-um-core PRIVATE zfs-um-internal)
 target_include_directories(zfs-um-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# The ZFS ioctl interface of the user-mode engine: upstream zfs_ioctl.c,
+# unchanged, with zum_ioctl_shim.h standing in for the kernel VFS headers,
+# and zum_ioctl_um.c supplying the kernel entry points it calls.  Served to
+# zpool.exe/zfs.exe by zfswin-um's bridge (sys/zfs_bridge.h).
+add_library(zfs-um-ioctl STATIC
+    "${CMAKE_SOURCE_DIR}/module/zfs/zfs_ioctl.c"
+    zum_ioctl_um.c
+)
+target_link_libraries(zfs-um-ioctl PRIVATE zfs-um-internal)
+target_include_directories(zfs-um-ioctl PRIVATE
+    "${CMAKE_SOURCE_DIR}/module/zcommon")
+target_include_directories(zfs-um-ioctl PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(zfs-um-ioctl PRIVATE
+    "/FI${CMAKE_CURRENT_SOURCE_DIR}/zum_ioctl_shim.h")

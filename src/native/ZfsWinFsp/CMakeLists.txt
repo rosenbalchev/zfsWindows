@@ -39,6 +39,7 @@ target_compile_definitions(zfswin-um PRIVATE
 # let FspLoad() find it there.
 target_link_libraries(zfswin-um PRIVATE
     zfs-um-core
+    zfs-um-ioctl
     "${WINFSP_SDK}/lib/winfsp-${WINFSP_ARCH}.lib"
     delayimp
     advapi32

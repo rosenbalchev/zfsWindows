@@ -369,3 +369,51 @@ array `(c)->b.val`, which has room for 64 values, more than the ARM64
 pointers for diagnosis. It read `ContextRecord->Rip` and `->Rsp`, which
 exist only in the x64 `CONTEXT`. ARM64 uses `Pc` and `Sp` through a
 small macro. The recorded values and their meaning are unchanged.
+## 0024 — libzfs: the user-mode ZFS bridge client
+
+The user-mode edition (plan step 18) runs the ZFS engine (libzpool and
+upstream `zfs_ioctl.c`) inside the `ZfsWinUserMode` service instead of the
+kernel. The service answers the same ZFS ioctls on the local named pipe
+`\\.\pipe\OpenZFS-UserMode`. Access is limited to SYSTEM and Administrators,
+and remote clients are rejected. With this patch, the same `zpool.exe` and
+`zfs.exe` work against either edition:
+
+- `lib/libspl/include/os/windows/sys/zfs_bridge.h` (new): the wire format. One
+  request per connection: a header, then the `zfs_cmd_t` and the src, conf
+  and history buffers it points at. The response carries the `zfs_cmd_t`, the
+  history output and the dst buffer, bounded by the capacities the request
+  named.
+- `posix.c`: `open("\\.\ZFS")` opens the pipe when the driver's device does
+  not exist. `zfs_bridge_call()` performs one round trip.
+  `zfs_bridge_is_fd()` tells the two apart.
+- `libzfs_core_ioctl.c`: `lzc_ioctl_fd_os()` sends `zfs_cmd_t` over the
+  bridge when the descriptor is the pipe. Its own buffer pointers are
+  restored afterwards. The result follows the driver path's convention
+  (errno, -1).
+- `getmntany.c`: `getfsstat()` adds the bridge's mount table, because the
+  volumes the service mounts belong to WinFsp and do not answer
+  `ZFS_IOC_GET_MOUNT`. That makes `zfs mount`, `zfs unmount` and
+  `zpool export` see them.
+- `libzfs_util_os.c`: `zfs_version_kernel()` reads the `zfs_version` that the
+  user-mode service records under its own service key when there is no
+  `OpenZFS` driver key. Without it, `zfs version` fails, and with it the
+  broker's `version` operation.
+
+With the driver present, nothing changes: `\\.\ZFS` opens as before and
+no pipe is consulted, apart from one failed open per mount-table read when
+no service listens.
+
+## 0025 — libzpool: root file system hook for user space
+
+`dsl_pool_create()` builds a new pool's root file system with
+`zfs_create_fs()`, but only `#ifdef _KERNEL`. In libzpool the root dataset of
+a pool created there has no ZPL at all, so it cannot be mounted. Its
+children can, because `zfs create` goes through `zfs_create_cb()`. Step 18's
+VM run hit exactly that: "cannot open zwin: error 2".
+
+The fix cannot happen afterwards. Changing the root objset in a later
+syncing transaction trips `dbuf_dirty()`'s assertion that only a brand-new
+objset is written in syncing context. So user space gets a hook,
+`dsl_pool_create_fs_hook`, called at the same place with the same
+`zplprops`. It is NULL by default, so zdb and ztest are unchanged. The
+user-mode engine points it at its port of `zfs_create_fs()`.

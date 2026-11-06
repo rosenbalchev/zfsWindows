@@ -24,6 +24,17 @@ Phases (default: all, in order):
   powercut   writers acknowledging after FlushFileBuffers and after
              write-through, a Hyper-V TurnOff, then remount: every
              acknowledged file must be intact.
+  admin      plan step 18: the kernel suite's guest stages (guest-installer.ps1)
+             against this edition: the zfswin CLI workflow on image files
+             (create, datasets, properties, snapshots, scrub, mirror
+             attach/detach/replace, cache/log, dedup, block cloning,
+             export/import, .zfs\snapshot), the GUI self-check, the ZfsWin
+             module, standard-user access, and ACLs/streams/.zfs; pools and
+             mounts back after a service restart; the kernel-written pool
+             (TestVolumes\vm\installer) read here; this pool saved to
+             TestVolumes\vm\crossedition-usermode for the kernel suite.
+  uninstall  uninstall with a dataset mounted: the volume goes, the pool
+             image and WinFsp stay.
 Each phase records its wall-clock duration.  Results go to
 TestVolumes\vm\results.jsonl as "usermode-*".
 #>
@@ -39,7 +50,7 @@ $state = Get-Content (Join-Path $repo "TestVolumes\vm\$Name.json") -Raw | Conver
 $credential = New-Object PSCredential ($state.user, (ConvertTo-SecureString $state.password -AsPlainText -Force))
 $results = Join-Path $repo "TestVolumes\vm\results.jsonl"
 $Phase = @($Phase | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
-if ($Phase -contains "all") { $Phase = @("setup", "read", "write", "bench", "powercut", "uninstall") }
+if ($Phase -contains "all") { $Phase = @("setup", "read", "write", "bench", "powercut", "admin", "uninstall") }
 $winfsp = Join-Path $repo "third_party\winfsp\download\winfsp-2.1.25156.msi"
 $version = & (Join-Path $repo "scripts\Get-ZfsWinVersion.ps1")
 $msi = Join-Path $repo "out\release\$version\OpenZFS-for-Windows-$version-x64-usermode.msi"
@@ -110,6 +121,23 @@ $unmountBlock = {
             Where-Object { $_.ProviderName -eq 'WinFsp' -and ($_.Properties.Value -join ' ') -match 'zfswin-um' } | Select-Object -First 4 |
             ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) $($_.Properties.Value -join ' ')" })
     }
+}
+
+# One stage of scripts\vm\guest-installer.ps1, for this edition.
+function Guest($stage, [hashtable]$arguments = @{}) {
+    $arguments.Edition = "usermode"
+    $s = Open-Guest
+    try {
+        $json = Invoke-Command $s {
+            param($stage, $arguments)
+            $ErrorActionPreference = "Continue"
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($arguments | ConvertTo-Json -Compress)))
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\zfswin\installer\guest-installer.ps1 -Stage $stage -ArgumentsBase64 $encoded 2>$null
+        } -ArgumentList $stage, $arguments
+    } finally { Remove-PSSession $s }
+    $text = ($json | Where-Object { "$_".StartsWith('{') } | Select-Object -Last 1)
+    if (-not $text) { throw "guest stage $stage printed no JSON: $($json | Out-String)" }
+    $text | ConvertFrom-Json
 }
 
 function Fresh-Lz4($s) {
@@ -195,7 +223,8 @@ if ($Phase -contains "setup") {
     # tables are checked on the host instead (docs/building.md); the page
     # opening is confirmed by a person once per release.
     if (@($out.readmeOpened) -notcontains "1") { Write-Host "note: OpenReadMe not run (no desktop in this session; expected)" }
-    Expect "GUI self-check on the user-mode edition" ($out.gui.exit -eq 0 -and $out.gui.report.brokerError -and $out.gui.report.userModeService) "exit $($out.gui.exit)"
+    # Step 18: the broker is part of this edition too, and reaches the engine.
+    Expect "GUI self-check on the user-mode edition" ($out.gui.exit -eq 0 -and $out.gui.report.broker -and -not $out.gui.report.brokerError -and $out.gui.report.userModeService -eq 'Running') "exit $($out.gui.exit) $($out.gui.report.brokerError)"
     Expect "Start menu shortcuts" (@($out.shortcuts).Count -eq 2) ($out.shortcuts -join ', ')
     Expect "service is automatic, LocalSystem" ($out.service.start -eq 'Auto' -and $out.service.account -eq 'LocalSystem') ($out.service | ConvertTo-Json -Compress)
     Stop-VM -Name $Name
@@ -302,6 +331,98 @@ if ($Phase -contains "powercut") {
         Expect "powercut $($c.mode): writers acknowledged files" ($c.acknowledged -gt 0)
         Expect "powercut $($c.mode): every acknowledged file intact" (@($c.failures).Count -eq 0) (@($c.failures) -join '; ')
     }
+}
+
+if ($Phase -contains "admin") {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $s = Open-Guest
+    Invoke-Command $s {
+        # No leftovers from the mount-configuration phases.
+        Remove-Item -Recurse -Force "HKLM:\SOFTWARE\OpenZFS for Windows\UserMode\Mounts" -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force C:\zfswin\installer | Out-Null
+        & sc.exe start ZfsWinUserMode | Out-Null
+        foreach ($tool in "zpool.exe", "zfs.exe", "zfswin.exe", "ZfsWinBroker.exe") {
+            $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$tool"
+            New-Item -Force $key | Out-Null
+            New-ItemProperty -Force $key -Name DumpFolder -PropertyType ExpandString -Value C:\zfswin\dumps | Out-Null
+            New-ItemProperty -Force $key -Name DumpType -PropertyType DWord -Value 2 | Out-Null
+        }
+    }
+    Copy-Item -ToSession $s (Join-Path $PSScriptRoot "guest-installer.ps1") C:\zfswin\installer\guest-installer.ps1 -Force
+    Remove-PSSession $s
+    $timings = [ordered]@{}
+    $t = [Diagnostics.Stopwatch]::StartNew(); $cli = Guest "cli"; $timings.cli = [math]::Round($t.Elapsed.TotalSeconds, 1)
+    Record "admin-cli" $cli
+    Expect "admin: CLI workflow" (@($cli.failed).Count -eq 0) ($cli.failed -join ', ')
+    $t.Restart(); $gui = Guest "gui"; $timings.gui = [math]::Round($t.Elapsed.TotalSeconds, 1)
+    Record "admin-gui" $gui
+    Expect "admin: GUI sees the pool and its datasets" ($gui.exit -eq 0 -and -not $gui.brokerError -and @($gui.pools | Where-Object name -eq "zwin").Count -eq 1 -and @($gui.datasets | Where-Object { $_.name -eq "zwin/docs" -and $_.dedup -eq "on" }).Count -eq 1) "exit $($gui.exit) $($gui.brokerError)"
+    $t.Restart(); $ps = Guest "powershell"; $timings.powershell = [math]::Round($t.Elapsed.TotalSeconds, 1)
+    Record "admin-powershell" $ps
+    Expect "admin: PowerShell workflow" ($ps.PSObject.Properties['failed'] -and @($ps.failed).Count -eq 0) ($ps | ConvertTo-Json -Compress -Depth 4)
+    $t.Restart(); $user = Guest "standard-user"; $timings.standardUser = [math]::Round($t.Elapsed.TotalSeconds, 1)
+    Record "admin-standard-user" $user
+    Expect "admin: standard user can read" ($user.admin -eq $false -and $user.list.exit -eq 0 -and $user.status.exit -eq 0 -and $user.datasets.exit -eq 0)
+    Expect "admin: standard user cannot mutate" ($user.export.exit -eq 4 -and $user.snapshot.exit -eq 4 -and $user.cmdletExport -eq 'PermissionDenied')
+    $t.Restart(); $fs = Guest "filesystem"; $timings.filesystem = [math]::Round($t.Elapsed.TotalSeconds, 1)
+    Record "admin-filesystem" $fs
+    Expect "admin: ACLs, streams and .zfs" (@($fs.failed).Count -eq 0) ($fs.failed -join ', ')
+
+    # Pools and mounts come back when the service restarts (as at boot).
+    $t.Restart()
+    $s = Open-Guest
+    $persist = Invoke-Command $s {
+        $ErrorActionPreference = "Continue"
+        $z = "$env:ProgramFiles\OpenZFS for Windows (user mode)\bin\zfswin.exe"
+        $restartError = try { Restart-Service ZfsWinUserMode -Force -ErrorAction Stop; $null } catch { "$_" }
+        $deadline = (Get-Date).AddMinutes(3)
+        do {
+            Start-Sleep -Seconds 2
+            $mounts = (& $z --json mount list 2>$null | ConvertFrom-Json).result.mounts
+        } while (-not ($mounts | Where-Object dataset -eq 'zwin/fs') -and (Get-Date) -lt $deadline)
+        $fsPath = ($mounts | Where-Object dataset -eq 'zwin/fs').mountpoint
+        if ($fsPath -match '^[A-Za-z]:$') { $fsPath += '\' }
+        [ordered]@{
+            pools = @((& $z --json pool list 2>$null | ConvertFrom-Json).result.pools | ForEach-Object name)
+            mounts = @($mounts | ForEach-Object { "$($_.dataset)=$($_.mountpoint)" })
+            fileAfterRestart = $(if ($fsPath) { Get-Content -LiteralPath (Join-Path $fsPath "streams.txt") -Stream meta -ErrorAction SilentlyContinue })
+            records = @(Get-ChildItem "HKLM:\SOFTWARE\OpenZFS for Windows\UserMode\Pools" -ErrorAction SilentlyContinue | ForEach-Object PSChildName)
+            restartError = $restartError
+            stopEvent = @(Get-WinEvent -LogName Application -MaxEvents 50 -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -eq 'WinFsp' -and ($_.Properties.Value -join ' ') -match 'stop took' } | Select-Object -First 1 | ForEach-Object { $_.Properties.Value -join ' ' })
+        }
+    }
+    Remove-PSSession $s
+    $timings.restart = [math]::Round($t.Elapsed.TotalSeconds, 1)
+    Record "admin-restart" $persist
+    Expect "admin: service restarts cleanly" (-not $persist.restartError) $persist.restartError
+    Expect "admin: pool imported again after a service restart" (@($persist.pools) -contains 'zwin') ($persist | ConvertTo-Json -Compress)
+    Expect "admin: datasets mounted again after a service restart" ($persist.fileAfterRestart -eq 'metadata stream') ($persist.mounts -join ', ')
+
+    # The kernel-written pool, if the kernel suite left one.
+    $kernelPool = Join-Path $repo "TestVolumes\vm\installer"
+    if (Test-Path (Join-Path $kernelPool "fs-expected.json")) {
+        $s = Open-Guest
+        Invoke-Command $s { New-Item -ItemType Directory -Force C:\zfswin\cross | Out-Null; Remove-Item C:\zfswin\cross\* -Force -ErrorAction SilentlyContinue }
+        foreach ($f in "a.img", "d.img", "fs-expected.json") { Copy-Item -ToSession $s (Join-Path $kernelPool $f) "C:\zfswin\cross\$f" -Force }
+        Remove-PSSession $s
+        $t.Restart(); $cc = Guest "crosscheck" @{ Dir = "C:\zfswin\cross" }; $timings.crosscheck = [math]::Round($t.Elapsed.TotalSeconds, 1)
+        Record "admin-crosscheck" $cc
+        Expect "admin: kernel-written pool read in user mode" (@($cc.failed).Count -eq 0) ($cc.failed -join ', ')
+    } else {
+        Write-Warning "No kernel-written pool in $kernelPool to cross-check (run Test-InstallerInVm.ps1 first)."
+    }
+
+    # This pool, exported, for the kernel suite and for Linux.
+    $exp = Guest "export"
+    Expect "admin: export" ($exp.exit -eq 0) ($exp | ConvertTo-Json -Compress)
+    $local = Join-Path $repo "TestVolumes\vm\crossedition-usermode"
+    New-Item -ItemType Directory -Force $local | Out-Null
+    $s = Open-Guest
+    foreach ($f in "images\a.img", "images\d.img", "fs-expected.json", "manifest.json") { Copy-Item -FromSession $s "C:\zfswin\installer\$f" (Join-Path $local (Split-Path -Leaf $f)) -Force }
+    $dumps = Invoke-Command $s { @(Get-ChildItem C:\zfswin\dumps -ErrorAction SilentlyContinue | ForEach-Object Name) }
+    Remove-PSSession $s
+    Record "admin" @{ timings = $timings; dumps = $dumps; seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1) }
+    Expect "admin: no crash dumps" (@($dumps).Count -eq 0) ($dumps -join ', ')
 }
 
 if ($Phase -contains "uninstall") {

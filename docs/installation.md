@@ -5,7 +5,7 @@
 The release in `downloads/1.0/` has two packages. Install one of them; each
 refuses to install next to the other.
 
-| | **User mode** (`…-x64-usermode.msi`) | **Kernel mode** (`…-x64-testsigned.msi`) |
+| | **User mode** (`â€¦-x64-usermode.msi`) | **Kernel mode** (`â€¦-x64-testsigned.msi`) |
 | --- | --- | --- |
 | Needs | [WinFsp](https://github.com/winfsp/winfsp) 2.1 or later | test signing on, Secure Boot off, `zfswindows-test.cer` trusted |
 | Secure Boot | stays on | must be off |
@@ -45,60 +45,103 @@ Get-Content SHA256SUMS | ForEach-Object {
    Without WinFsp, setup refuses and logs a `REFUSED:` line that names
    WinFsp. It also refuses while the kernel variant is installed.
 
-This installs `zfswin-um.exe` in `%ProgramFiles%\OpenZFS for Windows (user mode)\bin`.
-It runs as the automatic **ZfsWinUserMode** service, as LocalSystem, and
-restarts on failure.
+It installs the following:
 
-## Mount a pool
+| What | Where |
+| --- | --- |
+| `zfswin-um.exe`: the OpenZFS engine and the WinFsp file system, as the automatic **ZfsWinUserMode** service (LocalSystem, restarts on failure, started by setup) | `%ProgramFiles%\OpenZFS for Windows (user mode)\bin` |
+| The **ZfsWinBroker** service, `zfswin.exe`, `ZfsWinGui.exe`, `zpool.exe`, `zfs.exe` (the same binaries as the kernel variant) | the same `bin` folder, added to the system `PATH` (`ADDTOPATH=0` to skip) |
+| The `ZfsWin` PowerShell module | `%ProgramFiles%\WindowsPowerShell\Modules\ZfsWin\<version>` |
 
-Mounts are configured in the registry, one subkey per dataset, and are
-mounted whenever the service starts, including at boot:
+`zpool.exe` and `zfs.exe` find no ZFS driver here. They reach the engine
+through the local pipe `\\.\pipe\OpenZFS-UserMode` (SYSTEM and elevated
+Administrators only), which runs upstream OpenZFS's own ioctl handlers
+(plan step 18). Everything in [`zfswin-cli.md`](zfswin-cli.md) therefore
+works the same way in both variants.
+
+## Create, import and mount
 
 ```powershell
-$key = "HKLM:\SOFTWARE\OpenZFS for Windows\UserMode\Mounts\tank"
-New-Item -Force $key | Out-Null
-Set-ItemProperty $key Source     'D:\pools'            # image directory (whole-disk sources are not tested yet)
-Set-ItemProperty $key Pool       'tank'
-Set-ItemProperty $key Dataset    'tank/data'
-Set-ItemProperty $key MountPoint 'Z:'                  # a drive letter, or an empty folder that does not exist yet
-New-ItemProperty $key -Name ReadOnly -PropertyType DWord -Value 0 -Force | Out-Null
-Restart-Service ZfsWinUserMode
+fsutil file createnew D:\pools\a.img 1073741824
+fsutil file createnew D:\pools\b.img 1073741824
+zfswin pool create tank --mirror D:\pools\a.img D:\pools\b.img -O compression=lz4 --yes
+zfswin dataset create tank/data
+zfswin mount list
 ```
 
-- **Unmount:** `Stop-Service ZfsWinUserMode` unmounts every dataset, syncs and
-  **exports** the pools, so another system can import them.
-- **Status:** the Application event log, source `ZfsWinUserMode`, records
-  every mount and unmount (with the export result) and every failure.
-- **Writes and durability:** writes are durable after `FlushFileBuffers`, a
+- **Mounting:** each mounted dataset is a WinFsp volume with the file
+  system name `ZFS`.
+  - The pool root gets a free drive letter, or the one in its
+    `driveletter` property.
+  - A child dataset whose mount point would be a folder inside another ZFS
+    volume gets a drive letter of its own, because WinFsp cannot mount
+    inside a WinFsp volume.
+  - A mount point on NTFS, such as `C:\tank\data`, works as a folder mount.
+- **At boot:** pools created or imported with `zpool`/`zfswin` are recorded
+  under `HKLM\SOFTWARE\OpenZFS for Windows\UserMode\Pools`, and their mounts
+  under `...\UserMode\Mounts\auto-<dataset>`. The service imports and mounts
+  them again when it starts, including at boot. `zfswin pool export` removes
+  both records.
+- **Stopping:** `Stop-Service ZfsWinUserMode` unmounts and exports every
+  pool, so the disks import anywhere. Starting the service brings them back.
+- **Mounting by configuration:** you can also mount a dataset of a pool the
+  service does not know, from its images or disk, with a key under
+  `...\UserMode\Mounts\<name>`:
+  - `Source`: an image folder, an image file, or a device; `;` separates
+    several;
+  - `Pool`, `Dataset`, `MountPoint`;
+  - `ReadOnly` (1 opens the pool read-only; the image stays byte-identical).
+
+  The GUI's **User mode** tab edits these keys. For a pool the service
+  imports anyway, `Source` may be empty.
+- **Status:** the Application event log has two sources:
+  - `WinFsp` for mounts, unmounts, imports and engine errors;
+  - `ZfsWinBroker` for every administrative command.
+
+## Files
+
+- **Windows ACLs:** stored in the pool as the self-relative security
+  descriptor in the xattr `security.NTACL`, exactly where and how the kernel
+  driver stores it.
+  - WinFsp enforces them.
+  - Files without one (written on Linux or before 1.0.5) get the descriptor
+    the kernel driver would derive: inherited from the parent, with the
+    driver's default at the dataset root.
+- **Alternate data streams:** `file:stream` is stored as the file
+  `stream:$DATA` in the file's xattr directory, as in the kernel driver.
+- **Snapshots:** browsable read-only under `.zfs\snapshot\<name>`;
+  `snapdir=visible` lists `.zfs` in the root.
+- **Block cloning:** `zfswin clone <source> <target>` shares blocks instead
+  of copying them.
+  - WinFsp passes only custom control codes to a file system, so Windows'
+    `FSCTL_DUPLICATE_EXTENTS_TO_FILE` (Explorer, `copy`) cannot reach this
+    variant.
+  - `zfswin clone` uses that FSCTL on the kernel variant, and this
+    variant's own control code here.
+- **Durability:** writes are durable after `FlushFileBuffers`, a
   write-through handle, or the service stopping. That is the same contract
-  as any Windows volume. The power-cut test in step 15 checks it.
-- **A quick look without the service:**
-  `zfswin-um mount <source> <pool> <dataset> <mountpoint> [--readonly]`
-  from an elevated prompt. Ctrl+C unmounts and exports.
+  as any Windows volume, and the power-cut test checks it.
+- **Not available:**
+  - zvols;
+  - `zfs send`/`receive` and `zpool events`: they hand file descriptors to
+    the engine, which a pipe cannot carry;
+  - file and directory names that are not valid UTF-8, or longer than 255
+    UTF-16 characters, are not listed.
 
-## Not available in user mode (yet)
+## A quick look without the service
 
-- Creating pools, datasets or snapshots; properties are read-only.
-- Windows ACLs: every file shows the same permissions (SYSTEM and
-  Administrators full control, Authenticated Users modify).
-- Alternate data streams.
-- `.zfs\snapshot`.
-- zvols.
-- `zfswin.exe` and the PowerShell module.
-- Files and directories whose names are not valid UTF-8, or longer than 255
-  UTF-16 characters, are not listed.
-- Only the dataset named in a mount is shown; child datasets need mounts of
-  their own.
+`zfswin-um mount <source> <pool> <dataset> <mountpoint> [--readonly]` from
+an elevated prompt, with the service stopped. Ctrl+C unmounts and exports.
 
 ## Upgrade, repair, uninstall
 
 - **Upgrade:** run the newer MSI. Its build number is higher; see
   `VERSION.json`.
-- **Uninstall:** use *Settings > Apps*, or `msiexec /x <msi> /qn`. This
-  stops the service, which unmounts and exports every pool, then removes
-  the program files and the service. Your mount configuration in the
-  registry, WinFsp and the pools are left alone.
-
+- **Uninstall:** use *Settings > Apps*, or `msiexec /x <msi> /qn`.
+  - Uninstall stops both services, which unmounts and exports every pool,
+    then removes the program files and the services.
+  - It keeps the pool and mount records in the registry, WinFsp, and the
+    pools.
 ---
 
 # Kernel-mode variant

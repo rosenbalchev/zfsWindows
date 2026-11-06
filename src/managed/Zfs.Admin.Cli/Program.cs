@@ -30,6 +30,21 @@ public static class Program
         };
         try
         {
+            // A file operation as the caller, not a broker request.
+            string[] words = argv.Where(a => a != "--json").ToArray();
+            if (words is ["clone", ..])
+            {
+                bool force = words.Contains("--force");
+                string[] paths = words.Skip(1).Where(a => a != "--force").ToArray();
+                if (paths.Length != 2 || paths.Any(p => p.StartsWith('-')))
+                    throw new AdminException(ErrorCode.Usage, "usage: zfswin clone <source> <target> [--force]");
+                JsonObject cloned = FileClone.Clone(paths[0], paths[1], force);
+                if (json)
+                    WriteJson(Success("clone", cloned));
+                else
+                    Console.Out.WriteLine($"Cloned {cloned["bytes"]} bytes from {paths[0]} to {paths[1]} without copying data ({cloned["method"]}).");
+                return 0;
+            }
             command = CommandLine.Parse(argv);
             if (command.Destructive && !command.Confirmed)
                 throw new AdminException(ErrorCode.ConfirmationRequired,
