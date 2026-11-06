@@ -1,0 +1,47 @@
+diff --git a/include/sys/dsl_pool.h b/include/sys/dsl_pool.h
+index d7a950812..a969c6c0b 100644
+--- a/include/sys/dsl_pool.h
++++ b/include/sys/dsl_pool.h
+@@ -158,6 +158,11 @@ int dsl_pool_open(dsl_pool_t *dp);
+ void dsl_pool_close(dsl_pool_t *dp);
+ dsl_pool_t *dsl_pool_create(spa_t *spa, nvlist_t *zplprops,
+     struct dsl_crypto_params *dcp, uint64_t txg);
++#ifndef _KERNEL
++/* User space: builds the new pool's root file system, if set. */
++extern void (*dsl_pool_create_fs_hook)(objset_t *os, nvlist_t *zplprops,
++    dmu_tx_t *tx);
++#endif
+ void dsl_pool_sync(dsl_pool_t *dp, uint64_t txg);
+ void dsl_pool_sync_done(dsl_pool_t *dp, uint64_t txg);
+ int dsl_pool_sync_context(dsl_pool_t *dp);
+diff --git a/module/zfs/dsl_pool.c b/module/zfs/dsl_pool.c
+index f47822df8..8d976f351 100644
+--- a/module/zfs/dsl_pool.c
++++ b/module/zfs/dsl_pool.c
+@@ -473,6 +473,16 @@ dsl_pool_destroy_obsolete_bpobj(dsl_pool_t *dp, dmu_tx_t *tx)
+ 	bpobj_close(&dp->dp_obsolete_bpobj);
+ }
+ 
++#ifndef _KERNEL
++/*
++ * A user-space process that serves the ZPL itself (the Windows user-mode
++ * engine) builds the root file system here, where the kernel calls
++ * zfs_create_fs(): in this transaction, while the new objset is still empty.
++ */
++void (*dsl_pool_create_fs_hook)(objset_t *os, nvlist_t *zplprops,
++    dmu_tx_t *tx) = NULL;
++#endif
++
+ dsl_pool_t *
+ dsl_pool_create(spa_t *spa, nvlist_t *zplprops __attribute__((unused)),
+     dsl_crypto_params_t *dcp, uint64_t txg)
+@@ -554,6 +564,9 @@ dsl_pool_create(spa_t *spa, nvlist_t *zplprops __attribute__((unused)),
+ 	rrw_exit(&ds->ds_bp_rwlock, FTAG);
+ #ifdef _KERNEL
+ 	zfs_create_fs(os, kcred, zplprops, tx);
++#else
++	if (dsl_pool_create_fs_hook != NULL)
++		dsl_pool_create_fs_hook(os, zplprops, tx);
+ #endif
+ 	dsl_dataset_rele_flags(ds, DS_HOLD_FLAG_DECRYPT, FTAG);
+ 

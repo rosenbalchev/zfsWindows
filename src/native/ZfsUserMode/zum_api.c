@@ -306,6 +306,131 @@ zum_fs_sync(zum_fs_t *fs)
     return (0);
 }
 
+int
+zum_fs_clone(zum_fs_t *fs, uint64_t source, uint64_t source_offset,
+    uint64_t target, uint64_t target_offset, uint64_t *length)
+{
+    return (zum_clone_range(fs, source, source_offset, target, target_offset,
+        length));
+}
+
+/* Release the dataset (for a rollback) and own it again afterwards. */
+int
+zum_fs_suspend(zum_fs_t *fs)
+{
+    zum_unmount(fs);
+    return (0);
+}
+
+int
+zum_fs_resume(zum_fs_t *fs)
+{
+    return (zum_mount(fs));
+}
+
+int
+zum_fs_parent(zum_fs_t *fs, uint64_t object, uint64_t *parent)
+{
+    zum_znode_t *zp;
+    int error;
+
+    if ((error = zum_zget(fs, object, &zp)) != 0)
+        return (error);
+    error = sa_lookup(zp->z_sa_hdl, fs->sa_table[ZPL_PARENT], parent, 8);
+    zum_zrele(zp);
+    return (error);
+}
+
+/*
+ * The mount flags libzfs reads back from the mount table: 1 read-only, 2
+ * noatime.  Without them `zfs get atime` reports the mount's (temporary)
+ * value, as if it had been mounted with atime.
+ */
+int
+zum_fs_mount_flags(zum_fs_t *fs)
+{
+    uint64_t atime = 1, readonly = 0;
+
+    (void) dsl_prop_get_integer(fs->dataset_name,
+        zfs_prop_to_name(ZFS_PROP_ATIME), &atime, NULL);
+    (void) dsl_prop_get_integer(fs->dataset_name,
+        zfs_prop_to_name(ZFS_PROP_READONLY), &readonly, NULL);
+    return ((fs->readonly || readonly ? 1 : 0) | (atime ? 0 : 2));
+}
+
+int
+zum_fs_snapdir(zum_fs_t *fs)
+{
+    uint64_t value = ZFS_SNAPDIR_HIDDEN;
+
+    (void) dsl_prop_get_integer(fs->dataset_name,
+        zfs_prop_to_name(ZFS_PROP_SNAPDIR), &value, NULL);
+    return ((int)value);
+}
+
+/* zfsctl_snapdir_readdir(): every snapshot of the dataset, in ZAP order. */
+int
+zum_fs_snapshot_list(zum_fs_t *fs, zum_snapshot_cb_t cb, void *arg)
+{
+    dsl_pool_t *dp = dmu_objset_pool(fs->os);
+    char name[ZFS_MAX_DATASET_NAME_LEN];
+    uint64_t id, offset = 0, creation;
+    boolean_t conflict;
+    dsl_dataset_t *ds;
+    int error, stop = 0;
+
+    for (;;) {
+        dsl_pool_config_enter(dp, FTAG);
+        error = dmu_snapshot_list_next(fs->os, sizeof (name), name, &id,
+            &offset, &conflict);
+        creation = 0;
+        if (error == 0 && dsl_dataset_hold_obj(dp, id, FTAG, &ds) == 0) {
+            creation = dsl_dataset_phys(ds)->ds_creation_time;
+            dsl_dataset_rele(ds, FTAG);
+        }
+        dsl_pool_config_exit(dp, FTAG);
+        if (error != 0)
+            break;
+        if ((stop = cb(arg, name, id,
+            (creation + ZUM_EPOCH_DELTA) * ZUM_TICKS)) < 0)
+            return (stop);
+    }
+    return (error == ENOENT ? 0 : error);
+}
+
+/* A snapshot of fs's dataset, owned read-only as zfsctl mounts it. */
+int
+zum_fs_snapshot_open(zum_fs_t *fs, const char *snapshot, zum_fs_t **snapfs)
+{
+    zum_context_t *context;
+    int error;
+
+    if (snapshot[0] == '\0' || strchr(snapshot, '@') != NULL ||
+        strchr(snapshot, '/') != NULL)
+        return (EINVAL);
+    context = kmem_zalloc(sizeof (*context), KM_SLEEP);
+    context->pool_name = spa_strdup(fs->pool_name);
+    context->dataset_name = kmem_asprintf("%s@%s", fs->dataset_name,
+        snapshot);
+    context->readonly = B_TRUE;
+    error = zum_mount(context);
+    if (error != 0) {
+        zum_fs_snapshot_close(context);
+        return (error == EINVAL ? ENOENT : error);
+    }
+    *snapfs = context;
+    return (0);
+}
+
+void
+zum_fs_snapshot_close(zum_fs_t *snapfs)
+{
+    zum_unmount(snapfs);
+    spa_strfree((char *)snapfs->pool_name);
+    kmem_strfree((char *)snapfs->dataset_name);
+    kmem_free(snapfs, sizeof (*snapfs));
+}
+
 /* errno to the NTSTATUS a Windows caller expects for the same failure. */
 uint32_t
 zum_fs_ntstatus(int error)

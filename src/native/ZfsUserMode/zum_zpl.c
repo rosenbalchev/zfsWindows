@@ -22,7 +22,7 @@ static int dir_remove(zum_context_t *, zum_znode_t *, const char *,
     dmu_tx_t *);
 
 /* Per-operation durability, as the caller chose (zfs-write-core: always). */
-static void
+void
 zum_sync_op(zum_context_t *context)
 {
     if (context->sync_each_op)
@@ -309,25 +309,95 @@ link_destroy(zum_context_t *context, zum_znode_t *dzp, const char *name,
     return (0);
 }
 
+static int rmnode(zum_context_t *, zum_znode_t *);
+
 /*
- * zfs_rmnode() for a znode on the unlinked set: free a regular file's data
- * in bounded transactions, then remove it from the set and free the object
- * together.  An interruption at any point leaves the znode on the unlinked
- * set, which every OpenZFS implementation drains on mount.
+ * zfs_purgedir() for an xattr directory on the unlinked set: unlink every
+ * entry (each goes to the unlinked set in its own transaction) and reclaim
+ * it.  On error the directory stays on the unlinked set for the next mount.
+ */
+static int
+purge_xattrdir(zum_context_t *context, zum_znode_t *xzp)
+{
+    zap_cursor_t zc;
+    zap_attribute_t *za = zap_attribute_alloc();
+    zum_znode_t *ezp;
+    boolean_t unlinked;
+    dmu_tx_t *tx;
+    int error;
+
+    for (;;) {
+        /* The cursor restarts after each removal. */
+        zap_cursor_init(&zc, context->os, xzp->z_id);
+        error = zap_cursor_retrieve(&zc, za);
+        zap_cursor_fini(&zc);
+        if (error == ENOENT) {
+            error = 0;
+            break;
+        }
+        if (error != 0)
+            break;
+        if ((error = zum_zget(context, ZFS_DIRENT_OBJ(za->za_first_integer),
+            &ezp)) != 0)
+            break;
+        tx = dmu_tx_create(context->os);
+        dmu_tx_hold_zap(tx, xzp->z_id, FALSE, za->za_name);
+        dmu_tx_hold_sa(tx, xzp->z_sa_hdl, B_FALSE);
+        dmu_tx_hold_sa(tx, ezp->z_sa_hdl, B_FALSE);
+        dmu_tx_hold_zap(tx, context->unlinked_obj, FALSE, NULL);
+        dmu_tx_mark_netfree(tx);
+        error = dmu_tx_assign(tx, DMU_TX_WAIT);
+        if (error != 0) {
+            dmu_tx_abort(tx);
+            zum_zrele(ezp);
+            break;
+        }
+        unlinked = B_FALSE;
+        error = link_destroy(context, xzp, za->za_name, ezp, tx, 0,
+            &unlinked);
+        if (error == 0 && unlinked)
+            unlinked_add(context, ezp, tx);
+        dmu_tx_commit(tx);
+        if (error == 0 && unlinked)
+            error = rmnode(context, ezp);
+        zum_zrele(ezp);
+        if (error != 0)
+            break;
+    }
+    zap_attribute_free(za);
+    return (error);
+}
+
+/*
+ * zfs_rmnode() for a znode on the unlinked set: purge an xattr directory,
+ * free a regular file's data in bounded transactions, then remove it from
+ * the set and free the object together, moving its own xattr directory (if
+ * any) onto the set in the same transaction.  An interruption at any point
+ * leaves the znodes on the unlinked set, which every OpenZFS implementation
+ * drains on mount.
  */
 static int
 rmnode(zum_context_t *context, zum_znode_t *zp)
 {
+    zum_znode_t *xzp = NULL;
+    uint64_t links = 0;
     dmu_tx_t *tx;
     int error;
 
     ASSERT(zp->z_unlinked);
+    if (S_ISDIR(zp->z_mode) && (zp->z_pflags & ZFS_XATTR) != 0) {
+        if ((error = purge_xattrdir(context, zp)) != 0)
+            return (error);
+    }
     if (S_ISREG(zp->z_mode)) {
         error = dmu_free_long_range(context->os, zp->z_id, 0,
             DMU_OBJECT_END);
         if (error != 0)
             return (error);
     }
+    if (zp->z_xattr != 0 &&
+        (error = zum_zget(context, zp->z_xattr, &xzp)) != 0)
+        return (error);
 
     /*
      * Freeing the object is a net free; mark it as dmu_free_long_object()
@@ -336,17 +406,34 @@ rmnode(zum_context_t *context, zum_znode_t *zp)
     tx = dmu_tx_create(context->os);
     dmu_tx_hold_free(tx, zp->z_id, 0, DMU_OBJECT_END);
     dmu_tx_hold_zap(tx, context->unlinked_obj, FALSE, NULL);
+    if (xzp != NULL) {
+        dmu_tx_hold_zap(tx, context->unlinked_obj, TRUE, NULL);
+        dmu_tx_hold_sa(tx, xzp->z_sa_hdl, B_FALSE);
+    }
     dmu_tx_mark_netfree(tx);
     error = dmu_tx_assign(tx, DMU_TX_WAIT);
     if (error != 0) {
         dmu_tx_abort(tx);
+        zum_zrele(xzp);
         return (error);
+    }
+    if (xzp != NULL) {
+        xzp->z_unlinked = B_TRUE;
+        xzp->z_links = 0;
+        VERIFY0(sa_update(xzp->z_sa_hdl, context->sa_table[ZPL_LINKS],
+            &links, sizeof (links), tx));
+        unlinked_add(context, xzp, tx);
     }
     error = zap_remove_int(context->os, context->unlinked_obj, zp->z_id, tx);
     VERIFY(error == 0 || error == ENOENT);
     VERIFY0(dmu_object_free(context->os, zp->z_id, tx));
     dmu_tx_commit(tx);
-    return (0);
+    error = 0;
+    if (xzp != NULL) {
+        error = rmnode(context, xzp);
+        zum_zrele(xzp);
+    }
+    return (error);
 }
 
 /*
@@ -542,20 +629,46 @@ trivial_allow_masks(uint64_t mode, boolean_t isdir, uint32_t masks[3])
     return (B_TRUE);
 }
 
+/* The owner@/group@/everyone@ allow entries of a trivial ACL for mode. */
+static int
+trivial_aces(uint64_t mode, zfs_ace_hdr_t aces[3])
+{
+    static const uint16_t ace_who[3] = {
+        ACE_OWNER, ZWC_OWNING_GROUP, ACE_EVERYONE
+    };
+    uint32_t masks[3];
+    int i;
+
+    if (!trivial_allow_masks(mode, S_ISDIR(mode), masks))
+        return (ENOTSUP);
+    for (i = 0; i < 3; i++) {
+        aces[i].z_type = ZWC_ALLOW;
+        aces[i].z_flags = ace_who[i];
+        aces[i].z_access_mask = masks[i];
+    }
+    return (0);
+}
+
+#define ZUM_MK_XATTRDIR 0x1	/* dzp's xattr directory (IS_XATTR) */
+#define ZUM_MK_ROOT     0x2	/* the root directory (IS_ROOT_NODE) */
+
 /*
  * zfs_mknode() for a regular file or directory with a trivial,
  * non-inherited ACL, producing the same SA layout and flags as the Linux
- * ZPL.  Called in an assigned transaction; failures VERIFY.
+ * ZPL.  Called in an assigned transaction; failures VERIFY.  With
+ * ZUM_MK_XATTRDIR, dzp is the file whose xattr directory this is; with
+ * ZUM_MK_ROOT, dzp is NULL and the node is its own parent.
  */
 static zum_znode_t *
 mknode(zum_context_t *context, zum_znode_t *dzp, uint64_t mode,
-    const zfs_ace_hdr_t aces[3], dmu_tx_t *tx)
+    const zfs_ace_hdr_t aces[3], int flags, dmu_tx_t *tx)
 {
     dmu_buf_t *db = NULL;
     sa_bulk_attr_t attrs[16];
     timestruc_t now;
     zum_znode_t *zp;
-    uint64_t generation, uid = 0, gid = 0, parent = dzp->z_id;
+    uint64_t generation, uid = 0, gid = 0;
+    uint64_t parent = dzp != NULL ? dzp->z_id : 0;
     uint64_t crtime[2], ctime[2], atime[2], mtime[2];
     uint64_t acl_count = 3;
     boolean_t project = dmu_objset_projectquota_enabled(context->os);
@@ -583,12 +696,18 @@ mknode(zum_context_t *context, zum_znode_t *dzp, uint64_t mode,
         zp->z_size = 0;
         zp->z_links = 1;
     }
+    if (flags & ZUM_MK_ROOT)
+        parent = zp->z_id;
     zp->z_mode = mode;
     zp->z_pflags = ZFS_ARCHIVE | ZFS_AV_MODIFIED | ZFS_ACL_TRIVIAL;
+    /* An xattr directory and everything in one carry ZFS_XATTR. */
+    if ((flags & ZUM_MK_XATTRDIR) ||
+        (dzp != NULL && (dzp->z_pflags & ZFS_XATTR)))
+        zp->z_pflags |= ZFS_XATTR;
     zp->z_projid = ZFS_DEFAULT_PROJID;
     if (project)
         zp->z_pflags |= ZFS_PROJID;
-    if (dzp->z_pflags & ZFS_PROJINHERIT) {
+    if (dzp != NULL && (dzp->z_pflags & ZFS_PROJINHERIT)) {
         zp->z_projid = dzp->z_projid;
         zp->z_pflags |= ZFS_PROJINHERIT;
     }
@@ -650,25 +769,20 @@ mknode(zum_context_t *context, zum_znode_t *dzp, uint64_t mode,
  * root caller with umask 022.
  */
 int
-zum_create_path(zum_context_t *context, const char *path, boolean_t isdir,
-    uint64_t *object_out)
+zum_create_entry(zum_context_t *context, zum_znode_t *dzp, const char *name,
+    boolean_t isdir, uint64_t *object_out)
 {
-    static const uint16_t ace_who[3] = {
-        ACE_OWNER, ZWC_OWNING_GROUP, ACE_EVERYONE
-    };
     zfs_ace_hdr_t aces[3];
-    uint32_t masks[3];
-    char name[ZAP_MAXNAMELEN];
-    zum_znode_t *dzp = NULL, *zp;
+    zum_znode_t *zp;
     uint64_t mode = isdir ? (S_IFDIR | 0755) : (S_IFREG | 0644), existing;
     dmu_tx_t *tx;
-    int error, i;
+    int error;
 
     if (context->readonly)
         return (EROFS);
     if (context->zpl_version < ZPL_VERSION_SA)
         return (ENOTSUP);
-    if ((error = resolve_parent(context, path, &dzp, name)) != 0)
+    if ((error = valid_name(context, name)) != 0)
         return (error);
     error = dir_lookup(context, dzp, name, &existing);
     if (error == 0)
@@ -676,22 +790,15 @@ zum_create_path(zum_context_t *context, const char *path, boolean_t isdir,
     else if (error == ENOENT)
         error = 0;
     /* zfs_mkdir() refuses directories inside an xattr directory. */
-    if (error == 0 && (dzp->z_pflags & ZFS_XATTR) != 0)
-        error = isdir ? EINVAL : ENOTSUP;
+    if (error == 0 && isdir && (dzp->z_pflags & ZFS_XATTR) != 0)
+        error = EINVAL;
     /* Inheritable parent ACEs need zfs_acl_inherit(), which is not ported. */
     if (error == 0 && (dzp->z_pflags & ZFS_INHERIT_ACE) != 0)
         error = ENOTSUP;
-    if (error == 0 && !trivial_allow_masks(mode, isdir, masks))
-        error = ENOTSUP;
-    if (error != 0) {
-        zum_zrele(dzp);
+    if (error == 0)
+        error = trivial_aces(mode, aces);
+    if (error != 0)
         return (error);
-    }
-    for (i = 0; i < 3; i++) {
-        aces[i].z_type = ZWC_ALLOW;
-        aces[i].z_flags = ace_who[i];
-        aces[i].z_access_mask = masks[i];
-    }
 
     tx = dmu_tx_create(context->os);
     dmu_tx_hold_zap(tx, dzp->z_id, TRUE, name);
@@ -702,12 +809,11 @@ zum_create_path(zum_context_t *context, const char *path, boolean_t isdir,
     error = dmu_tx_assign(tx, DMU_TX_WAIT);
     if (error != 0) {
         dmu_tx_abort(tx);
-        zum_zrele(dzp);
         return (error);
     }
 
     /* An assigned transaction cannot be aborted; failures past here VERIFY. */
-    zp = mknode(context, dzp, mode, aces, tx);
+    zp = mknode(context, dzp, mode, aces, 0, tx);
     error = link_create(context, dzp, name, zp, tx, ZWC_NEW);
     if (error != 0)
         VERIFY0(dmu_object_free(context->os, zp->z_id, tx));
@@ -716,8 +822,175 @@ zum_create_path(zum_context_t *context, const char *path, boolean_t isdir,
     if (error == 0)
         *object_out = zp->z_id;
     zum_zrele(zp);
+    return (error);
+}
+
+int
+zum_create_path(zum_context_t *context, const char *path, boolean_t isdir,
+    uint64_t *object_out)
+{
+    char name[ZAP_MAXNAMELEN];
+    zum_znode_t *dzp = NULL;
+    int error;
+
+    if (context->readonly)
+        return (EROFS);
+    if ((error = resolve_parent(context, path, &dzp, name)) != 0)
+        return (error);
+    error = zum_create_entry(context, dzp, name, isdir, object_out);
     zum_zrele(dzp);
     return (error);
+}
+
+/*
+ * zfs_get_xattrdir(): the xattr directory of zp, created (zfs_make_xattrdir,
+ * mode S_IFDIR | S_ISVTX | 0777) when asked to and missing.
+ */
+int
+zum_xattrdir(zum_context_t *context, zum_znode_t *zp, boolean_t create,
+    zum_znode_t **xzpp)
+{
+    zfs_ace_hdr_t aces[3];
+    zum_znode_t *xzp;
+    dmu_tx_t *tx;
+    int error;
+
+    if (zp->z_xattr != 0)
+        return (zum_zget(context, zp->z_xattr, xzpp));
+    if (!create)
+        return (ENOENT);
+    if (context->readonly)
+        return (EROFS);
+    if ((zp->z_pflags & ZFS_XATTR) != 0)
+        return (EINVAL);	/* no xattrs on xattrs */
+    VERIFY0(trivial_aces(S_IFDIR | S_ISVTX | 0777, aces));
+
+    tx = dmu_tx_create(context->os);
+    dmu_tx_hold_sa_create(tx, sizeof (aces) + ZFS_SA_BASE_ATTR_SIZE);
+    dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_TRUE);
+    dmu_tx_hold_zap(tx, DMU_NEW_OBJECT, FALSE, NULL);
+    error = dmu_tx_assign(tx, DMU_TX_WAIT);
+    if (error != 0) {
+        dmu_tx_abort(tx);
+        return (error);
+    }
+    xzp = mknode(context, zp, S_IFDIR | S_ISVTX | 0777, aces,
+        ZUM_MK_XATTRDIR, tx);
+    VERIFY0(sa_update(zp->z_sa_hdl, context->sa_table[ZPL_XATTR],
+        &xzp->z_id, sizeof (xzp->z_id), tx));
+    zp->z_xattr = xzp->z_id;
+    dmu_tx_commit(tx);
+    zum_sync_op(context);
+    *xzpp = xzp;
+    return (0);
+}
+
+/* Look up name in directory dzp (normalized as the dataset requires). */
+int
+zum_dir_lookup(zum_context_t *context, zum_znode_t *dzp, const char *name,
+    uint64_t *object)
+{
+    return (dir_lookup(context, dzp, name, object));
+}
+
+/*
+ * zfs_remove() of one entry of directory dzp, reclaiming its last link
+ * (and its own xattr directory) after the unlink commits.
+ */
+int
+zum_remove_entry(zum_context_t *context, zum_znode_t *dzp, const char *name)
+{
+    zum_znode_t *zp = NULL;
+    boolean_t unlinked = B_FALSE;
+    uint64_t object;
+    dmu_tx_t *tx;
+    int error;
+
+    if (context->readonly)
+        return (EROFS);
+    if ((error = dir_lookup(context, dzp, name, &object)) != 0)
+        return (error);
+    if ((error = zum_zget(context, object, &zp)) != 0)
+        return (error);
+    if (S_ISDIR(zp->z_mode)) {
+        zum_zrele(zp);
+        return (EPERM);
+    }
+    tx = dmu_tx_create(context->os);
+    dmu_tx_hold_zap(tx, dzp->z_id, FALSE, name);
+    dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_FALSE);
+    dmu_tx_hold_sa(tx, dzp->z_sa_hdl, B_FALSE);
+    dmu_tx_hold_zap(tx, context->unlinked_obj, FALSE, NULL);
+    dmu_tx_mark_netfree(tx);
+    error = dmu_tx_assign(tx, DMU_TX_WAIT);
+    if (error != 0) {
+        dmu_tx_abort(tx);
+        zum_zrele(zp);
+        return (error);
+    }
+    VERIFY0(link_destroy(context, dzp, name, zp, tx, 0, &unlinked));
+    if (unlinked)
+        unlinked_add(context, zp, tx);
+    dmu_tx_commit(tx);
+    zum_sync_op(context);
+    if (unlinked)
+        reclaim(context, zp);
+    zum_zrele(zp);
+    return (0);
+}
+
+/*
+ * The parts of zfs_create_fs() that build a new filesystem: the master node
+ * with the ZPL properties, the SA registration and unlinked set, and the
+ * root directory (mode 0755, trivial ACL).  Called from the ioctl path's
+ * zfs_create_cb() in the dataset-creating transaction.
+ */
+void
+zum_create_fs(objset_t *os, nvlist_t *zplprops, dmu_tx_t *tx)
+{
+    zum_context_t context = { 0 };
+    zfs_ace_hdr_t aces[3];
+    zum_znode_t *rootzp;
+    nvpair_t *elem = NULL;
+    uint64_t moid = MASTER_NODE_OBJ, sa_obj = 0, obj, version;
+    uint64_t sense = ZFS_CASE_SENSITIVE, norm = 0;
+
+    VERIFY0(zap_create_claim(os, moid, DMU_OT_MASTER_NODE, DMU_OT_NONE, 0,
+        tx));
+    version = zfs_zpl_version_map(spa_version(dmu_objset_spa(os)));
+    while ((elem = nvlist_next_nvpair(zplprops, elem)) != NULL) {
+        uint64_t val = fnvpair_value_uint64(elem);
+        const char *name = nvpair_name(elem);
+
+        if (strcmp(name, zfs_prop_to_name(ZFS_PROP_VERSION)) == 0) {
+            if (val < version)
+                version = val;
+        } else {
+            VERIFY0(zap_update(os, moid, name, 8, 1, &val, tx));
+        }
+        if (strcmp(name, zfs_prop_to_name(ZFS_PROP_NORMALIZE)) == 0)
+            norm = val;
+        else if (strcmp(name, zfs_prop_to_name(ZFS_PROP_CASE)) == 0)
+            sense = val;
+    }
+    VERIFY3U(version, >=, ZPL_VERSION_SA);	/* every pool since 2010 */
+    VERIFY0(zap_update(os, moid, ZPL_VERSION_STR, 8, 1, &version, tx));
+    sa_obj = zap_create(os, DMU_OT_SA_MASTER_NODE, DMU_OT_NONE, 0, tx);
+    VERIFY0(zap_add(os, moid, ZFS_SA_ATTRS, 8, 1, &sa_obj, tx));
+    obj = zap_create(os, DMU_OT_UNLINKED_SET, DMU_OT_NONE, 0, tx);
+    VERIFY0(zap_add(os, moid, ZFS_UNLINKED_SET, 8, 1, &obj, tx));
+
+    context.os = os;
+    context.zpl_version = version;
+    context.norm = norm;
+    if (sense == ZFS_CASE_INSENSITIVE || sense == ZFS_CASE_MIXED)
+        context.norm |= U8_TEXTPREP_TOUPPER;
+    VERIFY0(sa_setup(os, sa_obj, zfs_attr_table, ZPL_END,
+        &context.sa_table));
+    VERIFY0(trivial_aces(S_IFDIR | 0755, aces));
+    rootzp = mknode(&context, NULL, S_IFDIR | 0755, aces, ZUM_MK_ROOT, tx);
+    VERIFY0(zap_add(os, moid, ZFS_ROOT_OBJ, 8, 1, &rootzp->z_id, tx));
+    zum_zrele(rootzp);
 }
 
 /*
@@ -746,8 +1019,6 @@ zum_remove_path(zum_context_t *context, const char *path, boolean_t isdir,
         error = EPERM;		/* zfs_remove(): directories need rmdir */
     else if (isdir && !dirempty(context, zp))
         error = ENOTEMPTY;
-    else if (zp->z_xattr != 0)
-        error = ENOTSUP;	/* xattr directory reclaim is not ported */
     if (error != 0) {
         zum_zrele(zp);
         zum_zrele(dzp);
@@ -850,8 +1121,6 @@ zum_rename_path(zum_context_t *context, const char *from, const char *to)
         }
         else if (S_ISDIR(tzp->z_mode) && !dirempty(context, tzp))
             error = ENOTEMPTY;
-        else if (tzp->z_xattr != 0)
-            error = ENOTSUP;
     }
     if (error != 0)
         goto out;
@@ -1132,6 +1401,153 @@ zum_write_object(zum_context_t *context, uint64_t object, uint64_t *offsetp,
     return (error);
 }
 
+/* Block pointers per clone transaction (zil_max_log_data() upstream). */
+#define ZUM_CLONE_MAXBLOCKS 1024
+
+/*
+ * zfs_clone_range() within one dataset: share the source's L0 blocks with
+ * the target through the BRT instead of copying them.  The caller holds
+ * the filesystem lock, which stands in for the two range locks; without a
+ * ZIL here, durability is the next txg sync, as for every other write.
+ * *lenp is the requested length on entry and the cloned length on return.
+ */
+int
+zum_clone_range(zum_context_t *context, uint64_t inobj, uint64_t inoff,
+    uint64_t outobj, uint64_t outoff, uint64_t *lenp)
+{
+    sa_bulk_attr_t bulk[4];
+    zum_znode_t *inzp = NULL, *outzp = NULL;
+    uint64_t len = *lenp, done = 0, size, mtime[2], ctime[2];
+    uint64_t last_synced_txg;
+    blkptr_t *bps = NULL;
+    size_t nbps;
+    uint32_t inblksz;
+    boolean_t grow;
+    dmu_buf_impl_t *db;
+    dmu_tx_t *tx;
+    int count = 0, error;
+
+    *lenp = 0;
+    if (context->readonly)
+        return (EROFS);
+    if (!spa_feature_is_enabled(dmu_objset_spa(context->os),
+        SPA_FEATURE_BLOCK_CLONING))
+        return (EOPNOTSUPP);
+    if ((error = zum_zget(context, inobj, &inzp)) != 0)
+        return (error);
+    if ((error = zum_zget(context, outobj, &outzp)) != 0)
+        goto out;
+    if (!S_ISREG(inzp->z_mode) || !S_ISREG(outzp->z_mode)) {
+        error = EINVAL;
+        goto out;
+    }
+    if ((outzp->z_pflags & (ZFS_IMMUTABLE | ZFS_READONLY)) != 0) {
+        error = EPERM;
+        goto out;
+    }
+    if (inoff >= inzp->z_size)
+        goto out;
+    len = MIN(len, inzp->z_size - inoff);
+    if (len == 0)
+        goto out;
+    if (inobj == outobj && inoff < outoff + len && outoff < inoff + len) {
+        error = EINVAL;
+        goto out;
+    }
+
+    /* zfs_rangelock_enter(): a one-block target may still change size. */
+    grow = outzp->z_size <= outzp->z_blksz;
+    inblksz = inzp->z_blksz;
+    if (inblksz < outzp->z_blksz ||
+        (inblksz != outzp->z_blksz && (outzp->z_size > outzp->z_blksz ||
+        !grow)) ||
+        (outoff != 0 && !ISP2(inblksz)) ||
+        (inoff % inblksz) != 0 || (outoff % inblksz) != 0 ||
+        ((len % inblksz) != 0 && (len < inzp->z_size - inoff ||
+        len < outzp->z_size - outoff)) ||
+        (len <= inblksz && inblksz < context->max_blksz &&
+        outzp->z_size <= inblksz && outoff + len > inblksz)) {
+        error = EINVAL;
+        goto out;
+    }
+    if (inoff >= MAXOFFSET_T || outoff >= MAXOFFSET_T) {
+        error = EFBIG;
+        goto out;
+    }
+
+    SA_ADD_BULK_ATTR(bulk, count, context->sa_table[ZPL_MTIME], NULL,
+        mtime, 16);
+    SA_ADD_BULK_ATTR(bulk, count, context->sa_table[ZPL_CTIME], NULL,
+        ctime, 16);
+    SA_ADD_BULK_ATTR(bulk, count, context->sa_table[ZPL_SIZE], NULL,
+        &outzp->z_size, 8);
+    SA_ADD_BULK_ATTR(bulk, count, context->sa_table[ZPL_FLAGS], NULL,
+        &outzp->z_pflags, 8);
+    bps = vmem_alloc(sizeof (bps[0]) * ZUM_CLONE_MAXBLOCKS, KM_SLEEP);
+
+    while (len > 0) {
+        size = MIN((uint64_t)inblksz * ZUM_CLONE_MAXBLOCKS, len);
+        nbps = ZUM_CLONE_MAXBLOCKS;
+        last_synced_txg = spa_last_synced_txg(dmu_objset_spa(context->os));
+        error = dmu_read_l0_bps(context->os, inobj, inoff, size, bps, &nbps);
+        if (error == EAGAIN) {
+            /* Dirty source blocks have no block pointer until synced. */
+            txg_wait_synced(dmu_objset_pool(context->os),
+                last_synced_txg + 1);
+            continue;
+        }
+        if (error != 0)
+            break;
+
+        tx = dmu_tx_create(context->os);
+        dmu_tx_hold_sa(tx, outzp->z_sa_hdl, B_FALSE);
+        db = (dmu_buf_impl_t *)sa_get_db(outzp->z_sa_hdl);
+        DB_DNODE_ENTER(db);
+        dmu_tx_hold_clone_by_dnode(tx, DB_DNODE(db), outoff, size, inblksz);
+        DB_DNODE_EXIT(db);
+        error = dmu_tx_assign(tx, DMU_TX_WAIT);
+        if (error != 0) {
+            dmu_tx_abort(tx);
+            break;
+        }
+        if (grow) {
+            grow_blocksize(context, outzp, inblksz, tx);
+            if (inblksz != outzp->z_blksz) {
+                error = EINVAL;
+                dmu_tx_commit(tx);
+                break;
+            }
+        }
+        error = dmu_brt_clone(context->os, outobj, outoff, size, tx, bps,
+            nbps);
+        if (error != 0) {
+            dmu_tx_commit(tx);
+            break;
+        }
+        tstamp_update_setup(context, outzp, ZWC_CONTENT_MODIFIED, mtime,
+            ctime);
+        outzp->z_size = MAX(outzp->z_size, outoff + size);
+        error = sa_bulk_update(outzp->z_sa_hdl, bulk, count, tx);
+        dmu_tx_commit(tx);
+        if (error != 0)
+            break;
+        inoff += size;
+        outoff += size;
+        len -= size;
+        done += size;
+    }
+    vmem_free(bps, sizeof (bps[0]) * ZUM_CLONE_MAXBLOCKS);
+    if (done > 0) {
+        error = 0;
+        zum_sync_op(context);
+    }
+out:
+    *lenp = done;
+    zum_zrele(outzp);
+    zum_zrele(inzp);
+    return (error);
+}
+
 static int
 master_lookup(zum_context_t *context, const char *name, uint64_t *value,
     boolean_t optional)
@@ -1192,6 +1608,13 @@ zum_mount(zum_context_t *context)
         print_error("read recordsize", error);
         return (error);
     }
+    {
+        uint64_t xattr = ZFS_XATTR_SA;
+
+        (void) dsl_prop_get_integer(context->dataset_name,
+            zfs_prop_to_name(ZFS_PROP_XATTR), &xattr, NULL);
+        context->xattr_sa = xattr == ZFS_XATTR_SA;
+    }
 
     error = sa_setup(context->os, sa_object, zfs_attr_table, ZPL_END,
         &context->sa_table);
@@ -1230,6 +1653,13 @@ collect_leaves(vdev_t *vd, const char *match, vdev_t **leaves, int max,
     for (c = 0; c < vd->vdev_children; c++)
         count = collect_leaves(vd->vdev_child[c], match, leaves, max, count);
     return (count);
+}
+
+/* Every leaf vdev with a path, under the SCL_VDEV lock the caller holds. */
+int
+zum_vdev_leaves(vdev_t *vd, vdev_t **leaves, int max, int count)
+{
+    return (collect_leaves(vd, "*", leaves, max, count));
 }
 
 /*

@@ -48,6 +48,9 @@ internal static class CommandLine
           vdev add-cache <pool> <device>... --yes                      (admin; read cache, L2ARC)
           vdev add-log <pool> [--mirror] <device>... --yes             (admin; write log, SLOG)
           vdev remove <pool> <device> --yes                            (admin; cache, log or data vdev)
+        Files
+          clone <source> <target> [--force]        copy by sharing blocks (block cloning);
+                                                   runs as you, on one ZFS dataset
         Other
           version
           help

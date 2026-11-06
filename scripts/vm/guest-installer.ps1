@@ -3,7 +3,7 @@
 # object.  Driven by scripts\vm\Test-InstallerInVm.ps1.
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "samples", "import", "export", "hash")]
+    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "filesystem", "crosscheck", "samples", "import", "export", "hash")]
     [string]$Stage,
     [string]$Msi = "",
     [ValidateSet("install", "repair", "uninstall")]
@@ -24,7 +24,10 @@ if ($ArgumentsBase64) {
 }
 $work = "C:\zfswin\installer"
 $images = "$work\images"
-$product = "OpenZFS for Windows"
+# The user-mode edition (plan step 18) runs the same stages with its own
+# install folder; its zpool/zfs reach the engine through the ZFS bridge.
+$edition = if ($decoded -and $decoded.Edition) { $decoded.Edition } else { "kernel" }
+$product = if ($edition -eq "usermode") { "OpenZFS for Windows (user mode)" } else { "OpenZFS for Windows" }
 $installDir = Join-Path ${env:ProgramFiles} $product
 $zfswin = Join-Path $installDir "bin\zfswin.exe"
 $pool = "zwin"
@@ -39,7 +42,21 @@ function Zfswin([string[]]$arguments) {
 }
 
 function Check($results, [string]$name, $value, $expected) {
-    $results[$name] = [ordered]@{ value = $value; expected = $expected; pass = ("$value" -eq "$expected") }
+    # Strings: Get-Content output carries provider properties that would
+    # otherwise be serialized with it.
+    $results[$name] = [ordered]@{ value = "$value"; expected = "$expected"; pass = ("$value" -eq "$expected") }
+}
+
+# Reads under .zfs\snapshot: the kernel driver mounts a snapshot on first
+# access, so give it a moment instead of failing on the first try.
+function Retry([scriptblock]$read, [int]$seconds = 30) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    do {
+        $v = try { & $read } catch { $null }
+        if ($null -ne $v -and "$v" -ne "") { return $v }
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $deadline)
+    $v
 }
 
 function MountPath([string]$dataset) {
@@ -80,7 +97,14 @@ public static class ZfsWinClone {
             dst.SetLength(length);
             var data = new DuplicateExtentsData { FileHandle = src.SafeFileHandle.DangerousGetHandle(), ByteCount = length };
             int returned;
-            return DeviceIoControl(dst.SafeFileHandle, 0x00098344, ref data, Marshal.SizeOf(data), IntPtr.Zero, 0, out returned, IntPtr.Zero)
+            if (DeviceIoControl(dst.SafeFileHandle, 0x00098344, ref data, Marshal.SizeOf(data), IntPtr.Zero, 0, out returned, IntPtr.Zero))
+                return 0;
+            int error = Marshal.GetLastWin32Error();
+            if (error != 1 && error != 50)
+                return error;
+            // User mode: WinFsp forwards only custom control codes, so
+            // zfswin-um takes the same request as 0x8F5A2004.
+            return DeviceIoControl(dst.SafeFileHandle, 0x8F5A2004, ref data, Marshal.SizeOf(data), IntPtr.Zero, 0, out returned, IntPtr.Zero)
                 ? 0 : Marshal.GetLastWin32Error();
         }
     }
@@ -88,6 +112,57 @@ public static class ZfsWinClone {
 "@
     }
     [ZfsWinClone]::Clone($source, $target, $length)
+}
+
+# A local standard user (zfsuser) and a way to run a script as that user.
+function Invoke-AsStandardUser([string]$scriptText, [string]$result) {
+    $user = "zfsuser"
+    $password = "Zfs-User-$(Get-Random -Minimum 100000 -Maximum 999999)!"
+    if (-not (Get-LocalUser $user -ErrorAction SilentlyContinue)) {
+        New-LocalUser $user -Password (ConvertTo-SecureString $password -AsPlainText -Force) -PasswordNeverExpires | Out-Null
+    } else {
+        Set-LocalUser $user -Password (ConvertTo-SecureString $password -AsPlainText -Force)
+    }
+    # A scheduled task needs "Log on as a batch job", which Users lack by
+    # default (the task otherwise never starts: 0x41303).  Disposable VM.
+    $sid = (Get-LocalUser $user).SID.Value
+    & secedit.exe /export /cfg "$work\rights.inf" /areas USER_RIGHTS | Out-Null
+    $rights = @(Get-Content "$work\rights.inf")
+    if (-not ($rights -match "^SeBatchLogonRight.*\*$sid")) {
+        $rights = if ($rights -match '^SeBatchLogonRight') {
+            $rights | ForEach-Object { if ($_ -match '^SeBatchLogonRight') { "$_,*$sid" } else { $_ } }
+        } else { $rights + "SeBatchLogonRight = *$sid" }
+        $rights | Set-Content -Encoding Unicode "$work\rights.inf"
+        & secedit.exe /configure /db "$work\rights.sdb" /cfg "$work\rights.inf" /areas USER_RIGHTS | Out-Null
+    }
+    $script = "$work\as-standard-user.ps1"
+    Remove-Item $result -ErrorAction SilentlyContinue
+    $scriptText | Set-Content -Encoding utf8 $script
+    $task = "zfswin-standard-user"
+    Unregister-ScheduledTask $task -Confirm:$false -ErrorAction SilentlyContinue
+    $taskAction = New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
+    Register-ScheduledTask $task -Action $taskAction -User $user -Password $password -RunLevel Limited | Out-Null
+    Start-ScheduledTask $task
+    $deadline = (Get-Date).AddMinutes(3)
+    while (-not (Test-Path $result) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+    Unregister-ScheduledTask $task -Confirm:$false
+    if (Test-Path $result) { Get-Content $result -Raw | ConvertFrom-Json } else { [pscustomobject]@{ error = "the standard-user task produced no result" } }
+}
+
+# What a file looks like to Windows: security descriptor, data and streams.
+function Describe([string]$path) {
+    $streams = [ordered]@{}
+    foreach ($st in @(Get-Item -LiteralPath $path -Stream * -ErrorAction SilentlyContinue | Where-Object Stream -ne ':$DATA' | Sort-Object Stream)) {
+        # (.NET Framework rejects "file:stream" paths; the provider does not.)
+        $bytes = [byte[]](Get-Content -LiteralPath $path -Stream $st.Stream -Encoding Byte -Raw -ErrorAction SilentlyContinue)
+        $sha = [Security.Cryptography.SHA256]::Create()
+        $streams[$st.Stream] = [BitConverter]::ToString($sha.ComputeHash($(if ($bytes) { $bytes } else { [byte[]]@() }))) -replace '-', ''
+    }
+    [ordered]@{
+        sddl = (Get-Acl -LiteralPath $path).Sddl
+        sha256 = $(if (Test-Path -LiteralPath $path -PathType Leaf) { (Get-FileHash -LiteralPath $path).Hash })
+        streams = $streams
+    }
 }
 
 function Manifest([string]$root) {
@@ -286,7 +361,10 @@ switch ($Stage) {
             function Check([string]$name, $value, $expected) { $r[$name] = [ordered]@{ value = "$value"; expected = "$expected"; pass = ("$value" -eq "$expected") } }
             Import-Module ZfsWin
             Check "module-path" ((Get-Module ZfsWin).ModuleBase -like "*WindowsPowerShell\Modules\ZfsWin\*") $true
-            Check "signature" (Get-AuthenticodeSignature (Join-Path (Get-Module ZfsWin).ModuleBase 'ZfsWin.psm1')).Status 'Valid'
+            $sig = Get-AuthenticodeSignature (Join-Path (Get-Module ZfsWin).ModuleBase 'ZfsWin.psm1')
+            # The user-mode VM (Secure Boot on) does not trust the test root: there
+            # the signer is what is checked.
+            Check "signature" ($sig.Status -eq 'Valid' -or ($sig.Status -eq 'UnknownError' -and $sig.SignerCertificate.Subject -eq 'CN=zfsWindows Test Signing')) $true
             Check "pool" (Get-ZfsPool zwin).health 'ONLINE'
             $ds = New-ZfsDataset zwin/ps -Property @{ compression = 'gzip' } -Confirm:$false
             Check "new-dataset" $ds.name 'zwin/ps'
@@ -382,11 +460,136 @@ Import-Module ZfsWin
         if (Test-Path $out) {
             $j = Get-Content $out -Raw | ConvertFrom-Json
             $j | Add-Member exit $p.ExitCode
-            $j | Add-Member shortcuts @(Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\OpenZFS for Windows" -ErrorAction SilentlyContinue | ForEach-Object Name)
+            $j | Add-Member shortcuts @(Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\$product" -ErrorAction SilentlyContinue | ForEach-Object Name)
             $j | ConvertTo-Json -Depth 6 -Compress
         } else {
             [ordered]@{ exit = $p.ExitCode; error = "no self-check report (is the .NET 10 Desktop Runtime installed?)" } | ConvertTo-Json -Compress
         }
+    }
+
+    # Windows ACLs, alternate data streams and .zfs\snapshot on a dataset of
+    # the imported pool (plan step 18; both editions).  Leaves zwin/fs and
+    # fs-expected.json for the other edition's "crosscheck".
+    "filesystem" {
+        $r = [ordered]@{}
+        $ds = "$pool/fs"
+        if (-not (Get-LocalUser zfsuser -ErrorAction SilentlyContinue)) {
+            New-LocalUser zfsuser -Password (ConvertTo-SecureString "Zfs-User-$(Get-Random)!" -AsPlainText -Force) -PasswordNeverExpires | Out-Null
+        }
+        Check $r "fs-create" (Zfswin @('dataset', 'create', $ds)).exit 0
+        $root = MountPath $ds
+        $r.mountpoint = $root
+        if (-not $root -or -not (Test-Path -LiteralPath $root)) {
+            $r.failed = @("fs-mounted")
+            $r | ConvertTo-Json -Depth 6 -Compress
+            break
+        }
+        # ACLs: inherited from the root; explicit and protected; a deny.
+        $plain = Join-Path $root "plain.txt"; Set-Content -LiteralPath $plain "inherits the root's ACL"
+        $custom = Join-Path $root "custom-acl.txt"; Set-Content -LiteralPath $custom "zfsuser may read this"
+        & icacls.exe $custom /inheritance:r /grant:r "*S-1-5-32-544:(F)" "*S-1-5-18:(F)" "zfsuser:(R)" | Out-Null
+        $denied = Join-Path $root "denied.txt"; Set-Content -LiteralPath $denied "secret"
+        & icacls.exe $denied /deny "zfsuser:(R)" | Out-Null
+        $dir = Join-Path $root "dir"; New-Item -ItemType Directory $dir | Out-Null
+        & icacls.exe $dir /grant "zfsuser:(OI)(CI)(M)" | Out-Null
+        $inner = Join-Path $dir "inner.txt"; Set-Content -LiteralPath $inner "inside"
+        Check $r "acl-explicit" ([bool]((Get-Acl -LiteralPath $custom).Access | Where-Object { $_.IdentityReference -like '*zfsuser' -and -not $_.IsInherited })) $true
+        Check $r "acl-protected" ((Get-Acl -LiteralPath $custom).AreAccessRulesProtected) $true
+        Check $r "acl-inherited-from-dir" ([bool]((Get-Acl -LiteralPath $inner).Access | Where-Object { $_.IdentityReference -like '*zfsuser' -and $_.IsInherited })) $true
+
+        # Alternate data streams.
+        $streamed = Join-Path $root "streams.txt"; Set-Content -LiteralPath $streamed "main data"
+        Set-Content -LiteralPath $streamed -Stream meta -Value "metadata stream"
+        Set-Content -LiteralPath $streamed -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
+        $big = [byte[]]::new(200KB); [Random]::new(5).NextBytes($big)
+        Set-Content -LiteralPath $streamed -Stream big -Value $big -Encoding Byte
+        Check $r "streams-listed" ((@(Get-Item -LiteralPath $streamed -Stream * | Where-Object Stream -ne ':$DATA' | ForEach-Object Stream) | Sort-Object) -join ',') "big,meta,Zone.Identifier"
+        Check $r "stream-read" (Get-Content -LiteralPath $streamed -Stream meta) "metadata stream"
+        Check $r "stream-big" ((Get-Content -LiteralPath $streamed -Stream big -Encoding Byte -Raw).Length) $big.Length
+        Check $r "main-data-unchanged" (Get-Content -LiteralPath $streamed) "main data"
+        Remove-Item -LiteralPath $streamed -Stream big
+        Check $r "stream-removed" @(Get-Item -LiteralPath $streamed -Stream * | Where-Object Stream -eq big).Count 0
+        $doomed = Join-Path $root "doomed.txt"; Set-Content -LiteralPath $doomed "x"; Set-Content -LiteralPath $doomed -Stream s -Value "y"
+        Remove-Item -LiteralPath $doomed
+        Check $r "delete-file-with-stream" (Test-Path -LiteralPath $doomed) $false
+
+        # Everything above survives an unmount and mount.
+        $names = "plain.txt", "custom-acl.txt", "denied.txt", "streams.txt", "dir", "dir\inner.txt"
+        $before = [ordered]@{}; foreach ($f in $names) { $before[$f] = Describe (Join-Path $root $f) }
+        Check $r "fs-unmount" (Zfswin @('dataset', 'unmount', $ds)).exit 0
+        Check $r "fs-mount" (Zfswin @('dataset', 'mount', $ds)).exit 0
+        $root = MountPath $ds
+        foreach ($f in $names) {
+            Check $r "persist-$f" ((Describe (Join-Path $root $f) | ConvertTo-Json -Compress -Depth 4) -eq ($before[$f] | ConvertTo-Json -Compress -Depth 4)) $true
+        }
+
+        # Enforcement, as a standard user.
+        $result = "$work\fs-user.json"
+        $u = Invoke-AsStandardUser @"
+`$r = [ordered]@{ user = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
+try { `$r.readCustom = "`$(Get-Content -LiteralPath '$(Join-Path $root "custom-acl.txt")' -Raw -ErrorAction Stop)".Trim() } catch { `$r.readCustom = 'denied' }
+try { Add-Content -LiteralPath '$(Join-Path $root "custom-acl.txt")' 'x' -ErrorAction Stop; `$r.writeCustom = 'written' } catch { `$r.writeCustom = 'denied' }
+try { `$r.readDenied = "`$(Get-Content -LiteralPath '$(Join-Path $root "denied.txt")' -Raw -ErrorAction Stop)".Trim() } catch { `$r.readDenied = 'denied' }
+try { `$r.readPlain = "`$(Get-Content -LiteralPath '$(Join-Path $root "plain.txt")' -Raw -ErrorAction Stop)".Trim() } catch { `$r.readPlain = 'denied' }
+try { Set-Content -LiteralPath '$(Join-Path $root "dir\by-user.txt")' 'mine' -ErrorAction Stop; `$r.writeDir = 'written' } catch { `$r.writeDir = 'denied' }
+`$r | ConvertTo-Json -Compress | Set-Content -Encoding utf8 '$result'
+"@ $result
+        $r.standardUser = $u
+        Check $r "user-reads-granted-file" $u.readCustom "zfsuser may read this"
+        Check $r "user-cannot-write-read-only-grant" $u.writeCustom "denied"
+        Check $r "user-denied-by-deny-ace" $u.readDenied "denied"
+        Check $r "user-reads-inherited" $u.readPlain "inherits the root's ACL"
+        Check $r "user-writes-granted-dir" $u.writeDir "written"
+
+        # .zfs\snapshot: contents, ACLs and streams as they were; read-only.
+        Check $r "snapshot-f1" (Zfswin @('snapshot', 'create', "$ds@f1")).exit 0
+        Set-Content -LiteralPath (Join-Path $root "plain.txt") "changed after f1"
+        Check $r "snapdir-visible" (Zfswin @('dataset', 'set', $ds, 'snapdir=visible')).exit 0
+        Check $r "snapdir-listed" ([bool](Get-ChildItem -LiteralPath $root -Force | Where-Object Name -eq '.zfs')) $true
+        $snapRoot = Join-Path $root ".zfs\snapshot\f1"
+        Check $r "snapshot-listed" ((Get-ChildItem -LiteralPath (Join-Path $root ".zfs\snapshot") | ForEach-Object Name) -join ',') "f1"
+        Check $r "snapshot-old-content" (Retry { Get-Content -LiteralPath (Join-Path $snapRoot "plain.txt") -ErrorAction Stop }) "inherits the root's ACL"
+        Check $r "snapshot-acl" ((Retry { (Get-Acl -LiteralPath (Join-Path $snapRoot "custom-acl.txt") -ErrorAction Stop).Sddl }) -eq $before["custom-acl.txt"].sddl) $true
+        Check $r "snapshot-stream" (Retry { Get-Content -LiteralPath (Join-Path $snapRoot "streams.txt") -Stream meta -ErrorAction Stop }) "metadata stream"
+        $readOnly = try { Set-Content -LiteralPath (Join-Path $snapRoot "new.txt") "x" -ErrorAction Stop; "written" } catch { "refused" }
+        Check $r "snapshot-read-only" $readOnly "refused"
+        Check $r "snapdir-hidden" (Zfswin @('dataset', 'set', $ds, 'snapdir=hidden')).exit 0
+        Check $r "snapdir-not-listed" ([bool](Get-ChildItem -LiteralPath $root -Force | Where-Object Name -eq '.zfs')) $false
+
+        $expected = [ordered]@{ edition = $edition; userSid = (Get-LocalUser zfsuser).SID.Value; files = [ordered]@{} }
+        foreach ($f in $names) { $expected.files[$f] = Describe (Join-Path $root $f) }
+        $expected | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "$work\fs-expected.json"
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # The other edition's pool (its images and fs-expected.json in Dir):
+    # imported as zcross, the same ACLs, data and streams, then exported.
+    "crosscheck" {
+        $r = [ordered]@{}
+        $dir = $decoded.Dir
+        $expected = Get-Content (Join-Path $dir "fs-expected.json") -Raw | ConvertFrom-Json
+        $r.writtenBy = $expected.edition
+        $localSid = (Get-LocalUser zfsuser -ErrorAction SilentlyContinue).SID.Value
+        function Normalize([string]$sddl) {
+            foreach ($sid in @($expected.userSid, $localSid) | Where-Object { $_ }) { $sddl = $sddl.Replace($sid, '<zfsuser>') }
+            $sddl
+        }
+        Check $r "import" (Zfswin @('pool', 'import', $pool, '--dir', $dir, '--new-name', 'zcross')).exit 0
+        $root = MountPath "zcross/fs"
+        $r.mountpoint = $root
+        foreach ($p in $expected.files.PSObject.Properties) {
+            $actual = if ($root) { Describe (Join-Path $root $p.Name) } else { $null }
+            Check $r "sddl-$($p.Name)" ($actual -and (Normalize $actual.sddl) -eq (Normalize $p.Value.sddl)) $true
+            Check $r "data-$($p.Name)" ("$($actual.sha256)" -eq "$($p.Value.sha256)") $true
+            Check $r "streams-$($p.Name)" (($actual.streams | ConvertTo-Json -Compress) -eq ($p.Value.streams | ConvertTo-Json -Compress)) $true
+            if ($actual -and (Normalize $actual.sddl) -ne (Normalize $p.Value.sddl)) { $r["sddl-$($p.Name)"].detail = "$($actual.sddl) vs $($p.Value.sddl)" }
+        }
+        $old = if ($root) { Retry { Get-Content -LiteralPath (Join-Path $root ".zfs\snapshot\f1\plain.txt") -ErrorAction Stop } }
+        Check $r "snapshot-f1" $old "inherits the root's ACL"
+        Check $r "export" (Zfswin @('pool', 'export', 'zcross')).exit 0
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
     }
 
     # Raw OpenZFS JSON for the schema-compatibility tests' fixtures.

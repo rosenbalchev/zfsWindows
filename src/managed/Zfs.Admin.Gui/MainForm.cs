@@ -188,7 +188,7 @@ sealed class MainForm : Form
         bottom.Controls.AddRange([add, edit, remove, new Label
         {
             AutoSize = true, Padding = new Padding(8, 6, 0, 0),
-            Text = "Mount changes take effect when the service restarts.  The user-mode edition mounts pools; create pools and change their features with the kernel-driver edition or another OpenZFS system.",
+            Text = "Mount changes take effect when the service restarts.  Mounts made with zfs mount (or zpool import) are listed here too, as auto-<dataset>; pools are administered on the other tabs, as in the kernel-driver edition.",
             MaximumSize = new Size(700, 0),
         }]);
         page.Controls.Add(mounts);
@@ -213,7 +213,7 @@ sealed class MainForm : Form
             catch (AdminException e) when (e.Code == ErrorCode.BrokerUnavailable)
             {
                 brokerAvailable = false;
-                statusText.Text = "No ZfsWinBroker: pool administration needs the kernel-driver edition.  The User mode tab manages the user-mode edition.";
+                statusText.Text = UserModeService.State() == "NotInstalled" ? "ZfsWinBroker is not running (net start ZfsWinBroker)." : "ZfsWinBroker is not running (net start ZfsWinBroker).  The User mode tab manages the ZfsWinUserMode service, which pool administration also needs.";
             }
             foreach (TabPage p in tabs.TabPages)
                 p.Enabled = brokerAvailable || p.Text == "User mode";

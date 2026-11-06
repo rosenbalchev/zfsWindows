@@ -1,17 +1,17 @@
 ﻿{
     "product":  "OpenZFS for Windows",
-    "version":  "1.0.4",
+    "version":  "1.0.6",
     "architectures":  [
                           "x64",
                           "arm64"
                       ],
-    "built":  "2026-11-05T19:58:20Z",
-    "builtFromCommit":  "cb9bae61c5d997a5505c085e7230b0f56d6e0a75",
+    "built":  "2026-11-06T10:13:33Z",
+    "builtFromCommit":  "d6683820fde2edda8fab71b61c57d329fe0675fe",
     "workingTreeModified":  true,
     "openzfs":  "zfs-2.4.4 (OpenZFS submodule); openzfs-windows zfswin-2.4.1rc17 + patches/openzfs-windows",
     "variants":  {
-                     "kernel":  "OpenZFS-for-Windows-1.0.4-\u003carch\u003e-testsigned.msi: kernel driver, test-signed (needs test signing and Secure Boot off)",
-                     "usermode":  "OpenZFS-for-Windows-1.0.4-\u003carch\u003e-usermode.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
+                     "kernel":  "OpenZFS-for-Windows-1.0.6-\u003carch\u003e-testsigned.msi: kernel driver, test-signed (needs test signing and Secure Boot off)",
+                     "usermode":  "OpenZFS-for-Windows-1.0.6-\u003carch\u003e-usermode.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
                  },
     "tested":  "x64: Windows 11 24H2 VM suites (scripts/vm) and upstream OpenZFS validation on Linux. arm64: built and statically verified only (PE machine type, signatures); not run."
 }

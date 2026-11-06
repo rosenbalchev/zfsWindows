@@ -65,10 +65,71 @@ typedef struct zum_statfs {
     int readonly;
 } zum_statfs_t;
 
-/* User mode: import the pool (read-only if asked) and own the dataset. */
+/*
+ * User mode: import the pool if it is not imported yet (from search_path:
+ * ';'-separated image directories, image files or devices; read-only if
+ * asked) and own the dataset.
+ */
 int zum_fs_open(const zum_fs_args_t *args, zum_fs_t **fsp);
-/* Sync, release the dataset and export the pool. */
+/* Sync and release the dataset; the pool stays imported. */
 int zum_fs_close(zum_fs_t *fs);
+
+/*
+ * User-mode engine lifetime: start it before the first zum_fs_open() or
+ * bridge request; stopping exports every imported pool (as `zpool export`,
+ * so the disks import anywhere) and shuts the engine down.
+ */
+int zum_engine_start(void);
+int zum_engine_stop(void);
+/* The cache file created pools write (never read back; see zum_pool_um.c). */
+void zum_engine_set_cachefile(const char *path);
+/* Import one pool by name from search_path (see zum_fs_open()). */
+int zum_pool_import(const char *pool, const char *search_path);
+
+/*
+ * The ZFS ioctl bridge (user mode): requests arrive from zpool.exe/zfs.exe
+ * through the front end's pipe server and run upstream zfs_ioctl.c here.
+ * Mount requests and the things a pool operation must not find busy go back
+ * to the front end through these callbacks (any may be NULL).
+ */
+typedef struct zum_bridge_ops {
+    /* ZFS_IOC_MOUNT: where is "X:", "?:" (any letter) or "C:\path". */
+    int (*mount)(const char *dataset, const char *where, int readonly);
+    int (*unmount)(const char *dataset);
+    /* Before export/destroy: unmount every dataset of the pool. */
+    void (*unmount_pool)(const char *pool);
+    /* Around rollback: release a mounted dataset (1 if it was), remount. */
+    int (*suspend)(const char *dataset);
+    void (*resume)(const char *dataset);
+    /* A snapshot is going away: drop its .zfs\snapshot view. */
+    void (*snapshot_unmount)(const char *snapshot);
+    /* Pool created or imported (sources: its leaf vdev paths), exported. */
+    void (*pool_imported)(const char *pool, const char *sources);
+    void (*pool_exported)(const char *pool);
+} zum_bridge_ops_t;
+
+int zum_bridge_init(const zum_bridge_ops_t *ops);
+
+/* One ioctl's buffers, already in this process. */
+typedef struct zum_ioctl_buffers {
+    void *cmd;			/* zfs_cmd_t, zum_ioctl_cmd_size() bytes */
+    void *src;
+    uint64_t src_size;
+    void *conf;
+    uint64_t conf_size;
+    void *history;		/* input string, or POOL_GET_HISTORY output */
+    uint64_t history_cap;
+    void *dst;
+    uint64_t dst_cap;
+    uint64_t dst_out;		/* on return: bytes of dst to send back */
+    uint64_t history_out;
+} zum_ioctl_buffers_t;
+
+size_t zum_ioctl_cmd_size(void);
+/* The engine's OpenZFS version string (as the driver's zfs_version). */
+const char *zum_engine_version(void);
+/* Returns the ioctl's errno; client_pid keeps history logging per caller. */
+int zum_ioctl(uint64_t request, uint32_t client_pid, zum_ioctl_buffers_t *io);
 
 int zum_fs_statfs(zum_fs_t *fs, zum_statfs_t *st);
 int zum_fs_sync(zum_fs_t *fs);
@@ -109,6 +170,62 @@ typedef int (*zum_dirent_cb_t)(void *arg, const char *name,
     const zum_attr_t *attr);
 int zum_fs_readdir(zum_fs_t *fs, uint64_t object, zum_dirent_cb_t cb,
     void *arg);
+
+/*
+ * Release the dataset while its mount stays (a rollback must own it), and
+ * own it again.  Object numbers held across may no longer exist.
+ */
+int zum_fs_suspend(zum_fs_t *fs);
+int zum_fs_resume(zum_fs_t *fs);
+
+/* The directory an object is linked from (a stream: its xattr directory). */
+int zum_fs_parent(zum_fs_t *fs, uint64_t object, uint64_t *parent);
+/* POSIX owner and group ids, and the parent, of an object. */
+int zum_fs_owner(zum_fs_t *fs, uint64_t object, uint64_t *uid, uint64_t *gid,
+    uint64_t *parent);
+
+/*
+ * Windows security descriptor (self-relative), stored where the kernel
+ * driver stores it.  ENOENT: the object has none (written elsewhere), and
+ * the front end derives one as the driver does.  ERANGE: *len is the size.
+ */
+int zum_fs_get_security(zum_fs_t *fs, uint64_t object, void *buf,
+    uint32_t size, uint32_t *len);
+int zum_fs_set_security(zum_fs_t *fs, uint64_t object, const void *sd,
+    uint32_t len);
+
+/*
+ * Alternate data streams of a file.  A stream is an object like any other
+ * file (read, write, truncate, getattr by its object number).
+ */
+int zum_fs_stream_open(zum_fs_t *fs, uint64_t object, const char *name,
+    int create, uint64_t *stream);
+int zum_fs_stream_remove(zum_fs_t *fs, uint64_t object, const char *name);
+/* Each stream's name (without ":$DATA") and attributes. */
+int zum_fs_stream_list(zum_fs_t *fs, uint64_t object, zum_dirent_cb_t cb,
+    void *arg);
+
+/*
+ * Share length bytes of source at source_offset with target at
+ * target_offset (block cloning).  Offsets and length follow
+ * zfs_clone_range()'s block-alignment rules (EINVAL otherwise);
+ * *length returns the bytes cloned.  EOPNOTSUPP without the pool feature.
+ */
+int zum_fs_clone(zum_fs_t *fs, uint64_t source, uint64_t source_offset,
+    uint64_t target, uint64_t target_offset, uint64_t *length);
+
+/* Mount-table flags for libzfs: 1 read-only, 2 noatime. */
+int zum_fs_mount_flags(zum_fs_t *fs);
+
+/* .zfs: the snapdir property (0 hidden, 1 visible) and the snapshots. */
+int zum_fs_snapdir(zum_fs_t *fs);
+typedef int (*zum_snapshot_cb_t)(void *arg, const char *name, uint64_t id,
+    uint64_t creation_time);
+int zum_fs_snapshot_list(zum_fs_t *fs, zum_snapshot_cb_t cb, void *arg);
+/* Own a snapshot read-only as a filesystem of its own; close releases it. */
+int zum_fs_snapshot_open(zum_fs_t *fs, const char *snapshot,
+    zum_fs_t **snapfs);
+void zum_fs_snapshot_close(zum_fs_t *snapfs);
 
 uint32_t zum_fs_ntstatus(int error);
 

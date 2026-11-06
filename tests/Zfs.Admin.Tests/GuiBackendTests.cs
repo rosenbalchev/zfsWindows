@@ -86,10 +86,37 @@ public class GuiBackendTests
             Assert.Throws<AdminException>(() => mounts.Save(new UserModeMount("x", @"D:\p", "tank", "other/data", "Z:", false)));   // dataset of another pool
             Assert.Throws<AdminException>(() => mounts.Save(new UserModeMount("x", @"D:\p", "tank", "tank", "Z", false)));          // bad mount point
             Assert.Throws<AdminException>(() => mounts.Save(new UserModeMount(@"a\b", @"D:\p", "tank", "tank", "Z:", false)));      // bad name
+
+            // Step 18: no source for a pool the service imports anyway; an image file as source.
+            mounts.Save(new UserModeMount("auto-tank_data", "", "tank", "tank/data", "Y:", false));
+            mounts.Save(new UserModeMount("img", @"D:\pools\tank.img", "tank", "tank", "X:", false));
+            Assert.Equal("", mounts.List().Single(m => m.Name == "auto-tank_data").Source);
         }
         finally
         {
             Registry.CurrentUser.DeleteSubKeyTree(path[..path.LastIndexOf('\\')], throwOnMissingSubKey: false);
+        }
+    }
+
+    [Fact]
+    public void FileCloneRefusesBeforeTouchingFiles()
+    {
+        string dir = Directory.CreateTempSubdirectory("zfswin-clone").FullName;
+        try
+        {
+            string source = Path.Combine(dir, "a.bin"), target = Path.Combine(dir, "b.bin");
+            Assert.Equal(ErrorCode.InvalidArgument, Assert.Throws<AdminException>(() => FileClone.Clone("a.bin", target, false)).Code);
+            Assert.Equal(ErrorCode.NotFound, Assert.Throws<AdminException>(() => FileClone.Clone(source, target, false)).Code);
+            File.WriteAllBytes(source, [1, 2, 3]);
+            File.WriteAllBytes(target, [9]);
+            Assert.Equal(ErrorCode.InvalidArgument, Assert.Throws<AdminException>(() => FileClone.Clone(source, target, false)).Code);
+            Assert.Equal([9], File.ReadAllBytes(target));	// untouched without --force
+            // NTFS has no block cloning: refused after both standard and user-mode requests.
+            Assert.Equal(ErrorCode.CommandFailed, Assert.Throws<AdminException>(() => FileClone.Clone(source, target, true)).Code);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
         }
     }
 }
