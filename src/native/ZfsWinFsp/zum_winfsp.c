@@ -301,9 +301,13 @@ snapshot_get(mount_t *m, const char *name, int *error)
     return (s);
 }
 
-/* Close unused snapshot views (all, or the one named). */
+/*
+ * Close unused snapshot views (all, or the one named).  force: also those
+ * with open handles, once the volume is gone and no callback can reach
+ * them (the cache manager closes cached files lazily, step-18 VM run).
+ */
 static void
-snapshots_close(mount_t *m, const char *name)
+snapshots_close(mount_t *m, const char *name, BOOLEAN force)
 {
     int i;
 
@@ -311,7 +315,7 @@ snapshots_close(mount_t *m, const char *name)
     for (i = 0; i < MAX_SNAPSHOTS; i++) {
         snapshot_t *s = &m->snapshots[i];
 
-        if (s->fs == NULL || s->refs > 0 ||
+        if (s->fs == NULL || (s->refs > 0 && !force) ||
             (name != NULL && strcmp(s->name, name) != 0))
             continue;
         zum_fs_snapshot_close(s->fs);
@@ -1465,7 +1469,7 @@ unmount_one(mount_t *m)
 
     FspFileSystemStopDispatcher(m->fsp);
     FspFileSystemDelete(m->fsp);
-    snapshots_close(m, NULL);
+    snapshots_close(m, NULL, TRUE);
     error = zum_fs_close(m->fs);	/* sync and release the dataset */
     wide_of(m->dataset, wds, 256);
     FspServiceLog(error == 0 ? EVENTLOG_INFORMATION_TYPE :
@@ -1676,7 +1680,7 @@ bridge_suspend(const char *dataset)
     m = find_mount(dataset);
     if (m != NULL) {
         EXCLUSIVE(m);
-        snapshots_close(m, NULL);
+        snapshots_close(m, NULL, FALSE);
         (void) zum_fs_suspend(m->fs);
         m->suspended = TRUE;
     }
@@ -1718,7 +1722,7 @@ bridge_snapshot_unmount(const char *snapshot)
     AcquireSRWLockShared(&table_lock);
     if ((m = find_mount(dataset)) != NULL) {
         EXCLUSIVE(m);
-        snapshots_close(m, at + 1);
+        snapshots_close(m, at + 1, FALSE);
         UNLOCK_EXCLUSIVE(m);
     }
     ReleaseSRWLockShared(&table_lock);
