@@ -417,3 +417,109 @@ objset is written in syncing context. So user space gets a hook,
 `dsl_pool_create_fs_hook`, called at the same place with the same
 `zplprops`. It is NULL by default, so zdb and ztest are unchanged. The
 user-mode engine points it at its port of `zfs_create_fs()`.
+
+## 0026 — cmake: ZFS_DEBUG for all userland code
+
+libzpool always builds with `ZFS_DEBUG` (`lib/libzpool/CMakeLists.txt`),
+as upstream libzpool does. The top-level `CMakeLists.txt` defines it for
+everything else only in Debug. `ZFS_DEBUG` changes shared structures:
+`abd_t` gains `abd_parent` and `abd_children`, and `zfs_refcount_t`
+becomes a tracked list.
+
+In a Release build, libzpool and the other userland libraries (libzstd's
+compressors take `abd_t`) disagreed about those layouts. The first write
+into a zstd dataset in the user-mode engine then failed `abd_verify()`
+(step-18 follow-up, 1.0.8 Release VM run). `zdb` would hit the same
+mismatch.
+
+`lib/` and `cmd/` now define `ZFS_DEBUG` in every configuration. The
+kernel module (`module/`) keeps upstream's per-configuration setting.
+
+## 0027 — kernel: uninitialized values that trap in Release
+
+Four uses of uninitialized values in the Windows kernel module are
+undefined behaviour. Debug builds (`/Od`) tolerated them. In Release,
+clang may treat such a path as unreachable, and on Windows targets it
+compiles unreachable code to `int3`.
+
+- `zvol_os_deregister_module()` tested `status` without setting it: the
+  result of `ZwDeviceIoControlFile(OPENZVOL_DEREGISTER)` was discarded, and
+  the wait used a different `IO_STATUS_BLOCK`. The 1.0.9 Release driver
+  bugchecked on unload (`0x7E`, `0x80000003` at `zvol_os.c:367`) when
+  a failed install rolled back in the VM suite.
+- The `FileIdAllExtdBothDirectoryInformation` directory listing stored the
+  next-entry offset through `fiebdi`, a pointer never set in that branch,
+  instead of `fiaebdi`.
+- The boot ereport posted an unset `ena`; it is now 0.
+- In `QueryDeviceRelations()`, a failed allocation in the
+  `TargetDeviceRelation` case used `goto out`. That label is inside the
+  `BusRelations` block, so the jump freed the never-initialized
+  `StorportRelations` and dereferenced the NULL list. The case now breaks
+  and returns `STATUS_INSUFFICIENT_RESOURCES`.
+
+The remaining `-Wsometimes-uninitialized` warnings (`metaslab.c`,
+`range_tree.c`) are upstream switch defaults that `panic()`, so they are
+harmless.
+
+## 0028 — kernel: no over-aligned pointer assumptions
+
+Upstream marks several members `____cacheline_aligned` (64 bytes), for
+example `zio_t.io_queue_node`, `dsl_pool_t`, `metaslab_group_t`, `aggsum_t`
+and `multilist_sublist_t`. Clang therefore assumes every pointer to those
+structures is 64-byte aligned. The Windows SPL `kmem_cache` guarantees only
+`KMEM_ALIGN` (8). Linux is safe because its kernel builds without SSE, and
+Debug builds (`/Od`) copy without SSE as well.
+
+An optimized build copies `blkptr_t` into `zio->io_bp_orig` with `movaps`.
+On a zio at an address that is 8- but not 16-byte aligned, that raised a
+general-protection fault: the 1.0.10 Release driver bugchecked with `0x7E`
+(`c0000005`) at `zio_create` (`zio.c:996`) as soon as the VM suite created
+a pool.
+
+Two changes:
+
+- **The macro:** the Windows kernel SPL now defines `____cacheline_aligned`
+  as empty, as upstream's userland libspl already does
+  (`lib/libspl/include/sys/feature_tests.h`). `-fmax-type-align` cannot
+  cover types that carry the attribute themselves: `spa_config_lock_t`
+  inside a `kmem_zalloc`'ed `spa_t`, and `aggsum_bucket_t`. The change only
+  drops false-sharing padding.
+- **The compiler option:** `use_clang()` adds `-Xclang -fmax-type-align=8` to
+  `WDK_COMPILE_FLAGS`, so clang never assumes more than 8 bytes of alignment
+  behind a pointer to any other over-aligned type. Kernel targets take only
+  those flags. The MSVC-compiled `driver.c` and userland don't get the
+  option (checked with `ninja -t commands`).
+
+The result was checked by disassembling the Release `OpenZFS.sys` for
+aligned SSE (`movaps`) through a pointer that is not `rsp`, `rbp` or `rip`:
+
+| Build | Sites |
+| --- | --- |
+| Before | 99, in `zio_create`, `zio_write*`, `dsl_pool_open_impl`, `spa_add`, `aggsum_*` and others |
+| Compiler option only | 20 |
+| Both changes | only the CRT's `memmove`/`memset`, which check alignment first |
+
+User-mode code is unchanged: its malloc returns 16-byte-aligned memory, and
+it never had the attribute.
+
+## 0029 — sysctl: no self-triggered Registry loop, no zero dirty limit
+
+On every change under the driver's Registry key,
+`sysctl_os_registry_change` reapplies all tunables. The pass wrote
+`zfs_version` and the callout tunables back unconditionally. Every such
+write fired the notification again, so the passes never stopped.
+
+Each pass also applied the 0 that first load had stored for
+`zfs_dirty_data_max`, `zfs_dirty_data_max_max` and `zfs_wrlog_data_max`.
+That stored value dates from before `sysctl_os_fix()` computes them from
+memory. Until the end of the pass, `zfs_dirty_data_max` was therefore 0.
+A transaction arriving then waited in `dmu_tx_wait` for
+`dp_dirty_total < 0`, and nothing woke it on an idle pool. The 1.0.11
+Release build showed this as `zpool export` hanging in `zfs_rmdir` of a
+child mountpoint during unmount, on x64 and on ARM64. A diagnostic trace
+recorded `zfs_dirty_data_max == 0` at every such wait.
+
+The fix has two parts:
+- `sysctl_os_write_registry()` writes only when the type or data differ;
+- 0 in the Registry for those three tunables means "computed", and is
+  not applied.

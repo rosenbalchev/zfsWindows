@@ -1,0 +1,30 @@
+diff --git a/cmd/CMakeLists.txt b/cmd/CMakeLists.txt
+index 0792ae8e7..35311e346 100644
+--- a/cmd/CMakeLists.txt
++++ b/cmd/CMakeLists.txt
+@@ -4,6 +4,9 @@ include_directories(PRIVATE "${CMAKE_SOURCE_DIR}/lib/libspl/include/os/windows/"
+ 	"${CMAKE_SOURCE_DIR}/lib/os/windows/libpthread" "${OPENSSL_INCLUDE_DIR}")
+ 
+ add_definitions(-D_CRT_SECURE_NO_WARNINGS)
++# zdb (and anything else here using libzpool's structures) must see them
++# as libzpool does: built with ZFS_DEBUG (see lib/CMakeLists.txt).
++add_definitions(-DZFS_DEBUG)
+ 
+ add_subdirectory(zpool)
+ add_subdirectory(zfs)
+diff --git a/lib/CMakeLists.txt b/lib/CMakeLists.txt
+index aaa992bdc..d8dd85e3a 100644
+--- a/lib/CMakeLists.txt
++++ b/lib/CMakeLists.txt
+@@ -5,6 +5,11 @@ include_directories(PRIVATE "${CMAKE_SOURCE_DIR}/lib/libspl/include/os/windows"
+ 
+ add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+ add_definitions(-D_CRT_LOADCFG_DISABLE_CET)
++# libzpool always builds with ZFS_DEBUG (as upstream libzpool does), and
++# that changes the layout of shared structures (abd_t, zfs_refcount_t).
++# Every userland library must agree, also in Release, where the top-level
++# CMakeLists defines it only for Debug.
++add_definitions(-DZFS_DEBUG)
+ 
+ add_subdirectory(libavl)
+ add_subdirectory(libefi)

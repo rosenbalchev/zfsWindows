@@ -1,0 +1,68 @@
+diff --git a/module/os/windows/zfs/sysctl_os.c b/module/os/windows/zfs/sysctl_os.c
+index 0f756a73a..2bb1fe8c8 100644
+--- a/module/os/windows/zfs/sysctl_os.c
++++ b/module/os/windows/zfs/sysctl_os.c
+@@ -130,6 +130,39 @@ sysctl_os_write_registry(HANDLE regfd, ztunable_t *zt, UNICODE_STRING *entry)
+ 			goto skip;
+ 	}
+ 
++	/*
++	 * Write only when the value changes.  Every write fires the change
++	 * notification on this key tree (sysctl_os_registry_change), which
++	 * reapplies all tunables and writes again (zfs_version is written on
++	 * every pass): unconditional writes made that an endless loop.
++	 */
++	{
++		KEY_VALUE_PARTIAL_INFORMATION *kv;
++		ULONG need = 0;
++		BOOLEAN same = FALSE;
++
++		Status = ZwQueryValueKey(regfd, entry,
++		    KeyValuePartialInformation, NULL, 0, &need);
++		if ((Status == STATUS_BUFFER_TOO_SMALL ||
++		    Status == STATUS_BUFFER_OVERFLOW) && need > 0) {
++			kv = ExAllocatePoolWithTag(PagedPool, need, 'ZTST');
++			if (kv != NULL) {
++				if (NT_SUCCESS(ZwQueryValueKey(regfd, entry,
++				    KeyValuePartialInformation, kv, need,
++				    &need)) &&
++				    kv->Type == ZT_TYPE_REGISTRY(type) &&
++				    kv->DataLength == len &&
++				    RtlCompareMemory(kv->Data, val, len) == len)
++					same = TRUE;
++				ExFreePoolWithTag(kv, 'ZTST');
++			}
++		}
++		if (same) {
++			Status = STATUS_SUCCESS;
++			goto skip;
++		}
++	}
++
+ 	Status = ZwSetValueKey(
+ 	    regfd,
+ 	    entry,
+@@ -308,6 +341,23 @@ sysctl_os_process(PUNICODE_STRING pRegistryPath, ztunable_t *zt)
+ 
+ 				}
+ 
++				/*
++				 * 0 in the Registry means "computed" for the
++				 * tunables sysctl_os_fix() derives from memory
++				 * (it was written there at first load, before
++				 * they were computed).  Applying it literally
++				 * left zfs_dirty_data_max at 0 until
++				 * sysctl_os_fix() ran again, and a tx that
++				 * looked then waited for dirty < 0 forever.
++				 */
++				if (type != ZT_TYPE_STRING &&
++				    len == sizeof (uint64_t) &&
++				    *(uint64_t *)val == 0 &&
++				    (zt->zt_ptr == &zfs_dirty_data_max ||
++				    zt->zt_ptr == &zfs_dirty_data_max_max ||
++				    zt->zt_ptr == &zfs_wrlog_data_max))
++					goto failed;
++
+ 				ZT_SET_VALUE(zt, &val, &len, &type);
+ 
+ 				if ((zt->zt_flag & ZT_FLAG_STATIC) &&

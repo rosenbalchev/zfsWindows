@@ -98,7 +98,7 @@ foreach ($config in $Configuration) {
             usermode = "OpenZFS-for-Windows-$version-<arch>-usermode$tag.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
         }
         build = $(if ($config -eq "Release") { "optimized native code (/O2); OpenZFS keeps its own consistency checks (ZFS_DEBUG) in the user-mode engine, as upstream libzpool does" } else { "unoptimized native code with full debug checks; larger and slower, for diagnosing problems" })
-        tested = "x64 Debug: Windows 11 24H2 VM suites (scripts/vm) and upstream OpenZFS validation on Linux. x64 Release: see the README. arm64: built and statically verified only (PE machine type, signatures); not run."
+        tested = "x64 Debug and Release: Windows 11 24H2 VM suites (scripts/vm) and upstream OpenZFS validation on Linux, as recorded in the README for each release. arm64: see the README."
     } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $downloads "VERSION.json")
     Get-ChildItem $downloads -File | Where-Object Name -ne "SHA256SUMS" | Sort-Object Name | ForEach-Object {
         "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name

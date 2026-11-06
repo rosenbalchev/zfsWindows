@@ -1,0 +1,42 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5bbfa9dd0..fa4cc8488 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -79,6 +79,18 @@ else()
+ 	message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}")
+ endif()
+ 
++# Kernel code: upstream marks some members ____cacheline_aligned (zio_t,
++# dsl_pool_t, metaslab_group_t, ...), so clang assumes those objects are
++# 64-byte aligned and, optimizing, copies into them with aligned SSE
++# stores (movaps).  The Windows SPL kmem caches only guarantee KMEM_ALIGN
++# (8), and Linux never sees this because its kernel builds without SSE.
++# A Release driver took a general-protection fault in zio_create().
++# Never assume more than 8 bytes of alignment behind a pointer.  Kernel
++# targets (wdk_add_library/wdk_add_driver) take only WDK_COMPILE_FLAGS, and
++# only clang directories call use_clang(); driver.c (MSVC) is not one.
++list(APPEND WDK_COMPILE_FLAGS -Xclang -fmax-type-align=8)
++set(WDK_COMPILE_FLAGS "${WDK_COMPILE_FLAGS}" PARENT_SCOPE)
++
+ add_compile_options(
+ 	# These are all MS headers
+ 	-Wno-nonportable-include-path
+diff --git a/include/os/windows/spl/sys/isa_defs.h b/include/os/windows/spl/sys/isa_defs.h
+index e87bb2b4f..2098cf856 100644
+--- a/include/os/windows/spl/sys/isa_defs.h
++++ b/include/os/windows/spl/sys/isa_defs.h
+@@ -692,7 +692,13 @@ extern "C" {
+ #error "Both _ILP32 and _LP64 are defined"
+ #endif
+ 
+-#define	____cacheline_aligned	__attribute__((aligned(64)))
++/*
++ * Empty, as in userland libspl: the SPL kmem allocators only guarantee
++ * KMEM_ALIGN (8), so a 64-byte alignment promise is false, and optimized
++ * clang code relies on it with aligned SSE stores (movaps), which fault.
++ * spa_config_lock_t inside a kmem_zalloc'ed spa_t was one such case.
++ */
++#define	____cacheline_aligned
+ 
+ #ifdef	__cplusplus
+ }

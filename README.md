@@ -12,11 +12,13 @@ nested submodules are not needed.
 
 ## Download and install (1.0)
 
-> **Latest stable: 1.0.8** (2026-11-06), in
-> [`downloads/1.0/release/`](downloads/1.0/release/). The engine sources are
-> the same as 1.0.7, which passed every VM suite and the Linux validation
-> (plan step 18). Its Debug build is in
-> [`downloads/1.0/debug/`](downloads/1.0/debug/).
+> **Latest stable: 1.0.12** (2026-11-06), in
+> [`downloads/1.0/release/`](downloads/1.0/release/). The x64 Release build
+> passed every VM suite (kernel and user mode, including install, upgrade
+> and uninstall) and the Linux validation of the pools it wrote (plan step
+> 19). Its Debug build is in [`downloads/1.0/debug/`](downloads/1.0/debug/).
+> 1.0.8–1.0.11 are superseded: their Release builds had optimizer-only
+> bugs, fixed by patches 0026–0029.
 
 Versions are `1.0.N`; the build number goes up with every release build.
 Each version comes in two builds:
@@ -24,7 +26,7 @@ Each version comes in two builds:
 | Folder | Build | For |
 | --- | --- | --- |
 | [`downloads/1.0/release/`](downloads/1.0/release/) | **Release**: optimized native code; file names as below | normal use |
-| [`downloads/1.0/debug/`](downloads/1.0/debug/) | **Debug**: unoptimized native code with full debug checks; file names end in `-debug` | diagnosing problems; this is the build the VM test suites ran on |
+| [`downloads/1.0/debug/`](downloads/1.0/debug/) | **Debug**: unoptimized native code with full debug checks; file names end in `-debug` | diagnosing problems |
 
 Each folder has its own `SHA256SUMS`, `VERSION.json` and the test
 certificate. There are two packages, and you install one of them:
@@ -57,13 +59,15 @@ tool in the Start menu (`ZfsWinGui.exe`, needs the .NET 10 Desktop Runtime).
 What has been tested:
 - **x64 Debug:** verified in disposable Windows 11 24H2 x64 VMs and against
   upstream OpenZFS on Linux (plan steps 12–18).
-- **x64 Release:** built from the same sources with optimization (since
-  1.0.8). It has not been through the VM suites yet; use the Debug build if
-  you need the tested one.
-- **ARM64:** cross-compiled and statically checked. Every binary is ARM64 and
-  correctly signed, and the MSIs contain what they should. They have
-  **not** been installed or run: this project has no ARM64 test machine yet.
-  Treat them as untested.
+- **x64 Release (1.0.12):** the same VM suites and Linux validation, all
+  passed (plan step 19).
+- **ARM64 Release:** tested with 1.0.11 in a Windows 11 ARM64 VM (plan step
+  19). The user-mode edition passed all of its administration checks. The
+  kernel edition installed and passed its CLI and filesystem checks (same
+  known gaps as x64), but an import/export loop hung. That hang is fixed in
+  1.0.12 (patch 0029), and the fix is verified on x64 but **not yet on
+  ARM64**. Upgrade, uninstall, the read and power-cut phases, and Linux
+  validation of an ARM64-written pool are not done yet.
 - Windows 10 and Windows Server have not been tested yet (plan step 17).
 
 ## User mode or kernel mode? Feature matrix
