@@ -14,7 +14,10 @@ come only from TestVolumes\vm\symcache and the driver build.
 param(
     [string]$Dump = "C:\Windows\MEMORY.DMP",
     [string]$Commands = "!analyze -v; kn 40",
-    [string]$Name = "zfsTest"
+    [string]$Name = "zfsTest",
+    # The driver build whose PDB matches the crashed driver.
+    [ValidateSet("Debug", "Release")]
+    [string]$Configuration = "Debug"
 )
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -32,7 +35,7 @@ try {
         Copy-Item -ToSession $s -Path (Join-Path $repo "TestVolumes\vm\symcache\*") `
             -Destination C:\zfswin\sym -Recurse -Force
     }
-    Copy-Item -ToSession $s -Path (Join-Path $repo "out\openzfs-driver-debug\module\os\windows\driver\OpenZFS.pdb") `
+    Copy-Item -ToSession $s -Path (Join-Path $repo "out\openzfs-driver-$($Configuration.ToLowerInvariant())\module\os\windows\driver\OpenZFS.pdb") `
         -Destination C:\zfswin\sym\OpenZFS.pdb -Force
     Invoke-Command $s {
         param($dump, $commands)
