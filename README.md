@@ -81,8 +81,8 @@ macOS. They differ in how Windows reaches the file system.
 | | Unbuffered I/O (`FILE_FLAG_NO_BUFFERING`) | ✅ | ✅ |
 | | Child dataset in a folder of its parent's drive | ✅ | ☑️ gets a drive letter of its own instead (WinFsp cannot mount inside a WinFsp volume) |
 | | zvols (ZFS block devices) | ☑️ | ❌ |
-| **Data features** | Read and write compressed datasets (lz4, zstd, gzip, …) | ✅ | ✅ |
-| | Read and write deduplicated datasets | ✅ | ☑️ `dedup=on` set and read back; deduplicated writes not measured in user mode yet |
+| **Data features** | Read and write compressed datasets (lz4, zstd, gzip, …) | ✅ | ✅ measured on the same data: off 1.00×, lz4 2.65×, gzip-9 2.81×, zstd and zstd-19 2.98×, lzjb 2.80×, zle 1.01× (zero runs only); Linux reads the same bytes and ratios |
+| | Read and write deduplicated datasets | ✅ | ✅ four identical 16 MiB writes: pool `dedupratio` 1.00 → 4.00; three deleted → 1.01, survivor intact; dedup + zstd; Linux sees the dedup table |
 | | Mirrored pools: attach, resilver, detach, replace | ✅ | ✅ |
 | | Native encryption | ☑️ not tested | ☑️ not tested |
 | **Administration** | Create pools on image files; import and export | ✅ `zfswin`, GUI, PowerShell, `zpool` | ✅ the same tools, through the service's ZFS bridge |

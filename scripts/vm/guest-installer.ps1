@@ -3,7 +3,7 @@
 # object.  Driven by scripts\vm\Test-InstallerInVm.ps1.
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "filesystem", "crosscheck", "samples", "import", "export", "hash")]
+    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "filesystem", "datafeatures", "crosscheck", "samples", "import", "export", "hash")]
     [string]$Stage,
     [string]$Msi = "",
     [ValidateSet("install", "repair", "uninstall")]
@@ -559,6 +559,91 @@ try { Set-Content -LiteralPath '$(Join-Path $root "dir\by-user.txt")' 'mine' -Er
         $expected = [ordered]@{ edition = $edition; userSid = (Get-LocalUser zfsuser).SID.Value; files = [ordered]@{} }
         foreach ($f in $names) { $expected.files[$f] = Describe (Join-Path $root $f) }
         $expected | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "$work\fs-expected.json"
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # Compression algorithms and deduplication with real data (both
+    # editions).  Leaves zwin/c-* and zwin/dd* plus datafeatures.json for
+    # scripts\vm\validate-datafeatures.py.
+    "datafeatures" {
+        $r = [ordered]@{}
+        $zpool = Join-Path $installDir "bin\zpool.exe"
+        function Sync { & $zpool sync $pool 2>&1 | Out-Null; Start-Sleep -Seconds 2 }
+        function Prop([string]$ds, [string]$name) { ((Zfswin @('dataset', 'get', $ds, $name)).result.properties | Where-Object name -eq $name).value }
+        function PoolProp([string]$name) { ((Zfswin @('pool', 'get', $pool, $name)).result.properties | Where-Object name -eq $name).value }
+        function Ratio($value) { [double]("$value" -replace '[^0-9.]', '') }
+        # The corpus: compressible text, incompressible random data, zeros.
+        $text = [Text.Encoding]::UTF8.GetBytes((1..60000 | ForEach-Object { "line $_ of a compressible ZFS test corpus, the same words again and again`n" }) -join '')
+        $random = [byte[]]::new(2MB); [Random]::new(2026).NextBytes($random)
+        $zeros = [byte[]]::new(2MB)
+        $expected = [ordered]@{ datasets = [ordered]@{} }
+
+        $algorithms = "off", "lz4", "gzip-9", "zstd", "zstd-19", "zle", "lzjb"
+        foreach ($alg in $algorithms) {
+            $ds = "$pool/c-$alg"
+            Check $r "create-$alg" (Zfswin @('dataset', 'create', $ds, '-o', "compression=$alg")).exit 0
+            $root = MountPath $ds
+            if (-not $root) { $r["mounted-$alg"] = [ordered]@{ value = ""; expected = "a mount path"; pass = $false }; continue }
+            [IO.File]::WriteAllBytes((Join-Path $root "text.txt"), $text)
+            [IO.File]::WriteAllBytes((Join-Path $root "random.bin"), $random)
+            [IO.File]::WriteAllBytes((Join-Path $root "zeros.bin"), $zeros)
+            $expected.datasets[$ds] = [ordered]@{ compression = $alg; files = @(Manifest $root) }
+        }
+        Sync
+        foreach ($alg in $algorithms) {
+            $ds = "$pool/c-$alg"
+            Check $r "property-$alg" (Prop $ds compression) $alg
+            $ratio = Ratio (Prop $ds compressratio)
+            $r["ratio-$alg"] = $ratio
+            # off stores everything; zle only squeezes runs of zeros (the
+            # zero file); every other algorithm also shrinks the text.
+            $ok = switch ($alg) { "off" { $ratio -le 1.01 } "zle" { $ratio -ge 1.0 } default { $ratio -ge 1.5 } }
+            Check $r "compresses-$alg" $ok $true
+        }
+
+        # Deduplication: the same 16 MiB of random data four times (written,
+        # not copied, so no block cloning can stand in for dedup).
+        $dd = "$pool/dd"
+        Check $r "create-dedup" (Zfswin @('dataset', 'create', $dd, '-o', 'dedup=on', '-o', 'compression=off')).exit 0
+        $ddRoot = MountPath $dd
+        $block = [byte[]]::new(16MB); [Random]::new(77).NextBytes($block)
+        $before = Ratio (PoolProp dedupratio)
+        foreach ($n in 1..4) { [IO.File]::WriteAllBytes((Join-Path $ddRoot "copy$n.bin"), $block) }
+        Sync
+        $after = Ratio (PoolProp dedupratio)
+        $r.dedupratio = [ordered]@{ before = $before; afterFourCopies = $after }
+        Check $r "dedup-ratio" ($after -ge 3.5) $true
+        # Dedup and compression together.
+        $ddz = "$pool/ddz"
+        Check $r "create-dedup-zstd" (Zfswin @('dataset', 'create', $ddz, '-o', 'dedup=on', '-o', 'compression=zstd')).exit 0
+        $ddzRoot = MountPath $ddz
+        foreach ($n in 1..3) { [IO.File]::WriteAllBytes((Join-Path $ddzRoot "text$n.txt"), $text) }
+        Sync
+        Check $r "dedup-zstd-compresses" ((Ratio (Prop $ddz compressratio)) -ge 1.5) $true
+        $expected.datasets[$dd] = [ordered]@{ compression = "off"; dedup = "on"; files = @(Manifest $ddRoot) }
+        $expected.datasets[$ddz] = [ordered]@{ compression = "zstd"; dedup = "on"; files = @(Manifest $ddzRoot) }
+
+        # Everything reads back the same after an unmount and mount.
+        foreach ($ds in @($expected.datasets.Keys)) {
+            Check $r "unmount-$ds" (Zfswin @('dataset', 'unmount', $ds)).exit 0
+            Check $r "mount-$ds" (Zfswin @('dataset', 'mount', $ds)).exit 0
+            $root = MountPath $ds
+            $now = if ($root) { @(Manifest $root) } else { @() }
+            Check $r "data-$ds" ((Compare-Object @($now | ForEach-Object { "$($_.path)|$($_.sha256)" }) @($expected.datasets[$ds].files | ForEach-Object { "$($_.path)|$($_.sha256)" })) -eq $null) $true
+        }
+
+        # Freeing deduplicated copies lowers the ratio again; one copy stays.
+        $ddRoot = MountPath $dd
+        foreach ($n in 2..4) { Remove-Item -LiteralPath (Join-Path $ddRoot "copy$n.bin") }
+        Sync; Start-Sleep -Seconds 6; Sync
+        $freed = Ratio (PoolProp dedupratio)
+        $r.dedupratio.afterDelete = $freed
+        Check $r "dedup-ratio-after-delete" ($freed -lt $after) $true
+        Check $r "dedup-survivor-intact" ((Get-FileHash (Join-Path $ddRoot "copy1.bin")).Hash -eq ($expected.datasets[$dd].files | Where-Object path -eq "copy1.bin").sha256) $true
+        $expected.datasets[$dd].files = @(Manifest $ddRoot)
+        $expected.dedupratio = "$freed"
+        $expected | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "$work\datafeatures.json"
         $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
         $r | ConvertTo-Json -Depth 6 -Compress
     }
