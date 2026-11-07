@@ -886,6 +886,17 @@ Both sides now skip Windows' own folders (`System Volume Information`,
 4. **The x64 VM's checkpoints** predate Windows updates and should be
    rebuilt updated, as was done for ARM64.
 
+**Cleanup after verification** (at the user's request):
+- **This PC:** removed `out\release\1.0.12`–`1.0.14` (about 1.1 GB). Kept
+  `1.0.15` and the `1.0.65000` upgrade test package the suites need.
+- **ARM PC:** removed the 1.0.11–1.0.14 MSIs, the diagnostic broker
+  builds and the trace files from `C:\zfswin-arm\stage` (408 MB).
+- **ARM PC job scripts:** removed 82 old job scripts from
+  `C:\zfswin-arm\run`. Each carried the VM password in its prelude.
+  `Invoke-ArmHost.ps1` now deletes every job script on the host when its
+  run ends.
+- **VMs:** nothing to remove; every suite starts from a checkpoint.
+
 **Dry-run harness gap.** `Repro-ExportHang.ps1`, and a dry run built the
 same way, install the MSI with `msiexec /qn` over PowerShell Direct. The
 driver and tools land in place: the running `OpenZFS.sys` was the 1.0.12
