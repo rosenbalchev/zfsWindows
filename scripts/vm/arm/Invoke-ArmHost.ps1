@@ -58,10 +58,13 @@ function Open-ArmGuest([int]`$Minutes = 6) {
 "@
 $local = Join-Path $env:TEMP "zfsarm-job-$PID.ps1"
 [IO.File]::WriteAllText($local, $prelude + "`r`n" + $Script, (New-Object Text.UTF8Encoding $true))
+# A job file of its own: a long job keeps running on the host when the SSH
+# connection drops, and a later call must not overwrite its script.
+$job = "job-$(Get-Date -Format yyyyMMdd-HHmmss)-$PID.ps1"
 try {
-    & scp -q @sshOptions $local "${target}:C:/zfswin-arm/run/job.ps1"
+    & scp -q @sshOptions $local "${target}:C:/zfswin-arm/run/$job"
     if ($LASTEXITCODE -ne 0) { throw "scp of the job script failed" }
-    Invoke-HostCommand "powershell -NoProfile -ExecutionPolicy Bypass -File C:\zfswin-arm\run\job.ps1"
+    Invoke-HostCommand "powershell -NoProfile -ExecutionPolicy Bypass -File C:\zfswin-arm\run\$job"
 } finally {
     Remove-Item $local -ErrorAction SilentlyContinue
 }

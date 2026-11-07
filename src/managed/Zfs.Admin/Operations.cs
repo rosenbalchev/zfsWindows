@@ -289,7 +289,7 @@ public static class Operations
             string pool = Validation.PoolName(Validation.OptionalString(a, "pool"));
             string device = Validation.DevicePath(Validation.OptionalString(a, "device"), "device", mustExist: false);
             string newDevice = Validation.DevicePath(Validation.OptionalString(a, "newDevice"), "newDevice");
-            await c.RunAsync(ZfsTool.Zpool, ["attach", pool, device, newDevice], MutationTimeout);
+            await c.RunAsync(ZfsTool.Zpool, ["attach", pool, await PoolDevice(c, pool, device), newDevice], MutationTimeout);
             return new JsonObject { ["pool"] = pool, ["attached"] = newDevice, ["to"] = device };
         });
 
@@ -297,7 +297,7 @@ public static class Operations
         {
             string pool = Validation.PoolName(Validation.OptionalString(a, "pool"));
             string device = Validation.DevicePath(Validation.OptionalString(a, "device"), "device", mustExist: false);
-            await c.RunAsync(ZfsTool.Zpool, ["detach", pool, device], MutationTimeout);
+            await c.RunAsync(ZfsTool.Zpool, ["detach", pool, await PoolDevice(c, pool, device)], MutationTimeout);
             return new JsonObject { ["pool"] = pool, ["detached"] = device };
         });
 
@@ -305,7 +305,7 @@ public static class Operations
         {
             string pool = Validation.PoolName(Validation.OptionalString(a, "pool"));
             string device = Validation.DevicePath(Validation.OptionalString(a, "device"), "device", mustExist: false);
-            var args = new List<string> { "replace", pool, device };
+            var args = new List<string> { "replace", pool, await PoolDevice(c, pool, device) };
             if (Validation.OptionalString(a, "newDevice") is string nd)
                 args.Add(Validation.DevicePath(nd, "newDevice"));
             await c.RunAsync(ZfsTool.Zpool, args, MutationTimeout);
@@ -346,9 +346,64 @@ public static class Operations
         {
             string pool = Validation.PoolName(Validation.OptionalString(a, "pool"));
             string device = Validation.DevicePath(Validation.OptionalString(a, "device"), "device", mustExist: false);
-            await c.RunAsync(ZfsTool.Zpool, ["remove", pool, device], MutationTimeout);
+            await c.RunAsync(ZfsTool.Zpool, ["remove", pool, await PoolDevice(c, pool, device)], MutationTimeout);
             return new JsonObject { ["pool"] = pool, ["removed"] = device };
         });
+    }
+
+    /// <summary>
+    /// A device already in the pool, as zpool will find it.  After an import
+    /// the pool records file vdevs as //./C:/..., which zpool does not match
+    /// to the \\?\C:\... form DevicePath() returns ("no such device in
+    /// pool"); the device's GUID always matches.  Falls back to the path when
+    /// the pool's status cannot be read or does not list the device.
+    /// </summary>
+    static async Task<string> PoolDevice(OperationContext c, string pool, string device)
+    {
+        try
+        {
+            // Without --json-int the GUID is a string: a 64-bit number read
+            // through JsonNode loses digits in the Native AOT broker
+            // (2817751521488806255 became 2346718527818993400).
+            ToolResult r = await c.Runner.RunAsync(ZfsTool.Zpool, ["status", "-j", "-p", pool], ReadTimeout, c.CancellationToken);
+            if (r.ExitCode == 0 && !string.IsNullOrWhiteSpace(r.StandardOutput) && JsonNode.Parse(r.StandardOutput)?["pools"]?[pool] is JsonNode status)
+            {
+                string want = DeviceKey(device);
+                foreach (JsonObject leaf in DeviceLeaves(status))
+                    if (DeviceKey(leaf["path"]?.GetValue<string>()) == want && leaf["guid"] is JsonValue guid && guid.TryGetValue(out string? text) && ulong.TryParse(text, out _))
+                        return text;
+            }
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or FormatException or InvalidOperationException)
+        {
+        }
+        return device;
+    }
+
+    static IEnumerable<JsonObject> DeviceLeaves(JsonNode? node)
+    {
+        if (node is not JsonObject o)
+            yield break;
+        if (o["path"] is not null)
+        {
+            yield return o;
+            yield break;
+        }
+        foreach (string group in new[] { "vdevs", "logs", "l2cache", "spares" })
+            if (o[group] is JsonObject children)
+                foreach (var child in children)
+                    foreach (JsonObject leaf in DeviceLeaves(child.Value))
+                        yield return leaf;
+    }
+
+    // "\\?\C:\x.img", "//./C:/x.img" and "C:\x.img" name the same file.
+    static string DeviceKey(string? path)
+    {
+        string s = (path ?? "").Replace('/', '\\');
+        foreach (string prefix in new[] { @"\\?\", @"\\.\" })
+            if (s.StartsWith(prefix, StringComparison.Ordinal))
+                s = s[prefix.Length..];
+        return s.TrimEnd('\\').ToUpperInvariant();
     }
 
     static OperationSpec Read(string name, string[] arguments, Func<OperationContext, JsonObject, Task<JsonNode?>> execute) =>

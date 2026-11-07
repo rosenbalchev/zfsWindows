@@ -168,6 +168,17 @@ public sealed class BrokerServer(IToolRunner runner, ICallerAuthenticator authen
         }
     }
 
+    /// <summary>
+    /// Runs an operation as the broker's own identity, on every thread its
+    /// awaits continue on.  In the Native AOT broker, continuations after a
+    /// tool run were seen on thread-pool threads still impersonating a pipe
+    /// client at Identification level, where every file access fails with
+    /// ERROR_BAD_IMPERSONATION_LEVEL (zpool.exe then looked "missing").  An
+    /// invalid token means "no impersonation" for the whole async flow.
+    /// </summary>
+    static Task<JsonNode?> AsBroker(Func<Task<JsonNode?>> execute) =>
+        WindowsIdentity.RunImpersonatedAsync(Microsoft.Win32.SafeHandles.SafeAccessTokenHandle.InvalidHandle, execute);
+
     async Task<BrokerResponse> DispatchAsync(NamedPipeServerStream pipe, BrokerRequest request, CancellationToken cancellationToken)
     {
         if (request.Protocol != Protocol.Version)
@@ -197,7 +208,7 @@ public sealed class BrokerServer(IToolRunner runner, ICallerAuthenticator authen
                     throw new AdminException(ErrorCode.Busy, "Another administrative operation is still running.");
                 try
                 {
-                    result = await spec.Execute(context, arguments).ConfigureAwait(false);
+                    result = await AsBroker(() => spec.Execute(context, arguments)).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -206,7 +217,7 @@ public sealed class BrokerServer(IToolRunner runner, ICallerAuthenticator authen
             }
             else
             {
-                result = await spec.Execute(context, arguments).ConfigureAwait(false);
+                result = await AsBroker(() => spec.Execute(context, arguments)).ConfigureAwait(false);
             }
             if (spec.Privileged)
                 audit?.Invoke(new AuditEntry(caller.Name, spec.Name, arguments, true, null, DateTime.UtcNow - started));

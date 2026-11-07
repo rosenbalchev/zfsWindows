@@ -56,7 +56,7 @@ public class GuiBackendTests
             await client.AddCacheDevicesAsync("tank", "cache", [@"\\?\" + c], mirror: false, confirmed: true);
             await client.RemoveDeviceAsync("tank", @"\\?\" + c, confirmed: true);
             await client.SetDatasetPropertyAsync("tank/data", "dedup", "on");
-            var calls = broker.Runner.Calls.Select(x => x.Args).ToArray();
+            var calls = broker.Runner.Calls.Select(x => x.Args).Where(x => x[0] != "status").ToArray();
             Assert.Equal(["add", "tank", "cache", @"\\?\" + c], calls[0]);
             Assert.Equal(["remove", "tank", @"\\?\" + c], calls[1]);
             Assert.Equal(["set", "dedup=on", "tank/data"], calls[2]);

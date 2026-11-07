@@ -124,6 +124,12 @@ Invoke-Command $s {
         New-ItemProperty -Force $key -Name DumpFolder -PropertyType ExpandString -Value C:\zfswin\dumps | Out-Null
         New-ItemProperty -Force $key -Name DumpType -PropertyType DWord -Value 2 | Out-Null
     }
+    # Windows Update servicing in this old checkpoint leaves reboots pending,
+    # which setup rightly refuses; pause it for the run (disposable VM).
+    $wu = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+    New-Item -Force $wu | Out-Null
+    $until = (Get-Date).AddDays(7).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    foreach ($n in 'PauseUpdatesExpiryTime', 'PauseFeatureUpdatesEndTime', 'PauseQualityUpdatesEndTime') { Set-ItemProperty $wu -Name $n -Value $until }
     # The fixtures checkpoint trusts the test certificate (step 12); scenario
     # 1 needs a machine that does not.
     foreach ($store in "Root", "TrustedPublisher") {
@@ -235,8 +241,19 @@ if (Test-Path (Join-Path $cross "fs-expected.json")) {
 } else {
     Write-Warning "No user-mode pool in $cross to cross-check (run Test-UserModeInVm.ps1 -Phase admin first)."
 }
+# Many small files in deep trees, and the tree pools of the other platforms.
+. (Join-Path $PSScriptRoot "TreeSuite.ps1")
+Invoke-TreeStages "x64-kernel-$($Configuration.ToLower())" "installer"
 
 # --- 5. repair ------------------------------------------------------------------------------
+# Setup refuses while Windows has a reboot pending (Windows Update services
+# the VM in the background); reboot first, as a user would be told to.
+for ($restart = 1; $restart -le 4 -and (Guest "state").pendingReboot; $restart++) {
+    # Servicing can take more than one restart to finish.
+    Record "installer-repair-pending-reboot" @{ pendingReboot = $true; restart = $restart; action = "restarted the guest before the repair" }
+    Restart-Guest
+    Start-Sleep -Seconds 60
+}
 $r = Msi "repair" $guestMsi "repair" @("ZFSWIN_EXPORT_POOLS=1")
 Expect "repair succeeds" ($r.exit -in 0, 3010) "exit $($r.exit)"
 Restart-Guest
