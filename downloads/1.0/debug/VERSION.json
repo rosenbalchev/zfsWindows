@@ -1,18 +1,18 @@
 ﻿{
     "product":  "OpenZFS for Windows",
-    "version":  "1.0.15",
+    "version":  "1.0.16",
     "configuration":  "Debug",
     "architectures":  [
                           "x64",
                           "arm64"
                       ],
-    "built":  "2026-11-07T13:03:31Z",
-    "builtFromCommit":  "d27101836d76e6b05569331efa7152b3ebf20756",
+    "built":  "2026-11-07T22:09:11Z",
+    "builtFromCommit":  "aca9fcedec374c531662e1bee5a41cebd5527b2d",
     "workingTreeModified":  true,
     "openzfs":  "zfs-2.4.4 (OpenZFS submodule); openzfs-windows zfswin-2.4.1rc17 + patches/openzfs-windows",
     "variants":  {
-                     "kernel":  "OpenZFS-for-Windows-1.0.15-\u003carch\u003e-testsigned-debug.msi: kernel driver, test-signed (needs test signing and Secure Boot off)",
-                     "usermode":  "OpenZFS-for-Windows-1.0.15-\u003carch\u003e-usermode-debug.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
+                     "kernel":  "OpenZFS-for-Windows-1.0.16-\u003carch\u003e-testsigned-debug.msi: kernel driver, test-signed (needs test signing and Secure Boot off)",
+                     "usermode":  "OpenZFS-for-Windows-1.0.16-\u003carch\u003e-usermode-debug.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
                  },
     "build":  "unoptimized native code with full debug checks; larger and slower, for diagnosing problems",
     "tested":  "x64 Debug and Release: Windows 11 24H2 VM suites (scripts/vm) and upstream OpenZFS validation on Linux, as recorded in the README for each release. arm64: see the README."
