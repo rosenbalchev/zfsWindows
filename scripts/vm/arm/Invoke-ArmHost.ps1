@@ -67,4 +67,7 @@ try {
     Invoke-HostCommand "powershell -NoProfile -ExecutionPolicy Bypass -File C:\zfswin-arm\run\$job"
 } finally {
     Remove-Item $local -ErrorAction SilentlyContinue
+    # The prelude carries the VM password: no job file stays on the host.
+    # (A job still running after a dropped session has already read it.)
+    Invoke-HostCommand "del /q C:\zfswin-arm\run\$job" | Out-Null
 }
