@@ -523,3 +523,29 @@ The fix has two parts:
 - `sysctl_os_write_registry()` writes only when the type or data differ;
 - 0 in the Registry for those three tunables means "computed", and is
   not applied.
+## 0030 — libzfs mounts one dataset at a time on Windows; MountMgr status
+
+`zfs_foreach_mountpoint()` mounts the datasets of an imported pool with up
+to 512 threads (`zpool import`, `zfs mount -a`). In the Windows driver,
+every mount below a parent finishes on a taskq (`NotifyMountMgr_impl()`):
+it creates the reparse point on the parent volume, announces it to
+MountMgr and signals userland. When these run at the same time, some
+mounts never reach MountMgr. They stay mounted in the kernel, but
+`getmntent()` (which walks MountMgr's volume list) cannot see them, so
+`zfs mount`, `zfs list -o mounted` and `zpool export` miss them. The export
+then fails with "pool is busy" with nothing visibly mounted.
+
+On the ARM64 VM (12 CPUs) the ARM64 user-mode pool, with 12 datasets,
+showed this on every import in the kernel suite's cross-check: 3 of 12
+children were missing from `mountvol`. With `ZFS_SERIAL_MOUNT=1` the same
+import mounted all 12 in 1 s instead of 10.7 s.
+
+The fix has two parts:
+- **Serial mounting:** `zfs_foreach_mountpoint()` mounts serially under
+  `_WIN32`. That is the code path upstream already has for
+  `ZFS_SERIAL_MOUNT`, and it is the same for every Windows architecture.
+- **MountMgr status:** `SendIoctlToMountManager()` read `iosb.Status`
+  even when `IoCallDriver()` had not pended, so the I/O status block
+  could still be unwritten. The driver log showed this as "IoCallDriver
+  failed: 0xeaa30690". The status now comes from `IoCallDriver()` unless
+  the request pended, as Microsoft documents.

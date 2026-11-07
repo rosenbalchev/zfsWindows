@@ -6,7 +6,14 @@
 # $Version may be set by a line prepended to this script; the MSI, the test
 # certificate and guest-installer.ps1 are taken from C:\zfswin-arm\stage.
 if (-not $Version) { $Version = '1.0.11' }
-$Msi = "C:\zfswin\installer\OpenZFS-for-Windows-$Version-arm64-testsigned.msi"
+# The starting point; "testsigning-ready-updated" is the same state with
+# Windows Update applied and paused (no servicing restarts mid-test).
+if (-not $Checkpoint) { $Checkpoint = 'testsigning-ready' }
+# Where this run's tree pool is kept (C:\zfswin-arm\stage\tree-<label>);
+# the other platforms' pools to verify are uploaded to stage\trees\<name>.
+if (-not $TreeLabel) { $TreeLabel = 'arm64-kernel-release' }
+# $MsiTag "-debug" selects the Debug package.
+$Msi = "C:\zfswin\installer\OpenZFS-for-Windows-$Version-arm64-testsigned$MsiTag.msi"
 $results = [Collections.Generic.List[object]]::new()
 $full = [ordered]@{}
 function Note($stage, $ok, $detail) { $results.Add([ordered]@{ stage = $stage; ok = [bool]$ok; detail = $detail }) }
@@ -41,7 +48,7 @@ function Checks($name, $r) {
     Note $name (@($r.failed | Where-Object { $_ }).Count -eq 0) ("{0}/{1} passed; failed: {2}" -f @($checks | Where-Object { $_.Value.pass }).Count, $checks.Count, (@($r.failed) -join ', '))
 }
 
-Restore-VMCheckpoint -VMName $Guest -Name 'testsigning-ready' -Confirm:$false
+Restore-VMCheckpoint -VMName $Guest -Name $Checkpoint -Confirm:$false
 $deadline = (Get-Date).AddMinutes(2)
 while ((Get-VM $Guest).State -notin 'Saved', 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
 Start-VM -Name $Guest
@@ -106,6 +113,27 @@ if (Test-Path C:\zfswin-arm\stage\out\fs-expected.json) {
     $cc = Guest "crosscheck" @{ Dir = "C:\zfswin\cross" }; $full.crosscheck = $cc
     Checks "crosscheck: ARM64 user-mode pool read by the kernel driver" $cc
 }
+# Many small files in deep trees (guest-installer.ps1 stage tree), and the
+# tree pools of the other platforms read here.
+$t = [Diagnostics.Stopwatch]::StartNew(); $tree = Guest "tree"; $full.tree = $tree
+Checks "tree ($([int]$t.Elapsed.TotalSeconds) s)" $tree
+$own = "C:\zfswin-arm\stage\tree-$TreeLabel"
+New-Item -ItemType Directory -Force $own | Out-Null
+Get-ChildItem $own -File -ErrorAction SilentlyContinue | Remove-Item -Force
+if (@($tree.PSObject.Properties | Where-Object { $_.Name -like 'intact-*' -and -not $_.Value.pass }).Count -eq 0 -and $tree.'export-final'.pass) {
+    $s = Open-ArmGuest
+    foreach ($f in "tree.img", "tree-manifest.tsv") { Copy-Item -FromSession $s "C:\zfswin\installer\tree\$f" "$own\$f" -Force }
+    Remove-PSSession $s
+}
+foreach ($other in @(Get-ChildItem C:\zfswin-arm\stage\trees -Directory -ErrorAction SilentlyContinue)) {
+    if (-not (Test-Path "$($other.FullName)\tree.img")) { continue }
+    $s = Open-ArmGuest
+    Invoke-Command $s { New-Item -ItemType Directory -Force C:\zfswin\treecheck | Out-Null; Get-ChildItem C:\zfswin\treecheck -File | Remove-Item -Force }
+    foreach ($f in "tree.img", "tree-manifest.tsv") { Copy-Item -ToSession $s "$($other.FullName)\$f" "C:\zfswin\treecheck\$f" -Force }
+    Remove-PSSession $s
+    $v = Guest "treeverify" @{ Dir = "C:\zfswin\treecheck" }; $full["treeverify-$($other.Name)"] = $v
+    Checks "tree pool from $($other.Name) read here" $v
+}
 Note "no bugcheck after workflows" (@(Bugchecks).Count -eq 0) ((Bugchecks) -join ' | ')
 
 # Import/export loop (x64 Release: export hung intermittently in unmount).
@@ -153,4 +181,6 @@ Remove-PSSession $s
 Note "crash dumps" (@($dumps).Count -eq 0) ($dumps -join ', ')
 
 $full | ConvertTo-Json -Depth 8 -Compress | Set-Content C:\zfswin-arm\stage\kernel-full.json -Encoding UTF8
+# Also on disk: the SSH session (and with it this script's output) may be gone.
+$results | ForEach-Object { $_ | ConvertTo-Json -Compress } | Set-Content C:\zfswin-arm\stage\kernel-results.jsonl -Encoding UTF8
 $results | ForEach-Object { $_ | ConvertTo-Json -Compress }

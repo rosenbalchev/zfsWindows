@@ -1,0 +1,47 @@
+diff --git a/lib/libzfs/libzfs_mount.c b/lib/libzfs/libzfs_mount.c
+index d0b2e16a4..0494dd4ef 100644
+--- a/lib/libzfs/libzfs_mount.c
++++ b/lib/libzfs/libzfs_mount.c
+@@ -1237,6 +1237,17 @@ zfs_foreach_mountpoint(libzfs_handle_t *hdl, zfs_handle_t **handles,
+ 	 */
+ 	boolean_t serial_mount = nthr <= 1 ||
+ 	    (getenv("ZFS_SERIAL_MOUNT") != NULL);
++#ifdef _WIN32
++	/*
++	 * The Windows driver finishes each mount below a parent (a reparse
++	 * point plus MountMgr registration, NotifyMountMgr_impl()) on a
++	 * taskq; mounts issued in parallel race there and some never reach
++	 * MountMgr: they stay mounted in the kernel but are invisible to
++	 * getmntent(), so the pool cannot be exported.  Mounting one at a
++	 * time is also faster (12 datasets: 1 s instead of 10.7 s).
++	 */
++	serial_mount = B_TRUE;
++#endif
+ 
+ 	/*
+ 	 * Sort the datasets by mountpoint. See mountpoint_cmp for details
+diff --git a/module/os/windows/zfs/zfs_vnops_windows_mount.c b/module/os/windows/zfs/zfs_vnops_windows_mount.c
+index ae71e4379..acec623b3 100644
+--- a/module/os/windows/zfs/zfs_vnops_windows_mount.c
++++ b/module/os/windows/zfs/zfs_vnops_windows_mount.c
+@@ -167,11 +167,17 @@ SendIoctlToMountManager(__in ULONG IoControlCode, __in PVOID InputBuffer,
+ 	// Deadlock possible here.
+ 	status = IoCallDriver(mountmgr_deviceobject, irp);
+ 
+-	if (status == STATUS_PENDING)
++	/*
++	 * iosb is only certain to be filled in once the event is signalled;
++	 * when IoCallDriver() does not pend, its return value is the status.
++	 * Reading iosb unconditionally returned stack garbage (seen as
++	 * "IoCallDriver failed: 0xeaa30690" for successful calls).
++	 */
++	if (status == STATUS_PENDING) {
+ 		KeWaitForSingleObject(&driverEvent, Executive, KernelMode,
+ 		    FALSE, NULL);
+-
+-	status = iosb.Status;
++		status = iosb.Status;
++	}
+ 
+ 	if (NT_SUCCESS(status) || status == STATUS_BUFFER_OVERFLOW) {
+ 		dprintf("  IoCallDriver success\n");

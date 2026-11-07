@@ -373,6 +373,11 @@ if ($Phase -contains "admin") {
     $t.Restart(); $df = Guest "datafeatures"; $timings.datafeatures = [math]::Round($t.Elapsed.TotalSeconds, 1)
     Record "admin-datafeatures" $df
     Expect "admin: compression algorithms and deduplication" (@($df.failed).Count -eq 0) ($df.failed -join ', ')
+    # Many small files in deep trees, and the tree pools of the other platforms.
+    $t.Restart()
+    . (Join-Path $PSScriptRoot "TreeSuite.ps1")
+    Invoke-TreeStages "x64-usermode-$($Configuration.ToLower())" "admin"
+    $timings.tree = [math]::Round($t.Elapsed.TotalSeconds, 1)
 
     # Pools and mounts come back when the service restarts (as at boot).
     $t.Restart()

@@ -23,10 +23,53 @@ public class CacheDeviceTests
             await broker.Client.CallAsync("vdev.add", new JsonObject { ["pool"] = "tank", ["role"] = "cache", ["devices"] = new JsonArray(a), ["confirm"] = true });
             await broker.Client.CallAsync("vdev.add", new JsonObject { ["pool"] = "tank", ["role"] = "log", ["mirror"] = true, ["devices"] = new JsonArray(a, b), ["confirm"] = true });
             await broker.Client.CallAsync("vdev.remove", new JsonObject { ["pool"] = "tank", ["device"] = a, ["confirm"] = true });
-            var calls = broker.Runner.Calls.Select(c => c.Args).ToArray();
+            var calls = broker.Runner.Calls.Select(c => c.Args).Where(c => c[0] != "status").ToArray();
             Assert.Equal(["add", "tank", "cache", @"\\?\" + a], calls[0]);
             Assert.Equal(["add", "tank", "log", "mirror", @"\\?\" + a, @"\\?\" + b], calls[1]);
+            // The fake pool status lists no devices, so the path is passed on.
             Assert.Equal(["remove", "tank", @"\\?\" + a], calls[2]);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DevicesOfAnImportedPoolAreNamedByGuid()
+    {
+        await using var broker = new TestBroker();
+        string dir = Directory.CreateTempSubdirectory("zfswin-test").FullName;
+        try
+        {
+            string a = Path.Combine(dir, "a.img"), c = Path.Combine(dir, "c.img"), log = Path.Combine(dir, "log.img");
+            File.WriteAllBytes(c, [0]);
+            // After an import zpool records file vdevs as //./C:/... ; without
+            // --json-int, GUIDs are strings.
+            string Slashed(string p) => "//./" + p.Replace('\\', '/');
+            string status = new JsonObject
+            {
+                ["pools"] = new JsonObject
+                {
+                    ["tank"] = new JsonObject
+                    {
+                        ["vdevs"] = new JsonObject { ["tank"] = new JsonObject { ["vdev_type"] = "root", ["vdevs"] = new JsonObject {
+                            ["mirror-0"] = new JsonObject { ["vdev_type"] = "mirror", ["vdevs"] = new JsonObject {
+                                [Slashed(a)] = new JsonObject { ["path"] = Slashed(a), ["guid"] = "1111" } } } } } },
+                        ["logs"] = new JsonObject { [Slashed(log)] = new JsonObject { ["path"] = Slashed(log), ["guid"] = "2222" } },
+                    },
+                },
+            }.ToJsonString();
+            broker.Runner.Respond = (_, args, _) => Task.FromResult(new ToolResult(0, args[0] == "status" ? status : "{}", ""));
+
+            await broker.Client.CallAsync("vdev.replace", new JsonObject { ["pool"] = "tank", ["device"] = a, ["newDevice"] = c, ["confirm"] = true });
+            await broker.Client.CallAsync("vdev.remove", new JsonObject { ["pool"] = "tank", ["device"] = log, ["confirm"] = true });
+            await broker.Client.CallAsync("vdev.detach", new JsonObject { ["pool"] = "tank", ["device"] = c, ["confirm"] = true });
+            var calls = broker.Runner.Calls.Select(x => x.Args).Where(x => x[0] != "status").ToArray();
+            Assert.Equal(["replace", "tank", "1111", @"\\?\" + c], calls[0]);
+            Assert.Equal(["remove", "tank", "2222"], calls[1]);
+            // Not in the pool's status: the path goes to zpool as before.
+            Assert.Equal(["detach", "tank", @"\\?\" + c], calls[2]);
         }
         finally
         {

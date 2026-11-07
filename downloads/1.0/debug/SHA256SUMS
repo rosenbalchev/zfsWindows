@@ -1,8 +1,8 @@
-4056ab73f74e2aa209312291e0531c3f20ee0d49df0e767c52128b8988727fec  OpenZFS-for-Windows-1.0.12-arm64-debug.cdx.json
-2f327bdff8436fb4c5c027b83998e0feea50750096e729d7ad0af48b7e7ef940  OpenZFS-for-Windows-1.0.12-arm64-testsigned-debug.msi
-09d9676f07b5610841f016852c77d1d8acd8c39fed37062d334c4eebb5184747  OpenZFS-for-Windows-1.0.12-arm64-usermode-debug.msi
-a52bfed02976a4e44429cb25b579003e9f0ab2569ac1782df011f1a86df8ae21  OpenZFS-for-Windows-1.0.12-x64-debug.cdx.json
-728a725c284df94d1fcbc3c77363ad505467db9c44f8e1fab20c204d0d95c594  OpenZFS-for-Windows-1.0.12-x64-testsigned-debug.msi
-31507ca8e437c183fc1fa1ce61a394d5a54ca6e182c2ab855388633715facb1c  OpenZFS-for-Windows-1.0.12-x64-usermode-debug.msi
-4df615751f01faf5750c419e151bedbbc9b08a95d690f8702c2c795cc1c596f1  VERSION.json
+39ca54827fdcfd1514d0a5c585a43ab144054d03ed53716e89984b9ecc16fb95  OpenZFS-for-Windows-1.0.15-arm64-debug.cdx.json
+14e0a28e196169ff03031ddac2365cda60df379a96feab770902a1516900f081  OpenZFS-for-Windows-1.0.15-arm64-testsigned-debug.msi
+d4d005d12fd463bfc740bae7918d98830a4afb28f274755d04c9bba2dc986b82  OpenZFS-for-Windows-1.0.15-arm64-usermode-debug.msi
+61b5826b3c8c58d60ee6df066eec0df41377b53d1b48aa3e670077bdb87841da  OpenZFS-for-Windows-1.0.15-x64-debug.cdx.json
+91e20a04c00bd6a32228fbfb1809d59e2e7822a606911c1cc8eb263b4139dff3  OpenZFS-for-Windows-1.0.15-x64-testsigned-debug.msi
+c5107293fd0efc9ee0dd94c01612cfd837cbd60f03010cb385eca29e05b5537b  OpenZFS-for-Windows-1.0.15-x64-usermode-debug.msi
+8a038b174f9deb4e9afc020aff2148cca899d4030c12c4f4b2cb412e8ee535bb  VERSION.json
 592d5cd9d3539881217161e844034feedab184059c2a418db737e817b470ca6c  zfswindows-test.cer

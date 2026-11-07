@@ -461,7 +461,10 @@ by exact name, so they now use the 8-CPU ones. A boot from the new
 | 1.0.9 | Patch 0026 | Release user mode fully verified; kernel crashes on unload |
 | 1.0.10 | Patch 0027 | Kernel: GP fault in `zio_create` |
 | 1.0.11 | Patch 0028 | Kernel: no crash; export hang (see 5) |
-| 1.0.12 | Patch 0029 | **x64: every suite and the Linux validation passed (see 6). Latest stable.** |
+| 1.0.12 | Patch 0029 | x64: every suite and the Linux validation passed (see 6) |
+| 1.0.13 | Patch 0030 | ARM64 kernel: mount race fixed (cross-check 20/21, uninstall works); tree test found the device-path gap |
+| 1.0.14 | `zfswin` device-path fix | Broker regression: device operations failed under Native AOT (impersonation) |
+| 1.0.15 | Broker runs operations as itself | **x64 and ARM64, kernel and user mode, Release and Debug: verified; every tree pool read on the other platforms and on Linux. Latest stable.** |
 
 All 29 patches apply to pristine upstream `e7c0984` (checked after each
 change with a fresh worktree).
@@ -503,15 +506,417 @@ A separate agent ran these tests, driven over SSH by the helper scripts in
 | Bugchecks | None |
 | Import/export loop | Exports took 14–24 s; cycle 5 **hung** (more than 300 s; live dump in the VM, 3.2 GB). The hang is not specific to x64. |
 
-**Not done on ARM64:**
-- **Linux validation of the ARM-written pool:** downloads from the ARM PC
-  run at about 15 KB/s. The `scp` of the 118.6 MB archive failed at 21:45
-  after 13.6 MB (`Connection closed`), so the partial
-  `TestVolumes\vm\arm-usermode\arm-usermode-pool.zip` is unusable. It
-  needs a resumable transfer or a manual copy (USB). The expected SHA-256
-  values are:
+**Linux validation of the ARM-written pool (2026-11-07):**
+- **Transfer.** Downloads from the ARM PC first ran at 3–15 KB/s. On
+  2026-11-06 the `scp` broke off after 13.6 MB; on 2026-11-07 it managed
+  2.8 MB in 10 min. Uploads to the PC were fast (58 MB in 4.4 s). After the
+  user moved the PC to a 10 Gbps adapter (new address 192.168.195.238, the
+  same pinned host key), the 124,391,990-byte archive came over in 1.8 s.
+- **Hashes.** Both images match the hashes recorded in the guest:
   - a.img `575263DC3656FAF2878221DC1F7FE737253176CC34E4C850FD6D01949898880A`
   - d.img `B81013D9BD115B620C20EBE242E72F0259E99EB3155F25C17DC179DCDDBED936`
+- **Linux** (`ubuntudev01`, OpenZFS 2.4.1, `ZFSWIN_POOL_DIR` =
+  `TestVolumes\vm\arm-usermode`):
+
+```
+PASS: 26 current files and 24 @s1 files verified by Linux OpenZFS; zfswin properties present; scrub clean; no leaks
+PASS: 9 datasets (gzip-9, lz4, lzjb, off, off, zle, zstd, zstd, zstd-19) verified by Linux OpenZFS: settings, 25 files, dedup table; scrub clean; no leaks
+```
+
+### ARM64 kernel suite with 1.0.12 (2026-11-07)
+
+Both runs started from `testsigning-ready`. Before the first run, the hung
+1.0.11 state was kept as checkpoint `kernel-1.0.11-hung`.
+
+| Check | Run 1 (07:01–07:12) | Run 2 (07:2x, 9 min) |
+| --- | --- | --- |
+| Untrusted certificate, forced rollback (no bugcheck), install | Pass | Pass |
+| CLI | 48/49: `snapshot-s1-content` | 49/49 |
+| PowerShell, GUI, standard user | Pass | Pass |
+| Filesystem | 28/33 (known gaps) | 28/33 (known gaps) |
+| Cross-check: ARM64 user-mode pool | **2/21** | **2/21** |
+| **Import/export loop (the 1.0.11 hang)** | **Pass, exports 9–19 s** | **Pass, exports 9–20 s** |
+| Uninstall | 1603: `zcross` still imported | 1603: `zcross` still imported |
+| Bugchecks, crash dumps | None | None |
+
+Patch 0029 fixes the export hang on ARM64 as well.
+
+**`snapshot-s1-content` (test fix).** The check tested
+`.zfs\snapshot\s1` once with `Test-Path`. The kernel driver mounts a
+snapshot on first access, which is why the other `.zfs` checks use `Retry`.
+This one now uses `Retry` too (`guest-installer.ps1`, shared by x64 and
+ARM64).
+
+**Cross-check 2/21: under investigation.**
+- `zfswin pool import zwin --dir … --new-name zcross` exits 0, but no
+  dataset is mounted (`mountpoint: null`).
+- `zpool export zcross` then fails with "pool is busy", even with `-f` and
+  nothing mounted. That blocks the uninstall.
+- The state is kept as checkpoint `kernel-1.0.12-zcross-busy`.
+
+What I found so far:
+- **The import itself is fine.** By hand, the same import mounts all 12
+  datasets and exports cleanly, both alone and with `zwin` imported, and
+  also with fresh images and `--new-name`. Each of `filesystem`, `gui` and
+  `standard-user` followed by `crosscheck` passes (only `snapshot-f1`).
+- **The failure is the root dataset's drive-letter mount.** After a longer
+  sequence of operations, the same symptom appeared on `zwin`: the root was
+  unmounted, new children mounted under `C:\zwin\tN`, and the pool was
+  "busy" with nothing mounted. A manual `zfs mount zwin` still got a
+  letter.
+- **The ARM VM was servicing Windows Update the whole time.** Defender
+  platform and signature updates installed at 07:35 and 07:45.
+  TrustedInstaller restarted the VM at 07:59:53 and 08:01:04 ("Operating
+  System: Upgrade (Planned)"). Two PowerShell Direct sessions died ("The
+  Hyper-V socket target process has ended"). The ARM checkpoints come from
+  a fresh install, so every restore starts that servicing again. The x64
+  checkpoints were taken after updates had settled.
+- **Next:** bring `testsigning-ready` up to date and pause Windows Update
+  in that VM (new checkpoint `testsigning-ready-updated`; the suite now
+  takes `$Checkpoint`). Then rerun. If the mount failure remains, trace it
+  with the driver log: `zfs_flags` = 513 under
+  `HKLM\SYSTEM\CurrentControlSet\Services\OpenZFS\zfs`, saved through
+  `zfs_cbuf_save` = 1 to `C:\Program Files\OpenZFS On Windows\cbuf.txt`.
+
+**Run 3 on the updated VM** (`testsigning-ready-updated`, 08:20–08:29):
+- CLI 49/49, filesystem 28/33 (known gaps).
+- Loop passed, exports 8–19 s.
+- Cross-check still 2/21, so the Windows Update load did not cause it.
+
+**Root cause, from the driver log.** `zfs_flags` = 1, with the in-memory
+log saved right after the suite's own import of the ARM64 user-mode pool.
+- `zpool import` exited 0 after 10.7 s and printed "sending mountpoint"
+  for all 12 datasets.
+- Only 9 of them reached MountMgr: `mountvol` listed `E:\` and 8
+  children, while `zcross/fs`, `zcross/c-off` and `zcross/c-zstd-19`
+  were missing, and `zfs list -o mounted` said "no" for them.
+- The driver still had them mounted. The later export unmounted only the
+  datasets user mode could see, then failed with "pool is busy".
+- The same import with `ZFS_SERIAL_MOUNT=1` (upstream's switch for
+  serial mounting) mounted all 12 in **1 s**, and all 12 appeared in
+  `mountvol`.
+- libzfs mounts with up to 512 threads (`mount_tp_nthr`). Each mount below
+  a parent finishes on a driver taskq (`NotifyMountMgr_impl`: reparse
+  point, MountMgr announcement, userland event), and those race.
+- The log also showed `SendIoctlToMountManager` reporting garbage
+  statuses ("IoCallDriver failed: 0xeaa30690"): it read `iosb.Status` for
+  requests that had not pended.
+
+**Fix: patch 0030** (shared code for every Windows architecture):
+- libzfs mounts serially under `_WIN32`;
+- the MountMgr helper takes its status from `IoCallDriver()` unless the
+  request pended.
+
+All 30 patches apply to `e7c0984`.
+
+### New test: many small files in deep trees (stage `tree`, all platforms)
+
+At the user's request, a faster test with many more cases.
+`guest-installer.ps1` stage `tree` runs on both editions; the x64 suites
+call it through `TreeSuite.ps1` and the ARM64 suite directly. It uses its
+own pool, `ztree`, on one 1 GiB image.
+
+**Datasets** (7):
+
+| Dataset | Compression | Record size |
+| --- | --- | --- |
+| `t-off` | off | default |
+| `t-lz4` | lz4 | 1M |
+| `t-gzip-1` | gzip-1 | 8K |
+| `t-gzip-9` | gzip-9 | default |
+| `t-zstd-1` | zstd-1 | default |
+| `t-zstd-19` | zstd-19 | 16K |
+| `t-zle` | zle | default |
+
+**Files** (3,500 per dataset, 24,500 in all):
+- 20 directory chains per dataset, 10–30 levels deep, plus one directory
+  of 1,000 files.
+- Names mix Unicode, spaces, dots and long names, so relative paths reach
+  507 characters.
+- Sizes range from 0 bytes to 131,073, around the 512, 4K, 8K, 64K and
+  128K boundaries.
+- Content is zeros, text, random or half text and half random.
+- Each file gets read-only, hidden, system and archive combinations, and
+  fixed creation and modification times.
+
+**Pool layout** (at the user's request: mirrors, scrub, broken drives,
+read and write cache): a mirror of two 1 GiB images, a 256 MiB write log
+(SLOG) and a 256 MiB read cache (L2ARC). `t-gzip-1` uses `sync=always`,
+so its writes go through the log device.
+
+**Phases.** Every verify uses all CPUs (`Parallel.ForEach`) and checks
+every file's size, SHA-256, attributes and mtime.
+1. **Write.** Verify; count files and directories. The SLOG must show
+   writes (`zpool iostat -v`).
+2. **Broken drive (offline).** Disk B goes offline (the pool is
+   DEGRADED). Delete, rename and rewrite 5% of the files each. Verify and
+   count. Disk B comes back online; the resilver must finish with 0
+   errors and the pool be ONLINE. Verify.
+3. **Silent corruption.** With the pool exported, 256 × 64 KiB of disk
+   B's image are overwritten between 8 MiB and 520 MiB, leaving the labels
+   alone. Import and verify (reads self-heal). The scrub must finish with
+   0 errors and have repaired bytes or counted checksum errors on B.
+   `zpool clear`, then verify.
+4. **Failed drive replaced.** B is replaced by a new disk C. The resilver
+   must finish with 0 errors and leave members `tree.img` and
+   `tree-c.img`. Verify.
+5. **Clean scrub.** 0 errors, 0 repaired, 0 checksum errors on any disk.
+6. **Export and import.** All 7 child mounts happen at once, so patch
+   0030 is exercised. Verify and count. The L2ARC must hold data.
+7. **Back to one disk.** Remove the cache and the log, detach C. Verify;
+   check the compression ratios; write the manifest; export.
+
+The pool is left exported with `tree-manifest.tsv` and copied to
+`TestVolumes\vm\tree-<platform>-<edition>-<config>`. Every platform's pool
+is then checked on the others:
+- stage `treeverify` (read-only import, every file and attribute) in the
+  x64 suites and on ARM64;
+- `scripts\vm\validate-tree.py` on Linux (size, SHA-256, mtime and counts,
+  then a scrub and `zdb -bcc`).
+
+**Self-test of the helper on NTFS** (host scratch folder, 2 × 3,500
+files): every phase clean.
+- The first run found that renaming a *system* file sets its Archive bit,
+  on NTFS too. The test now restates the attributes after a rename
+  instead of depending on that rule.
+
+### 1.0.13 (patch 0030) on ARM64, kernel edition, Release (09:38–10:07)
+
+`Test-ArmSuite.ps1 -Edition kernel -Configuration Release`, from
+`testsigning-ready-updated`:
+
+| Check | Result |
+| --- | --- |
+| Untrusted certificate, forced rollback (no bugcheck), install, services, signatures, ARM64 driver | Pass |
+| CLI, PowerShell, GUI, standard user | 49/49, 19/19, pass, pass |
+| Filesystem | 28/33 (the known upstream gaps) |
+| **Cross-check: ARM64 user-mode pool** | **20/21**, only `snapshot-f1` (with 1.0.12: 2/21). Patch 0030 works |
+| Import/export loop | Pass; imports 1 s, exports 8–9 s |
+| **Uninstall** | **Pass**, 3010 (with 1.0.12 it was blocked by the stuck pool) |
+| Bugchecks, crash dumps | None |
+| Tree | 44/52, see below |
+
+**Tree stage, first real run** (12 CPUs; 24,500 files, 2,940 directories):
+- **Write:** 39.5 s (621 files/s). Each full verify took 16–20 s (about
+  1,300–1,400 files/s), and all 8 verifies were intact.
+- **Offline disk:** DEGRADED while 5% of files were deleted, renamed and
+  rewritten; online, then resilver to RESILVER/FINISHED/0.
+- **Corruption:** reads stayed intact; the scrub repaired 4,387,328 bytes,
+  with 1,975 checksum errors on disk B and 0 errors.
+- **Clean scrub:** 0/0/0.
+- **Re-import:** 0.8 s with all 7 mounts.
+- **L2ARC:** 137 MB.
+- **Compression ratios:** off 1.00, lz4 2.48, gzip-1 1.84, gzip-9 2.47,
+  zstd-1 2.49, zstd-19 2.04, zle 1.36.
+
+The failures had two causes:
+1. **`slog-written`, a test bug.** PowerShell variable names ignore case,
+   so `$log` was the script's `[string]$Log` parameter and the iostat
+   result became a string. It is now `$slog`.
+2. **`replace`, `remove-cache`, `remove-log` and `detach` exited 3 (not
+   found) after a re-import. This was a product gap.** After an import,
+   the pool records file vdevs as `//./C:/...`, and `zfswin` passed the
+   user's device as `\\?\C:\...`, which `zpool` does not match. A user
+   could not replace a failed disk or remove a cache or log device by
+   path after a reboot or import. The fix is in
+   `src/managed/Zfs.Admin/Operations.cs`, `PoolDevice()`: attach, detach,
+   replace and remove look the device up in `zpool status -j` by its
+   normalized path and pass its GUID, falling back to the path. There is
+   a new unit test (`DevicesOfAnImportedPoolAreNamedByGuid`); all 140
+   admin tests pass.
+
+That needs a new build, so the x64 1.0.13 chain was stopped and every
+suite runs again on 1.0.14.
+
+### 1.0.14: a broker regression, its cause, and two test findings
+
+All eight 1.0.14 runs (x64 and ARM64, kernel and user mode, Release and
+Debug; x64 Debug stopped early) failed the CLI stage at `attach`, `detach`,
+`replace` and `remove`. 1.0.13 had passed 49/49. `zfswin` answered
+"internal: C:\Program Files\OpenZFS for Windows\bin\zpool.exe is missing"
+although the file was there.
+
+How it was traced:
+- **JIT vs AOT.** The JIT build of the same code, run as a real
+  `BrokerServer` with fake tools, worked. The broker ships as Native AOT
+  (`PublishAot`); a copy of the installed AOT broker failed the same way.
+- **Diagnostic AOT build** in the ARM64 VM (`--console`). The failing
+  `File.Exists` ran on a thread-pool thread that was **impersonating the
+  pipe client at Identification level** (`imp=...\rosen/Identification`).
+  `File.GetAttributes` failed with 0x542 (ERROR_BAD_IMPERSONATION_LEVEL).
+  The thread was the continuation right after the `zpool status` child
+  process completed, called from my new `PoolDevice()`.
+- **Why it was latent.** In 1.0.13 every privileged operation made its
+  only tool call before its first `await`, so it never landed on such a
+  thread. The lookup added a second call after an `await`. The same
+  impersonation would also have made `Validation.DevicePath`'s existence
+  check fail after an `await`.
+- **Fix** (`BrokerServer.AsBroker`): every operation runs under
+  `WindowsIdentity.RunImpersonatedAsync(SafeAccessTokenHandle.InvalidHandle, ...)`,
+  that is, as the broker's own identity for the whole async flow.
+- **Checked with the fixed AOT broker on ARM64:** `detach`, `attach` and
+  `replace` all work. After export and import (devices listed as
+  `//./C:/...`), `detach` by the `C:\` path works too, which was the
+  original gap.
+- The lookup now asks `zpool status -j` without `--json-int` and takes
+  the GUID as a string.
+
+Test findings:
+- **`slog-written`:** `zpool iostat` without an interval prints average
+  rates since import, so over the long tree run the log device's average
+  fell to 0–1 ops/s. A direct user-mode test showed the SLOG works: 6
+  write ops/s on average, which matches the 250 synchronous writes. The
+  stage now samples `zpool iostat ... 2` during the write and requires
+  log writes in at least one interval.
+- **ARM64 user-mode "engine signed":** the user-mode engine is
+  test-signed and the VM does not trust the test certificate (user mode
+  does not need it), so Authenticode reports `UnknownError`. That is now
+  accepted.
+
+**Open: in user mode the read cache (L2ARC) is lost on import.**
+- After export and import, `zpool status` lists the mirror and the log
+  but no cache device. In the kernel edition the cache comes back
+  (137 MB).
+- A clean test: a fresh pool with a cache device, synced and exported.
+  The cache image carries a label (276 non-zero bytes in label 0), but
+  `zpool import -d` lists only the data disk.
+- So the import configuration from the user-mode engine (tryimport
+  through the bridge) has no L2CACHE entry. Upstream `spa_import()` takes
+  cache devices only from that configuration, so the cache is dropped.
+- Not a data-safety issue, but a gap; to be investigated in the user-mode
+  engine. The tree stage's `l2arc-in-use` check will fail in user mode
+  until then.
+
+### 1.0.15 (broker fix): first results and new findings
+
+**ARM64, rerun with the fixed tests** (14:50–15:47):
+
+| Run | Failed checks |
+| --- | --- |
+| Kernel Release | Only the known upstream gaps: filesystem 28/33, cross-check `snapshot-f1`. **Tree 52/52.** Tree pool kept |
+| User mode Release | Tree: `slog-written`, `l2arc-in-use`, `remove-cache` (see below). Tree pool kept |
+| Kernel Debug | Known gaps; CLI `snapshot-s1-content` (an intermittent `.zfs` read after re-import, even with the 30 s retry); reading the x64 user-mode tree pool read-only (see below). Tree pool kept |
+| User mode Debug | Tree as in Release; `treeverify` export after a read-only import (see below). Tree pool kept |
+
+The broker fix works on ARM64: CLI attach, detach, replace, remove,
+add-log and add-cache all pass, and the tree's replace, remove and detach
+after a re-import pass in the kernel edition. Kernel SLOG writes peaked at
+119 ops/s with `sync=always`.
+
+**x64 Release** (first pass, scripts before these fixes):
+- **Repair refused, correctly:** "REFUSED: A reboot is pending (Component
+  Based Servicing)". Windows Update was servicing the VM during the run.
+  The suite now checks `pendingReboot` before the repair and restarts the
+  guest first, as a user would.
+- **The cross-check import failed:** it read the user-mode pool from the
+  broken 1.0.14 run, which still had a log device that was not in the
+  copied images. Stale input, not a 1.0.15 problem.
+- **`replace-members`, a test bug:** PowerShell's culture-aware sort puts
+  `tree.img` before `tree-c.img`; both sides are now sorted the same way.
+
+**Findings in the user-mode edition** (design, not regressions):
+1. **No ZIL.** The user-mode engine has its own ZPL (`zum_zpl.c`) without an
+   intent log: "durability is the next txg sync". A flush waits for
+   `txg_wait_synced`, which is why the power-cut tests pass. A SLOG device
+   is accepted but never written: 0 log writes in 17 two-second intervals
+   during `sync=always` writes. The `sync` property is not read by the
+   user-mode engine at all. The README's description of `sync` and SLOG
+   must say so for user mode.
+2. **The read cache (L2ARC) is lost on import** (above).
+
+**Read-only import of another platform's pool** (`treeverify`, first
+version):
+- **Kernel (ARM64 Debug, x64 user-mode pool):** the import and 7 mounts
+  were reported, but every file was "missing" and enumerating the dataset
+  roots failed.
+- **Linux shows the same thing**, so it is standard ZFS behaviour: the
+  read-only import gives "cannot mount '/tmp/ztree-check/ztree/t-off':
+  failed to create mountpoint: Read-only file system".
+  - Child datasets need their mountpoint directories in the parent
+    dataset. Windows creates them as reparse points while mounted and
+    removes them on unmount, so they are absent in the pool.
+  - On Windows the same pool imported read-write mounts all children.
+- **User mode:** the export after a read-only import exits 1. Still open.
+
+`treeverify` and `validate-tree.py` now import the copied image
+read-write. That still checks every file another platform wrote, and the
+Linux side needs it for the scrub anyway.
+
+### 1.0.15 final results (2026-11-07, all runs with the fixed tests)
+
+**Suites**, failed checks only:
+
+| | Kernel Release | Kernel Debug | User mode Release | User mode Debug |
+| --- | --- | --- | --- | --- |
+| **x64** | Known upstream gaps (ACLs on open, `.zfs` snapshot reads); one transient "busy" export after `treeverify` (retry added) | Known gaps; `treeverify` still read-only in that run | Tree: `slog-written`, `l2arc-in-use`, `remove-cache` (user-mode limits) | The same; one count bug in the test (fixed) |
+| **ARM64** | Known gaps; **tree 52/52** | Known gaps; one intermittent `.zfs` read in CLI | The user-mode limits | The user-mode limits |
+
+On x64, repair now passes. Windows Update is paused in the guest at the
+start, and the suite restarts up to 4 times while a reboot is pending.
+
+**Tree pools across platforms** (23,275 files each, every file's data,
+size, attributes and mtime, plus file and directory counts):
+
+| Written on | x64 kernel | x64 user mode | ARM64 kernel | ARM64 user mode | Linux (+ scrub, `zdb -bcc`) |
+| --- | --- | --- | --- | --- | --- |
+| x64 kernel Release | own | — | ✅ | ✅ | ✅ |
+| x64 kernel Debug | own | — | ✅ | ✅ | ✅ |
+| x64 user mode Release | ✅ | own | ✅ | ✅ | ✅ |
+| x64 user mode Debug | — | own | ✅ | ✅ | ✅ |
+| ARM64 kernel Release | ✅ | ✅ | own | — | ✅ |
+| ARM64 kernel Debug | ✅ | ✅ | own | — | ✅ |
+| ARM64 user mode Release | ✅ | ✅ | — | own | ✅ |
+| ARM64 user mode Debug | ✅ | ✅ | — | own | ✅ |
+
+Linux at first counted one directory more in `tree-arm64-kernel-debug`:
+an empty `System Volume Information` that Windows created on that volume.
+Both sides now skip Windows' own folders (`System Volume Information`,
+`$RECYCLE.BIN`).
+
+**Open items, not blocking 1.0.15:**
+1. **User mode has no intent log (ZIL),** by design. `sync` has no effect
+   and a SLOG is never written; durability comes from waiting for the
+   txg. Documented in the README. Adding a ZIL is a separate decision for
+   the user.
+2. **User mode drops the read cache (L2ARC) at import:** the tryimport
+   configuration from the user-mode engine has no L2CACHE entry. To be
+   investigated.
+3. **User mode cannot export after a read-only import** (exit 1). To be
+   investigated.
+4. **The x64 VM's checkpoints** predate Windows updates and should be
+   rebuilt updated, as was done for ARM64.
+
+**Dry-run harness gap.** `Repro-ExportHang.ps1`, and a dry run built the
+same way, install the MSI with `msiexec /qn` over PowerShell Direct. The
+driver and tools land in place: the running `OpenZFS.sys` was the 1.0.12
+build, so the export-hang loops tested the right driver. But the broker
+service and the Add/Remove Programs entry are missing, so `zfswin` answers
+"broker-unavailable" (exit 5). The suites install through
+`guest-installer.ps1 -Stage msi`, which checks the broker and the ARP
+entry.
+
+**ARM PC power settings (2026-11-07, at the user's request).** The test VM
+switch "Roaming" now runs on the PC's Realtek USB 10GbE adapter.
+
+| Setting (AC power) | Before | After |
+| --- | --- | --- |
+| Sleep after | Never | Never |
+| Hibernate after | Never | Never |
+| USB selective suspend | **Enabled** | Disabled |
+| "Allow the computer to turn off this device", Realtek USB 10GbE and USB GbE | **Enabled** | Disabled (`-NoRestart`) |
+
+- Battery settings were not changed (sleep after 30 min).
+- The display still turns off after 30 min on AC; that does not sleep the
+  PC.
+- There is no lid-close setting on this PC.
+
+**SSH outage (2026-11-06 ~23:30 to 2026-11-07 ~06:50).** The `sshd`
+service had disappeared from the ARM PC, although the OpenSSH Server
+capability still showed as "Installed". The user removed and re-added the
+capability and added a firewall rule for port 22 on all profiles. The host
+key was unchanged.
+
+**Not done on ARM64:**
 - **The read and power-cut phases** with the 5 GB fixture.
 - **Repair, upgrade and uninstall:** blocked by the hung export, and no
   ARM64 upgrade package exists.

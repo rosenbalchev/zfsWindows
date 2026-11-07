@@ -12,13 +12,16 @@ nested submodules are not needed.
 
 ## Download and install (1.0)
 
-> **Latest stable: 1.0.12** (2026-11-06), in
-> [`downloads/1.0/release/`](downloads/1.0/release/). The x64 Release build
-> passed every VM suite (kernel and user mode, including install, upgrade
-> and uninstall) and the Linux validation of the pools it wrote (plan step
-> 19). Its Debug build is in [`downloads/1.0/debug/`](downloads/1.0/debug/).
-> 1.0.8–1.0.11 are superseded: their Release builds had optimizer-only
-> bugs, fixed by patches 0026–0029.
+> **Latest stable: 1.0.15** (2026-11-07), in
+> [`downloads/1.0/release/`](downloads/1.0/release/), with its Debug build in
+> [`downloads/1.0/debug/`](downloads/1.0/debug/).
+> - Both builds passed the VM suites on **x64 and ARM64**, kernel and user
+>   mode. On x64 that includes install, upgrade, repair and uninstall.
+> - Pools written on each platform and edition were read back correctly on
+>   the others and validated by upstream OpenZFS on Linux (plan step 19).
+> - 1.0.8–1.0.14 are superseded: Release-only optimizer bugs (patches
+>   0026–0029), a mount race with many datasets (0030), and two
+>   `zfswin`/broker bugs.
 
 Versions are `1.0.N`; the build number goes up with every release build.
 Each version comes in two builds:
@@ -51,23 +54,34 @@ tool in the Start menu (`ZfsWinGui.exe`, needs the .NET 10 Desktop Runtime).
 - **Both editions** (the user-mode one since 1.0.7, through its ZFS bridge):
   - pool status and the vdev tree;
   - scrubs;
-  - compression, deduplication and sync per dataset;
+  - compression, deduplication and sync per dataset (the user-mode edition
+    ignores `sync`, see below);
   - adding and removing mirror disks, read caches (L2ARC) and write logs
-    (SLOG).
+    (SLOG). In the user-mode edition a write log is not used and a read
+    cache is dropped at the next import, see below.
 - **User-mode edition, in addition:** its service and mounts.
 
 What has been tested:
 - **x64 Debug:** verified in disposable Windows 11 24H2 x64 VMs and against
   upstream OpenZFS on Linux (plan steps 12–18).
-- **x64 Release (1.0.12):** the same VM suites and Linux validation, all
-  passed (plan step 19).
-- **ARM64 Release:** tested with 1.0.11 in a Windows 11 ARM64 VM (plan step
-  19). The user-mode edition passed all of its administration checks. The
-  kernel edition installed and passed its CLI and filesystem checks (same
-  known gaps as x64), but an import/export loop hung. That hang is fixed in
-  1.0.12 (patch 0029), and the fix is verified on x64 but **not yet on
-  ARM64**. Upgrade, uninstall, the read and power-cut phases, and Linux
-  validation of an ARM64-written pool are not done yet.
+- **x64 Release and Debug (1.0.15):** the same VM suites, passed (plan step
+  19), apart from the gaps listed in the feature matrix.
+- **ARM64 Release and Debug (1.0.15):** both editions in a Windows 11 ARM64
+  VM (plan step 19).
+  - **Covered:** install (refused without trust or WinFsp, forced
+    rollback), administration, ACLs and streams, compression and dedup,
+    and an import/export loop. For the kernel edition, uninstall.
+  - **Not yet covered:** upgrade (no ARM64 upgrade package yet), and the
+    read and power-cut phases.
+- **Many small files, mirrors, caches and broken disks (1.0.15, both
+  architectures and editions):** a test of 24,500 files.
+  - **Layout:** 7 datasets with different compression and record sizes,
+    and directories 10–30 levels deep.
+  - **Disks:** a mirror with a write log and a read cache. One disk goes
+    offline and is resilvered, one is corrupted and repaired by a scrub,
+    and one is replaced.
+  - **Checks:** every file is verified after each step, and every pool is
+    then read on the other platforms and on Linux.
 - Windows 10 and Windows Server have not been tested yet (plan step 17).
 
 ## User mode or kernel mode? Feature matrix
@@ -77,7 +91,7 @@ and use the same administration tools. A pool moves freely between them,
 with its Windows ACLs and alternate data streams, and to Linux, FreeBSD or
 macOS. They differ in how Windows reaches the file system.
 
-✅ tested in this project's VM runs (release 1.0.7 Debug; 1.0.12 Release, same results) or Linux validation ·
+✅ tested in this project's VM runs (1.0.7 Debug; 1.0.15 Release and Debug on x64 and ARM64) or Linux validation ·
 ☑️ implemented, not yet tested here, or only partly works (see note) ·
 ❌ not available
 
@@ -88,7 +102,7 @@ macOS. They differ in how Windows reaches the file system.
 | | Install, upgrade, repair, uninstall without touching pools | ✅ | ✅ install, uninstall (upgrade, repair ☑️) |
 | | Getting-started page, Start-menu shortcuts | ✅ | ✅ |
 | | x64 | ✅ | ✅ |
-| | ARM64 | ☑️ built and checked statically, not run | ☑️ built and checked statically, not run |
+| | ARM64 | ✅ install, administration, files, many small files, mirrors, caches, broken disks, uninstall (upgrade ☑️) | ✅ the same (upgrade ☑️) |
 | **Files** | Read and write files and folders | ✅ | ✅ |
 | | Read-only mount (image stays byte-identical) | ✅ | ✅ |
 | | Durable after flush or write-through (power-cut test) | ✅ | ✅ |
@@ -108,11 +122,11 @@ macOS. They differ in how Windows reaches the file system.
 | **Administration** | Create pools on image files; import and export | ✅ `zfswin`, GUI, PowerShell, `zpool` | ✅ the same tools, through the service's ZFS bridge |
 | | Mount at boot | ☑️ | ✅ pools and mounts back after a service restart |
 | | Create and destroy datasets | ✅ | ✅ |
-| | Change compression, dedup, sync and other properties | ✅ | ✅ |
+| | Change compression, dedup, sync and other properties | ✅ | ✅ set and stored; ☑️ `sync` has no effect: the engine has no intent log, every flush waits for the transaction group (still durable, power-cut tested) |
 | | Create, destroy and roll back snapshots | ✅ create and destroy with `zfswin`; rollback with `zfs rollback` (step 12) | ✅ create and destroy with `zfswin`; rollback with `zfs rollback` ☑️ |
 | | Scrub (verify and repair) | ✅ | ✅ |
 | | Add and remove mirror disks; replace a disk | ✅ | ✅ |
-| | Add and remove read cache (L2ARC) and write log (SLOG) | ✅ | ✅ |
+| | Add and remove read cache (L2ARC) and write log (SLOG) | ✅ the write log takes `sync=always` writes; the read cache fills and comes back after an import; both removable after an import | ☑️ added and removed, but the write log is never written (no intent log), and the read cache is dropped at the next import |
 | | `zfswin` CLI, `ZfsWin` PowerShell module | ✅ | ✅ |
 | | Standard users may read, only elevated administrators change | ✅ | ✅ |
 | | GUI (`ZfsWinGui.exe`) | ✅ status, scrub, properties, mirrors, read cache and write log (self-check tested; the windows themselves not yet clicked through) | ✅ the same, plus the service and its mounts (self-check tested) |
@@ -178,6 +192,11 @@ ZFS is asynchronous in a different place, its write path:
   `sync=disabled` makes everything asynchronous, which is faster but loses
   the last seconds of writes on a power cut. `sync=always` makes every write
   durable before it returns.
+- **The user-mode edition has no ZFS intent log.** A flush or write-through
+  waits for the transaction group to commit instead. That is durable (the
+  power-cut test passes) but slower for many small synchronous writes. The
+  `sync` property has no effect there, and a write log (SLOG) device is
+  never used.
 
 ### Zero-copy
 
@@ -229,7 +248,7 @@ has.
 
 ## Current status
 
-Steps 00–14 of the plan are complete: the read-only milestones, disposable-pool writes, failure recovery, the kernel driver in an isolated VM, read and write caching through the driver (including power-loss durability), and the administration tools and kernel-driver installer. Step 15, the user-mode WinFsp variant and its installer, works end to end; its remaining items are listed in the step file. Step 18 (complete, release 1.0.7) brings the user-mode edition to the kernel edition's features and tools: Windows ACLs (enforced), alternate data streams, `.zfs\snapshot`, block cloning, and full pool and dataset administration through a bridge to upstream `zfs_ioctl.c`. Step 19 runs the same suites on the optimized Release builds: it found and fixed four Release-only defects (patches 0026–0029), and 1.0.12 is the first Release build verified end to end on x64. The repository now contains:
+Steps 00–14 of the plan are complete: the read-only milestones, disposable-pool writes, failure recovery, the kernel driver in an isolated VM, read and write caching through the driver (including power-loss durability), and the administration tools and kernel-driver installer. Step 15, the user-mode WinFsp variant and its installer, works end to end; its remaining items are listed in the step file. Step 18 (complete, release 1.0.7) brings the user-mode edition to the kernel edition's features and tools: Windows ACLs (enforced), alternate data streams, `.zfs\snapshot`, block cloning, and full pool and dataset administration through a bridge to upstream `zfs_ioctl.c`. Step 19 runs the same suites on the optimized Release builds, on x64 and ARM64. It found and fixed four Release-only defects (patches 0026–0029), a mount race with many datasets (patch 0030) and two broker bugs, and added a many-small-files test with mirrors, caches and broken disks. 1.0.15 is verified on both architectures, in both editions, Release and Debug. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;

@@ -3,7 +3,7 @@
 # object.  Driven by scripts\vm\Test-InstallerInVm.ps1.
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "filesystem", "datafeatures", "crosscheck", "samples", "import", "export", "hash")]
+    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "filesystem", "datafeatures", "crosscheck", "tree", "treeverify", "samples", "import", "export", "hash")]
     [string]$Stage,
     [string]$Msi = "",
     [ValidateSet("install", "repair", "uninstall")]
@@ -163,6 +163,223 @@ function Describe([string]$path) {
         sha256 = $(if (Test-Path -LiteralPath $path -PathType Leaf) { (Get-FileHash -LiteralPath $path).Hash })
         streams = $streams
     }
+}
+
+# The "tree" corpus (stages tree and treeverify): ~24,500 small files in
+# chains of 10-30 nested directories plus one wide directory per dataset,
+# sizes around block boundaries, zero/text/random/mixed content, DOS
+# attributes and fixed times.  Written and verified by all CPUs at once;
+# deterministic, so another machine can check it from the manifest.
+function Initialize-Tree {
+    if ("ZfsTree" -as [type]) { return }
+    Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+public static class ZfsTree {
+    public class Entry { public int R; public string Rel; public long Size; public int Kind; public int Seed; public FileAttributes Attr; public DateTime Time; public string Sha; public bool Gone; }
+    public class Result { public int Checked, Missing, Size, Data, Attr, Time, Errors; public string[] Samples; }
+    public static List<Entry> Files = new List<Entry>();
+    public static List<HashSet<string>> DirSets = new List<HashSet<string>>();
+    public static int[] ExpectedDirs;
+    public static string[] Roots;
+    static readonly string[] DirNames = { "lvl", "\u00dcn\u00efc\u00f8d\u00e9", "\u65e5\u672c", "with space", "dots.in.name", "a_rather_long_directory_name_that_makes_paths_long", "x" };
+    static readonly string[] Stems = { "f", "\u00d1ame ", "UPPER", "with.many.dots.", "file-with-a-much-longer-name-that-keeps-going-" };
+    static readonly string[] Exts = { ".bin", ".txt", ".DAT", "", ".tar.gz" };
+    static readonly long[] Sizes = { 0, 1, 2, 100, 511, 512, 513, 4095, 4096, 4097, 8191, 8192, 8193, 16384, 65535, 65536, 131073 };
+    static readonly FileAttributes[] Attrs = { FileAttributes.Normal, FileAttributes.ReadOnly, FileAttributes.Hidden, FileAttributes.System, FileAttributes.Archive,
+        FileAttributes.Hidden | FileAttributes.System, FileAttributes.ReadOnly | FileAttributes.Hidden, FileAttributes.Archive | FileAttributes.ReadOnly };
+    public const FileAttributes Mask = FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive;
+    static readonly DateTime Epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    static string Full(int r, string rel) { return @"\\?\" + Roots[r] + rel; }
+    static ParallelOptions Opt(int threads) { return new ParallelOptions { MaxDegreeOfParallelism = threads }; }
+    static void Note(ConcurrentQueue<string> q, string what) { if (q.Count < 20) q.Enqueue(what); }
+
+    public static int Plan(string[] roots, int perRoot, int branches, int wide) {
+        Roots = roots; Files.Clear(); DirSets.Clear();
+        int idx = 0;
+        for (int r = 0; r < roots.Length; r++) {
+            var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int perBranch = (perRoot - wide) / branches;
+            for (int b = 0; b < branches; b++) {
+                int depth = 10 + (b * 7 + r * 3) % 21;
+                string cur = "b" + b.ToString("D2");
+                dirs.Add(cur);
+                var levels = new List<string>();
+                for (int d = 0; d < depth; d++) {
+                    cur = cur + "\\" + DirNames[(b + d + r) % DirNames.Length] + d.ToString("D2");
+                    dirs.Add(cur); levels.Add(cur);
+                }
+                for (int j = 0; j < perBranch; j++)
+                    Add(r, levels[j % depth] + "\\" + Stems[j % Stems.Length] + j + Exts[(j / Stems.Length) % Exts.Length], idx++);
+            }
+            dirs.Add("wide");
+            for (int i = 0; i < wide; i++) Add(r, "wide\\w" + i.ToString("D5") + ".dat", idx++);
+            DirSets.Add(dirs);
+        }
+        ExpectedDirs = DirSets.Select(s => s.Count).ToArray();
+        return Files.Count;
+    }
+
+    static void Add(int r, string rel, int idx) {
+        var e = new Entry { R = r, Rel = rel, Kind = idx % 4, Seed = (int)((idx * 1103515245L + 12345) & 0x7fffffff) };
+        e.Size = (idx % 5 == 4) ? new Random(e.Seed).Next(1, 32768) : Sizes[idx % Sizes.Length];
+        e.Attr = Attrs[idx % Attrs.Length];
+        e.Time = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(idx * 37L);
+        Files.Add(e);
+    }
+
+    static byte[] Content(Entry e) {
+        var buf = new byte[e.Size];
+        if (e.Kind == 1 || e.Kind == 3) {
+            var line = Encoding.ASCII.GetBytes("line " + e.Seed + " of the zfswin tree corpus, the same words again and again\n");
+            for (long i = 0; i < buf.LongLength; i++) buf[i] = line[i % line.Length];
+        }
+        if (e.Kind == 2) new Random(e.Seed).NextBytes(buf);
+        if (e.Kind == 3) { var half = new byte[buf.Length / 2]; new Random(e.Seed).NextBytes(half); Buffer.BlockCopy(half, 0, buf, 0, half.Length); }
+        return buf;
+    }
+
+    static string Hex(byte[] data) { using (var s = SHA256.Create()) return BitConverter.ToString(s.ComputeHash(data)).Replace("-", ""); }
+
+    static void WriteOne(Entry e) {
+        string p = Full(e.R, e.Rel);
+        var data = Content(e);
+        File.WriteAllBytes(p, data);
+        e.Sha = Hex(data);
+        File.SetCreationTimeUtc(p, e.Time);
+        File.SetLastWriteTimeUtc(p, e.Time);
+        File.SetAttributes(p, e.Attr);
+    }
+
+    public static string[] Write(int threads) {
+        var errors = new ConcurrentQueue<string>();
+        // The deepest directory of each chain (CreateDirectory makes the rest).
+        var leaves = new List<KeyValuePair<int, string>>();
+        for (int r = 0; r < DirSets.Count; r++)
+            foreach (var d in DirSets[r])
+                if (!DirSets[r].Any(o => o.Length > d.Length && o.StartsWith(d + "\\", StringComparison.OrdinalIgnoreCase)))
+                    leaves.Add(new KeyValuePair<int, string>(r, d));
+        Parallel.ForEach(leaves, Opt(threads), d => {
+            try { Directory.CreateDirectory(Full(d.Key, d.Value)); } catch (Exception x) { Note(errors, "mkdir " + d.Value + ": " + x.Message); }
+        });
+        Parallel.ForEach(Files, Opt(threads), e => {
+            try { WriteOne(e); } catch (Exception x) { Note(errors, "write " + e.Rel + ": " + x.Message); }
+        });
+        return errors.ToArray();
+    }
+
+    public static Result Verify(int threads) {
+        var res = new Result();
+        var samples = new ConcurrentQueue<string>();
+        Parallel.ForEach(Files.Where(f => !f.Gone), Opt(threads), e => {
+            string p = Full(e.R, e.Rel);
+            try {
+                Interlocked.Increment(ref res.Checked);
+                if (!File.Exists(p)) { Interlocked.Increment(ref res.Missing); Note(samples, "missing " + e.Rel); return; }
+                var data = File.ReadAllBytes(p);
+                if (data.LongLength != e.Size) { Interlocked.Increment(ref res.Size); Note(samples, "size " + e.Rel + " " + data.LongLength + " != " + e.Size); }
+                else if (Hex(data) != e.Sha) { Interlocked.Increment(ref res.Data); Note(samples, "data " + e.Rel); }
+                var a = File.GetAttributes(p) & Mask;
+                if (a != (e.Attr & Mask)) { Interlocked.Increment(ref res.Attr); Note(samples, "attr " + e.Rel + " " + a + " != " + (e.Attr & Mask)); }
+                var t = File.GetLastWriteTimeUtc(p);
+                if (t != e.Time) { Interlocked.Increment(ref res.Time); Note(samples, "time " + e.Rel + " " + t.ToString("o") + " != " + e.Time.ToString("o")); }
+            } catch (Exception x) { Interlocked.Increment(ref res.Errors); Note(samples, "error " + e.Rel + ": " + x.Message); }
+        });
+        res.Samples = samples.ToArray();
+        return res;
+    }
+
+    // Windows' own folders: not part of the tree, and System Volume Information
+    // is SYSTEM-only, so descending into it fails where ACLs are enforced.
+    static bool Ours(string path) {
+        string name = Path.GetFileName(path);
+        return !name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase) && !name.Equals("$RECYCLE.BIN", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Files and directories each dataset holds, as Windows enumerates them.
+    public static long[] Count() {
+        var counts = new long[Roots.Length * 2];
+        Parallel.For(0, Roots.Length, r => {
+            long files = 0, dirs = 0;
+            var pending = new Stack<string>();
+            pending.Push(@"\\?\" + Roots[r]);
+            while (pending.Count > 0) {
+                string dir = pending.Pop();
+                files += Directory.EnumerateFiles(dir).LongCount();
+                foreach (string sub in Directory.EnumerateDirectories(dir).Where(Ours)) { dirs++; pending.Push(sub); }
+            }
+            counts[r * 2] = files;
+            counts[r * 2 + 1] = dirs;
+        });
+        return counts;
+    }
+
+    // Every 20th file deleted, renamed and rewritten (5% each).
+    public static string[] Mutate(int threads) {
+        var errors = new ConcurrentQueue<string>();
+        Parallel.For(0, Files.Count, Opt(threads), i => {
+            var e = Files[i];
+            string p = Full(e.R, e.Rel);
+            try {
+                switch (i % 20) {
+                    case 3: File.SetAttributes(p, FileAttributes.Normal); File.Delete(p); e.Gone = true; break;
+                    // Windows sets Archive on renaming a System file (NTFS too):
+                    // state the attributes again rather than test that rule.
+                    case 7: File.Move(p, p + ".renamed"); e.Rel += ".renamed"; File.SetAttributes(p + ".renamed", e.Attr); break;
+                    case 11:
+                        File.SetAttributes(p, FileAttributes.Normal);
+                        e.Seed ^= 0x5a5a5a; e.Size = (e.Size * 3 + 100) % 70000; e.Kind = (e.Kind + 1) % 4;
+                        WriteOne(e); break;
+                }
+            } catch (Exception x) { Note(errors, "mutate " + e.Rel + ": " + x.Message); }
+        });
+        return errors.ToArray();
+    }
+
+    // Tab-separated: dataset index, path (/), size, SHA-256, DOS attributes, mtime (Unix s).
+    public static void SaveManifest(string path, string[] datasets) {
+        var sb = new StringBuilder();
+        for (int r = 0; r < datasets.Length; r++)
+            sb.Append("#dataset\t" + r + "\t" + datasets[r] + "\t" + Files.Count(f => f.R == r && !f.Gone) + "\t" + ExpectedDirs[r] + "\n");
+        foreach (var e in Files.Where(f => !f.Gone).OrderBy(f => f.R).ThenBy(f => f.Rel, StringComparer.Ordinal))
+            sb.Append(e.R + "\t" + e.Rel.Replace('\\', '/') + "\t" + e.Size + "\t" + e.Sha + "\t" + (int)(e.Attr & Mask) + "\t" + (long)(e.Time - Epoch).TotalSeconds + "\n");
+        File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
+    }
+
+    public static string[] LoadManifest(string path, string[] roots) {
+        Roots = roots; Files.Clear(); DirSets.Clear();
+        var names = new List<string>(); var dirs = new List<int>();
+        foreach (var line in File.ReadAllLines(path, Encoding.UTF8)) {
+            if (line.Length == 0) continue;
+            var f = line.Split('\t');
+            if (f[0] == "#dataset") { names.Add(f[2]); dirs.Add(int.Parse(f[4])); continue; }
+            Files.Add(new Entry { R = int.Parse(f[0]), Rel = f[1].Replace('/', '\\'), Size = long.Parse(f[2]), Sha = f[3],
+                Attr = (FileAttributes)int.Parse(f[4]), Time = Epoch.AddSeconds(long.Parse(f[5])) });
+        }
+        ExpectedDirs = dirs.ToArray();
+        return names.ToArray();
+    }
+
+    public static int[] ManifestCounts() { return Enumerable.Range(0, Roots.Length).Select(r => Files.Count(f => f.R == r && !f.Gone)).ToArray(); }
+}
+"@
+}
+
+# Mount path of a dataset as "X:\..\" with backslashes (the tree helper's form).
+function TreeRoot([string]$dataset) {
+    $p = MountPath $dataset
+    if (-not $p) { return $null }
+    $p = $p -replace '/', '\'
+    if (-not $p.EndsWith('\')) { $p += '\' }
+    $p
 }
 
 function Manifest([string]$root) {
@@ -346,7 +563,8 @@ switch ($Stage) {
         $expected = (Get-Content "$work\manifest.json" -Raw | ConvertFrom-Json).current
         Check $r "data-after-reimport" ((Compare-Object @($reimported | ForEach-Object { "$($_.path)|$($_.sha256)" }) @($expected | ForEach-Object { "$($_.path)|$($_.sha256)" })) -eq $null) $true
         $snapPath = if ($docs) { Join-Path $docs ".zfs\snapshot\s1" }
-        $snapFiles = if ($snapPath -and (Test-Path -LiteralPath $snapPath)) { @(Manifest $snapPath) } else { @() }
+        # The snapshot is mounted on first access (see Retry).
+        $snapFiles = if ($snapPath -and (Retry { if (Test-Path -LiteralPath $snapPath) { $true } })) { @(Manifest $snapPath) } else { @() }
         $expectedS1 = (Get-Content "$work\manifest.json" -Raw | ConvertFrom-Json).s1
         Check $r "snapshot-s1-content" ((Compare-Object @($snapFiles | ForEach-Object { "$($_.path)|$($_.sha256)" }) @($expectedS1 | ForEach-Object { "$($_.path)|$($_.sha256)" })) -eq $null) $true
         $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
@@ -644,6 +862,269 @@ try { Set-Content -LiteralPath '$(Join-Path $root "dir\by-user.txt")' 'mine' -Er
         $expected.datasets[$dd].files = @(Manifest $ddRoot)
         $expected.dedupratio = "$freed"
         $expected | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "$work\datafeatures.json"
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # Many small files in deep trees, all CPUs (both editions), on pool
+    # ztree: a mirror of two 1 GiB images with a write log (SLOG) and a read
+    # cache (L2ARC), a dataset per compression/recordsize (t-gzip-1 with
+    # sync=always, so its writes go through the log device).  Write and
+    # verify; one mirror disk offline while the tree changes, online and
+    # resilvered; one disk's image corrupted while exported and repaired by
+    # a scrub; that disk replaced by a new one; a clean scrub; export and
+    # import; verify after each step.  Then the cache, log and second disk
+    # are removed, and the pool is left exported on tree\tree.img with
+    # tree\tree-manifest.tsv for the other platforms (stage treeverify,
+    # scripts\vm\validate-tree.py).
+    "tree" {
+        $r = [ordered]@{}
+        $treePool = "ztree"
+        $treeDir = "$work\tree"
+        $perDataset = if ($decoded -and $decoded.Files) { [int]$decoded.Files } else { 3500 }
+        $threads = [Environment]::ProcessorCount
+        $r.threads = $threads
+        if ((Zfswin @('pool', 'list')).result.pools | Where-Object name -eq $treePool) { Zfswin @('pool', 'export', $treePool) | Out-Null }
+        New-Item -ItemType Directory -Force $treeDir | Out-Null
+        Remove-Item "$treeDir\*" -Force -ErrorAction SilentlyContinue
+        $diskA = "$treeDir\tree.img"; $diskB = "$treeDir\tree-b.img"; $diskC = "$treeDir\tree-c.img"
+        $logDisk = "$treeDir\tree-log.img"; $cacheDisk = "$treeDir\tree-cache.img"
+        foreach ($d in $diskA, $diskB) { & fsutil.exe file createnew $d (1GB) | Out-Null }
+        foreach ($d in $logDisk, $cacheDisk) { & fsutil.exe file createnew $d (256MB) | Out-Null }
+        Check $r "create-mirror" (Zfswin @('pool', 'create', $treePool, '--mirror', $diskA, $diskB, '--yes')).exit 0
+        Check $r "add-log" (Zfswin @('vdev', 'add-log', $treePool, $logDisk, '--yes')).exit 0
+        Check $r "add-cache" (Zfswin @('vdev', 'add-cache', $treePool, $cacheDisk, '--yes')).exit 0
+        $zpool = Join-Path $installDir "bin\zpool.exe"
+        # zpool's own JSON: scan statistics with repaired bytes and per-disk errors.
+        function TreeStatus { ((& $zpool status -j --json-int -p $treePool 2>$null) -join "`n" | ConvertFrom-Json).pools.$treePool }
+        # Leaf disks under a vdev, or under a name->vdev map (logs, l2cache).
+        function TreeLeaves($node) {
+            if ($null -eq $node -or $node -isnot [pscustomobject]) { return }
+            if ($node.PSObject.Properties['path']) { $node }
+            elseif ($node.PSObject.Properties['vdevs']) { foreach ($p in $node.vdevs.PSObject.Properties) { TreeLeaves $p.Value } }
+            elseif (-not $node.PSObject.Properties['vdev_type']) { foreach ($p in $node.PSObject.Properties) { TreeLeaves $p.Value } }
+        }
+        function TreeDisk([string]$file) { @(TreeLeaves (TreeStatus).vdevs.$treePool | Where-Object { $_.path -like "*$(Split-Path -Leaf $file)" }) | Select-Object -First 1 }
+        function TreeWait([string]$function, [double]$since) {
+            $deadline = (Get-Date).AddMinutes(15)
+            do {
+                Start-Sleep -Seconds 2
+                $scan = (TreeStatus).scan_stats
+            } while (-not ($scan -and $scan.function -eq $function -and $scan.state -eq 'FINISHED' -and [double]$scan.start_time -ge $since) -and (Get-Date) -lt $deadline)
+            $scan
+        }
+        function UnixNow { [double][DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 2 }
+        # One line of "zpool iostat -v -H -p" for a device: alloc, free, read/write ops, read/write bytes.
+        function TreeIostat([string]$file) {
+            $line = @(& $zpool iostat -v -H -p $treePool 2>$null | Where-Object { $_ -match [regex]::Escape((Split-Path -Leaf $file)) }) | Select-Object -First 1
+            if (-not $line) { return $null }
+            $f = @($line.Trim() -split "`t" | Where-Object { $_ -ne '' } | ForEach-Object { $n = 0L; if ([long]::TryParse($_, [ref]$n)) { $n } else { 0L } })
+            [ordered]@{ alloc = $f[1]; readOps = $f[3]; writeOps = $f[4]; readBytes = $f[5]; writeBytes = $f[6] }
+        }
+        $specs = [ordered]@{
+            "t-off" = @('compression=off'); "t-lz4" = @('compression=lz4', 'recordsize=1M'); "t-gzip-1" = @('compression=gzip-1', 'recordsize=8K', 'sync=always')
+            "t-gzip-9" = @('compression=gzip-9'); "t-zstd-1" = @('compression=zstd-1'); "t-zstd-19" = @('compression=zstd-19', 'recordsize=16K'); "t-zle" = @('compression=zle')
+        }
+        $datasets = @($specs.Keys | ForEach-Object { "$treePool/$_" })
+        foreach ($name in $specs.Keys) {
+            $props = @(); foreach ($p in $specs[$name]) { $props += @('-o', $p) }
+            Check $r "create-$name" (Zfswin (@('dataset', 'create', "$treePool/$name") + $props)).exit 0
+        }
+        $roots = @($datasets | ForEach-Object { TreeRoot $_ })
+        Check $r "mounted" (@($roots | Where-Object { $_ }).Count) $datasets.Count
+        if (@($roots | Where-Object { $_ }).Count -ne $datasets.Count) {
+            $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+            $r | ConvertTo-Json -Depth 6 -Compress
+            break
+        }
+        Initialize-Tree
+        $total = [ZfsTree]::Plan([string[]]$roots, $perDataset, 20, 1000)
+        $r.files = $total
+        $r.directories = ([ZfsTree]::ExpectedDirs | Measure-Object -Sum).Sum
+        function TreeSync { & $zpool sync $treePool 2>&1 | Out-Null }
+        function TreeRemount([string]$phase) {
+            Check $r "export-$phase" (Zfswin @('pool', 'export', $treePool)).exit 0
+            $w = [Diagnostics.Stopwatch]::StartNew()
+            Check $r "import-$phase" (Zfswin @('pool', 'import', $treePool, '--dir', $treeDir)).exit 0
+            $r["importSeconds-$phase"] = [math]::Round($w.Elapsed.TotalSeconds, 1)
+            $now = @($datasets | ForEach-Object { TreeRoot $_ })
+            Check $r "mounted-$phase" (@($now | Where-Object { $_ }).Count) $datasets.Count
+            if (@($now | Where-Object { $_ }).Count -eq $datasets.Count) { [ZfsTree]::Roots = [string[]]$now; return $true }
+            $false
+        }
+        function TreeVerify([string]$phase) {
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            $v = [ZfsTree]::Verify($threads)
+            $r["verify-$phase"] = [ordered]@{ seconds = [math]::Round($t.Elapsed.TotalSeconds, 1); checked = $v.Checked; filesPerSecond = [int]($v.Checked / [math]::Max($t.Elapsed.TotalSeconds, 0.001)); samples = $v.Samples }
+            Check $r "intact-$phase" "$($v.Missing)/$($v.Size)/$($v.Data)/$($v.Attr)/$($v.Time)/$($v.Errors)" "0/0/0/0/0/0"
+        }
+        function TreeCount([string]$phase) {
+            $c = [ZfsTree]::Count()
+            $files = [ZfsTree]::ManifestCounts()
+            $got = @(); $want = @()
+            for ($i = 0; $i -lt $datasets.Count; $i++) { $got += "$($c[$i * 2])/$($c[$i * 2 + 1])"; $want += "$($files[$i])/$([ZfsTree]::ExpectedDirs[$i])" }
+            Check $r "count-$phase" ($got -join ' ') ($want -join ' ')
+        }
+
+        # zpool iostat without an interval prints average rates since import,
+        # so the log device is sampled every 2 s while the tree is written.
+        $iostat = Start-Job -ArgumentList $zpool, $treePool { param($zp, $p) & $zp iostat -v -H -p $p 2 2>&1 | ForEach-Object { "$_" } }
+        # A job takes seconds to start: write only once it is sampling.
+        $wait = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $iostat.HasMoreData -and $wait.Elapsed.TotalSeconds -lt 30) { Start-Sleep -Milliseconds 250 }
+        $t = [Diagnostics.Stopwatch]::StartNew()
+        $errors = [ZfsTree]::Write($threads)
+        TreeSync
+        Start-Sleep -Seconds 5
+        Stop-Job $iostat
+        $logName = [regex]::Escape((Split-Path -Leaf $logDisk))
+        $samples = @(Receive-Job $iostat | Where-Object { $_ -match $logName } | Select-Object -Skip 1 | ForEach-Object {
+            $n = 0L; $f = @($_.Trim() -split "`t" | Where-Object { $_ -ne '' }); if ($f.Count -ge 5 -and [long]::TryParse($f[4], [ref]$n)) { $n } else { 0L } })
+        Remove-Job $iostat -Force
+        $r.write = [ordered]@{ seconds = [math]::Round($t.Elapsed.TotalSeconds, 1); filesPerSecond = [int]($total / [math]::Max($t.Elapsed.TotalSeconds, 0.001)); errors = @($errors) }
+        Check $r "write-errors" @($errors).Count 0
+        TreeVerify "written"
+        TreeCount "written"
+        # Write log: sync=always on t-gzip-1 sends its writes through the SLOG.
+        $r.slog = [ordered]@{ intervals = $samples.Count; maxWriteOpsPerSecond = ($samples | Measure-Object -Maximum).Maximum; sumWriteOpsPerSecond = ($samples | Measure-Object -Sum).Sum }
+        Check $r "slog-written" (@($samples | Where-Object { $_ -gt 0 }).Count -gt 0) $true
+
+        # A broken drive: one mirror disk offline while the tree changes.
+        $b = TreeDisk $diskB
+        & $zpool offline $treePool $b.guid 2>&1 | Out-Null
+        Check $r "offline-degraded" (TreeStatus).state "DEGRADED"
+        $t.Restart()
+        $errors = [ZfsTree]::Mutate($threads)
+        TreeSync
+        $r.mutate = [ordered]@{ seconds = [math]::Round($t.Elapsed.TotalSeconds, 1); errors = @($errors) }
+        Check $r "mutate-errors" @($errors).Count 0
+        TreeVerify "mutated-degraded"
+        TreeCount "mutated-degraded"
+        $since = UnixNow
+        & $zpool online $treePool $b.guid 2>&1 | Out-Null
+        $scan = TreeWait 'RESILVER' $since
+        Check $r "online-resilvered" "$($scan.function)/$($scan.state)/$($scan.errors)" "RESILVER/FINISHED/0"
+        Check $r "online-state" (TreeStatus).state "ONLINE"
+        TreeVerify "resilvered"
+
+        # Silent corruption: random blocks of disk B overwritten while the pool
+        # is exported (not the labels at either end); reads and a scrub must
+        # repair them from disk A.
+        Check $r "export-corrupt" (Zfswin @('pool', 'export', $treePool)).exit 0
+        $rng = [Random]::new(1907)
+        $junk = [byte[]]::new(64KB)
+        $fs = [IO.FileStream]::new($diskB, 'Open', 'ReadWrite', 'None')
+        for ($i = 0; $i -lt 256; $i++) {
+            $rng.NextBytes($junk)
+            $fs.Position = 8MB + [long]$i * 2MB + $rng.Next(0, 1MB)
+            $fs.Write($junk, 0, $junk.Length)
+        }
+        $fs.Flush($true); $fs.Dispose()
+        $r.corrupted = "256 x 64 KiB of $(Split-Path -Leaf $diskB) between 8 MiB and 520 MiB"
+        Check $r "import-corrupt" (Zfswin @('pool', 'import', $treePool, '--dir', $treeDir)).exit 0
+        $roots = @($datasets | ForEach-Object { TreeRoot $_ })
+        if (@($roots | Where-Object { $_ }).Count -eq $datasets.Count) { [ZfsTree]::Roots = [string[]]$roots }
+        TreeVerify "corrupt-disk"
+        $since = UnixNow
+        & $zpool scrub $treePool 2>&1 | Out-Null
+        $scan = TreeWait 'SCRUB' $since
+        $bAfter = TreeDisk $diskB
+        $r.scrubRepair = [ordered]@{ repairedBytes = $scan.processed; errors = $scan.errors; diskBChecksumErrors = $bAfter.checksum_errors }
+        Check $r "scrub-repairs" "$($scan.function)/$($scan.state)/$($scan.errors)" "SCRUB/FINISHED/0"
+        Check $r "corruption-detected" ([long]$scan.processed -gt 0 -or [long]$bAfter.checksum_errors -gt 0) $true
+        & $zpool clear $treePool 2>&1 | Out-Null
+        TreeVerify "repaired"
+
+        # A failed drive replaced: disk B out, a new disk C in, resilvered.
+        & fsutil.exe file createnew $diskC (1GB) | Out-Null
+        $since = UnixNow
+        Check $r "replace" (Zfswin @('vdev', 'replace', $treePool, $diskB, $diskC, '--yes')).exit 0
+        $scan = TreeWait 'RESILVER' $since
+        Check $r "replace-resilvered" "$($scan.function)/$($scan.state)/$($scan.errors)" "RESILVER/FINISHED/0"
+        $members = @(TreeLeaves (TreeStatus).vdevs.$treePool | ForEach-Object { Split-Path -Leaf ($_.path -replace '/', '\') }) | Sort-Object
+        Check $r "replace-members" ($members -join ',') ((@('tree.img', 'tree-c.img') | Sort-Object) -join ',')
+        TreeVerify "replaced"
+
+        # A clean scrub of the whole pool.
+        $since = UnixNow
+        & $zpool scrub $treePool 2>&1 | Out-Null
+        $scan = TreeWait 'SCRUB' $since
+        $cksum = (@(TreeLeaves (TreeStatus).vdevs.$treePool | ForEach-Object { [long]$_.checksum_errors }) | Measure-Object -Sum).Sum
+        Check $r "scrub-clean" "$($scan.function)/$($scan.state)/$($scan.errors)/$($scan.processed)/$cksum" "SCRUB/FINISHED/0/0/0"
+
+        # Export and import: the datasets mount again (all of them at once);
+        # the read cache refills from the reads.
+        if (TreeRemount "reimport") {
+            TreeVerify "reimported"
+            TreeCount "reimported"
+        }
+        $cache = TreeIostat $cacheDisk
+        $r.l2arc = $cache
+        Check $r "l2arc-in-use" ($cache -and $cache.alloc -gt 0) $true
+
+        # Back to one disk for the other platforms: no cache, no log, no mirror.
+        Check $r "remove-cache" (Zfswin @('vdev', 'remove', $treePool, $cacheDisk, '--yes')).exit 0
+        Check $r "remove-log" (Zfswin @('vdev', 'remove', $treePool, $logDisk, '--yes')).exit 0
+        Check $r "detach" (Zfswin @('vdev', 'detach', $treePool, $diskC, '--yes')).exit 0
+        $st = TreeStatus
+        $members = @(TreeLeaves $st.vdevs.$treePool | ForEach-Object { Split-Path -Leaf ($_.path -replace '/', '\') })
+        Check $r "single-disk" "$($members -join ',')/$(@(TreeLeaves $st.logs).Count)/$(@(TreeLeaves $st.l2cache).Count)" "tree.img/0/0"
+        TreeVerify "single-disk"
+        $ratios = [ordered]@{}
+        foreach ($ds in $datasets) {
+            $ratio = [double](("$(((Zfswin @('dataset', 'get', $ds, 'compressratio')).result.properties | Where-Object name -eq compressratio).value)") -replace '[^0-9.]', '')
+            $ratios[$ds] = $ratio
+            $ok = if ($ds -like '*/t-off') { $ratio -le 1.01 } else { $ratio -gt 1.0 }
+            Check $r "compresses-$ds" $ok $true
+        }
+        $r.ratios = $ratios
+        [ZfsTree]::SaveManifest("$treeDir\tree-manifest.tsv", [string[]]$datasets)
+        Check $r "export-final" (Zfswin @('pool', 'export', $treePool)).exit 0
+        # Only tree.img holds the pool now.
+        foreach ($d in $diskB, $diskC, $logDisk, $cacheDisk) { Remove-Item -LiteralPath $d -Force -ErrorAction SilentlyContinue }
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # Another machine's tree pool (tree.img and tree-manifest.tsv in Dir, a
+    # copy): every file, its size, data, attributes and time.  Imported
+    # read-write: a read-only import left the child datasets unreachable in
+    # the kernel edition and the pool unexportable in user mode (plan 19).
+    "treeverify" {
+        $r = [ordered]@{}
+        $dir = $decoded.Dir
+        $treePool = "ztree"
+        $threads = [Environment]::ProcessorCount
+        if ((Zfswin @('pool', 'list')).result.pools | Where-Object name -eq $treePool) { Zfswin @('pool', 'export', $treePool) | Out-Null }
+        $t = [Diagnostics.Stopwatch]::StartNew()
+        Check $r "import" (Zfswin @('pool', 'import', $treePool, '--dir', $dir)).exit 0
+        $r.importSeconds = [math]::Round($t.Elapsed.TotalSeconds, 1)
+        Initialize-Tree
+        $names = [ZfsTree]::LoadManifest("$dir\tree-manifest.tsv", [string[]]@())
+        $roots = @($names | ForEach-Object { TreeRoot $_ })
+        Check $r "mounted" (@($roots | Where-Object { $_ }).Count) $names.Count
+        if (@($roots | Where-Object { $_ }).Count -eq $names.Count) {
+            [ZfsTree]::Roots = [string[]]$roots
+            $t.Restart()
+            $v = [ZfsTree]::Verify($threads)
+            $r.verify = [ordered]@{ seconds = [math]::Round($t.Elapsed.TotalSeconds, 1); checked = $v.Checked; samples = $v.Samples }
+            Check $r "intact" "$($v.Missing)/$($v.Size)/$($v.Data)/$($v.Attr)/$($v.Time)/$($v.Errors)" "0/0/0/0/0/0"
+            $c = [ZfsTree]::Count()
+            $files = [ZfsTree]::ManifestCounts()
+            $got = @(); $want = @()
+            for ($i = 0; $i -lt $names.Count; $i++) { $got += "$($c[$i * 2])/$($c[$i * 2 + 1])"; $want += "$($files[$i])/$([ZfsTree]::ExpectedDirs[$i])" }
+            Check $r "count" ($got -join ' ') ($want -join ' ')
+        }
+        $r.files = [ZfsTree]::Files.Count
+        # Right after reading every file, a scanner may still hold one open
+        # ("busy", exit 9); try again a few times and say how often.
+        for ($attempt = 1; $attempt -le 4; $attempt++) {
+            $exportExit = (Zfswin @('pool', 'export', $treePool)).exit
+            if ($exportExit -ne 9) { break }
+            Start-Sleep -Seconds 10
+        }
+        $r.exportAttempts = $attempt
+        Check $r "export" $exportExit 0
         $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
         $r | ConvertTo-Json -Depth 6 -Compress
     }
