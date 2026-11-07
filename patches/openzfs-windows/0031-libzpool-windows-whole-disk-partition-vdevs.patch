@@ -1,0 +1,69 @@
+diff --git a/include/sys/zfs_file.h b/include/sys/zfs_file.h
+index 9853245..1e82627 100644
+--- a/include/sys/zfs_file.h
++++ b/include/sys/zfs_file.h
+@@ -41,6 +41,8 @@ typedef struct zfs_file {
+ 	int f_fd;
+ 	int f_dump_fd;
+ #ifdef _WIN32
++	/* "#offset#length#device": partition length, 0 for a file or device */
++	loff_t f_win_length;
+ 	loff_t f_win_offset;
+ #endif
+ } zfs_file_t;
+diff --git a/lib/libzpool/kernel.c b/lib/libzpool/kernel.c
+index 4c1dc77..f00763b 100644
+--- a/lib/libzpool/kernel.c
++++ b/lib/libzpool/kernel.c
+@@ -590,9 +590,22 @@ zfs_file_open(const char *path, int flags, int mode, zfs_file_t **fpp)
+ 	*fpp = fp;
+ 
+ #ifdef _WIN32
+-	/* If filename contained offset, read it in now. */
++	/*
++	 * "#offset#length#device" is the ZFS partition zpool made on a whole
++	 * disk (zpool_vdev_os.c).  wosix_open() opened the device; I/O is
++	 * relative to the partition, and the vdev ends where the partition
++	 * does, not at the end of the disk, which holds the backup GPT.
++	 */
+ 	fp->f_win_offset = 0;
+-	zfs_file_seek(fp, &fp->f_win_offset, SEEK_CUR);
++	fp->f_win_length = 0;
++	if (path[0] == '#') {
++		char *end = NULL;
++
++		fp->f_win_offset = strtoull(&path[1], &end, 10);
++		while (end != NULL && *end == '#')
++			end++;
++		fp->f_win_length = strtoull(end, NULL, 10);
++	}
+ #endif
+ 
+ 	return (0);
+@@ -839,6 +852,11 @@ zfs_file_getattr(zfs_file_t *fp, zfs_file_attr_t *zfattr)
+ 
+ 	zfattr->zfa_size = st.st_size;
+ 	zfattr->zfa_mode = st.st_mode;
++#ifdef _WIN32
++	/* A partition of a disk: its length, not the disk's. */
++	if (fp->f_win_length > 0)
++		zfattr->zfa_size = fp->f_win_length;
++#endif
+ 
+ 	return (0);
+ }
+diff --git a/module/zfs/vdev_file.c b/module/zfs/vdev_file.c
+index ceed9df..ea2a3af 100644
+--- a/module/zfs/vdev_file.c
++++ b/module/zfs/vdev_file.c
+@@ -126,8 +126,9 @@ vdev_file_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
+ 	 * We must have a pathname, and it must be absolute.
+ 	 */
+ #ifdef _WIN32
++	/* '#': "#offset#length#device", a ZFS partition of a whole disk. */
+ 	if (vd->vdev_path == NULL || (vd->vdev_path[0] != '/' &&
+-	    vd->vdev_path[0] != '\\')) {
++	    vd->vdev_path[0] != '\\' && vd->vdev_path[0] != '#')) {
+ #else
+ 	if (vd->vdev_path == NULL || vd->vdev_path[0] != '/') {
+ #endif

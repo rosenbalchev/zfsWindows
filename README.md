@@ -12,9 +12,12 @@ nested submodules are not needed.
 
 ## Download and install (1.0)
 
-> **Latest stable: 1.0.15** (2026-11-07), in
+> **Latest: 1.0.16** (2026-11-07), in
 > [`downloads/1.0/release/`](downloads/1.0/release/), with its Debug build in
 > [`downloads/1.0/debug/`](downloads/1.0/debug/).
+> - 1.0.16 is 1.0.15 plus patch 0031: the user-mode edition can create pools
+>   on whole physical disks (issue #1). That fix was checked on x64 and
+>   ARM64; the full VM suites below ran on 1.0.15.
 > - Both builds passed the VM suites on **x64 and ARM64**, kernel and user
 >   mode. On x64 that includes install, upgrade, repair and uninstall.
 > - Pools written on each platform and edition were read back correctly on
