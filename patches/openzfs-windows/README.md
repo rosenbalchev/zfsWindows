@@ -578,5 +578,10 @@ Checked on a fresh 8 GiB VHDX in the x64 VM, user mode:
 - the scrub is clean;
 - both GPT partitions are intact afterwards.
 
+The same on ARM64, in user mode in the ARM64 VM: the shipped 1.0.15 engine
+failed with the issue's I/O error, the fixed one created the pool
+(7.50 GiB), 40 files survived export and import, the scrub was clean, and
+both GPT partitions were intact.
+
 The kernel edition had no problem (same test: created, exported,
 imported).
