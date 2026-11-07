@@ -549,3 +549,34 @@ The fix has two parts:
   could still be unwritten. The driver log showed this as "IoCallDriver
   failed: 0xeaa30690". The status now comes from `IoCallDriver()` unless
   the request pended, as Microsoft documents.
+## 0031 — libzpool: whole-disk vdevs (the ZFS partition of a disk) on Windows
+
+`zpool create <pool> \\?\PhysicalDriveN` labels the disk with GPT (a ZFS
+partition from 1 MiB, a small reserved partition at the end). It then names
+the vdev `#<offset>#<length>#\\?\PhysicalDriveN`. The kernel driver opens
+that form in `vdev_disk.c`. The user-mode engine is libzpool, where disk
+vdevs use `vdev_file.c`, and there it failed (GitHub issue #1):
+
+- **The path was rejected:** `vdev_file_open()` accepted only paths starting
+  with `/` or `\` on Windows. `zpool create` ended in "cannot create
+  '<pool>': I/O error" after writing the label.
+- **The size was the whole disk's:** `zfs_file_getattr()` returned the size
+  of the disk, not of the partition. Only the start offset was honoured
+  (read back from the file pointer `wosix_open()` had moved), so ZFS would
+  have used the space up to the end of the disk, which holds the reserved
+  partition and the backup GPT.
+
+The fix has two parts:
+- `vdev_file_open()` accepts `#` paths on Windows.
+- `zfs_file_open()` takes the offset and length from the path into
+  `f_win_offset` and the new `f_win_length`. `zfs_file_getattr()` reports
+  the partition length.
+
+Checked on a fresh 8 GiB VHDX in the x64 VM, user mode:
+- the issue's command creates the pool, 7.50 GiB, as the kernel edition does;
+- 40 files survive export and import;
+- the scrub is clean;
+- both GPT partitions are intact afterwards.
+
+The kernel edition had no problem (same test: created, exported,
+imported).
