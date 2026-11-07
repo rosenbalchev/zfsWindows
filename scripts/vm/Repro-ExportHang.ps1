@@ -59,6 +59,14 @@ $install = Invoke-Command $s {
         & certutil.exe -f -addstore $store C:\zfswin\installer\zfswindows-test.cer | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "certutil -addstore $store failed ($LASTEXITCODE)" }
     }
+    # Full user-mode dumps of the tools (the Release zpool.exe crashes
+    # intermittently, plan step 19).
+    foreach ($tool in "zpool.exe", "zfs.exe", "zfswin.exe", "ZfsWinBroker.exe") {
+        $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$tool"
+        New-Item -Force $key | Out-Null
+        New-ItemProperty -Force $key -Name DumpFolder -PropertyType ExpandString -Value C:\zfswin\dumps | Out-Null
+        New-ItemProperty -Force $key -Name DumpType -PropertyType DWord -Value 2 | Out-Null
+    }
     $p = Start-Process C:\zfswin\installer\dotnet-desktop-runtime.exe -ArgumentList "/install", "/quiet", "/norestart" -Wait -PassThru
     $m = Start-Process msiexec.exe -ArgumentList "/i", "C:\zfswin\installer\zfswin.msi", "/qn", "/norestart", "/l*v", "C:\zfswin\installer\repro-install.log" -Wait -PassThru
     [ordered]@{ runtime = $p.ExitCode; msi = $m.ExitCode }
@@ -75,15 +83,22 @@ $result = Invoke-Command $s {
         $j = Start-Job -ArgumentList "$bin\$exe", (, $a) { param($exe, $a) & $exe @a 2>&1 | ForEach-Object { "$_" }; "exit $LASTEXITCODE" }
         $done = Wait-Job $j -Timeout $timeout
         $out = if ($done) { (Receive-Job $j | Where-Object { $_ -notmatch 'Assuming 512|RemoteException' }) -join ' | ' } else { "" }
-        [ordered]@{ seconds = [math]::Round($w.Elapsed.TotalSeconds, 1); hung = -not $done; out = $out.Substring(0, [Math]::Min(200, $out.Length)) }
+        # NTSTATUS exit codes (0xC...) are negative: the process crashed.
+        $crashed = $out -match 'exit -\d{9,}'
+        if ($crashed) { $script:crashes += "$exe $($a -join ' '): $(($out -split ' \| ')[-1])" }
+        [ordered]@{ seconds = [math]::Round($w.Elapsed.TotalSeconds, 1); hung = -not $done; crashed = $crashed; out = $out.Substring(0, [Math]::Min(200, $out.Length)) }
     }
+    $script:crashes = @()
     Start-Sleep -Seconds 30	# let the driver and broker settle after boot
     $dir = "C:\zfswin\repro"
     New-Item -ItemType Directory -Force $dir | Out-Null
     foreach ($n in "a", "b") { if (-not (Test-Path "$dir\$n.img")) { fsutil file createnew "$dir\$n.img" 1073741824 | Out-Null } }
     # The kernel driver takes image files as \\?\ paths.
     $create = Run zpool.exe @("create", "-f", "zrep", "mirror", "\\?\$dir\a.img", "\\?\$dir\b.img") 180
-    if ($create.out -notmatch 'exit 0') { return [ordered]@{ create = $create } }
+    if ($create.out -notmatch 'exit 0') {
+        $dumps = @(Get-ChildItem C:\zfswin\dumps -Filter *.dmp -ErrorAction SilentlyContinue | ForEach-Object FullName)
+        return [ordered]@{ create = $create; crashes = $script:crashes; userDumps = $dumps }
+    }
     $docs = Run zfs.exe @("create", "zrep/docs") 60
     $fs = Run zfs.exe @("create", "zrep/fs") 60
     $first = Run zpool.exe @("export", "zrep") $hangSeconds
@@ -111,10 +126,19 @@ $result = Invoke-Command $s {
             break
         }
     }
-    [ordered]@{ create = $create; docs = $docs; fs = $fs; firstExport = $first; rounds = $rounds }
+    $dumps = @(Get-ChildItem C:\zfswin\dumps -Filter *.dmp -ErrorAction SilentlyContinue | ForEach-Object FullName)
+    [ordered]@{ create = $create; docs = $docs; fs = $fs; firstExport = $first; rounds = $rounds; crashes = $script:crashes; userDumps = $dumps }
 } -ArgumentList $Iterations, $HangSeconds
+if (@($result.userDumps).Count -gt 0) {
+    # User-mode crash dumps are small; bring them out for analysis on the host.
+    $out = Join-Path $repo ("out\vm-dumps\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    New-Item -ItemType Directory -Force $out | Out-Null
+    foreach ($d in $result.userDumps) { Copy-Item -FromSession $s -Path $d -Destination $out }
+    "user-mode dumps copied to $out"
+}
 Remove-PSSession $s
 foreach ($r in $result.rounds) {
     "round {0,2}: import {1,5} s, wrote {2,2} files, export {3,6} s{4}" -f $r.round, $r.import, $r.written, $r.export, $(if ($r.hung) { "  HUNG, dump: $($r.dump -join ', ')" })
 }
+foreach ($c in $result.crashes) { "CRASH: $c" }
 [ordered]@{ configuration = $Configuration; version = $version; install = $install; result = $result } | ConvertTo-Json -Depth 6 -Compress

@@ -130,8 +130,9 @@ Patches 0020–0023 make upstream's build cross-compile from x64:
 - the ARM64 exception-context registers are used.
 
 The ARM64 packages are checked statically: machine type and signature of
-every binary, and the MSI contents. This project has no ARM64 test machine,
-so they are not installed or run anywhere yet.
+every binary, and the MSI contents. They are also run in a Windows 11
+ARM64 Hyper-V VM on a separate ARM PC (`scripts\vm\arm\`, results in plan
+step 19).
 
 ## Building the parts
 
