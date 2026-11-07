@@ -77,7 +77,7 @@ and use the same administration tools. A pool moves freely between them,
 with its Windows ACLs and alternate data streams, and to Linux, FreeBSD or
 macOS. They differ in how Windows reaches the file system.
 
-✅ tested in this project's VM runs (release 1.0.7) or Linux validation ·
+✅ tested in this project's VM runs (release 1.0.7 Debug; 1.0.12 Release, same results) or Linux validation ·
 ☑️ implemented, not yet tested here, or only partly works (see note) ·
 ❌ not available
 
@@ -229,7 +229,7 @@ has.
 
 ## Current status
 
-Steps 00–14 of the plan are complete: the read-only milestones, disposable-pool writes, failure recovery, the kernel driver in an isolated VM, read and write caching through the driver (including power-loss durability), and the administration tools and kernel-driver installer. Step 15, the user-mode WinFsp variant and its installer, works end to end; its remaining items are listed in the step file. Step 18 (complete, release 1.0.7) brings the user-mode edition to the kernel edition's features and tools: Windows ACLs (enforced), alternate data streams, `.zfs\snapshot`, block cloning, and full pool and dataset administration through a bridge to upstream `zfs_ioctl.c`. The repository now contains:
+Steps 00–14 of the plan are complete: the read-only milestones, disposable-pool writes, failure recovery, the kernel driver in an isolated VM, read and write caching through the driver (including power-loss durability), and the administration tools and kernel-driver installer. Step 15, the user-mode WinFsp variant and its installer, works end to end; its remaining items are listed in the step file. Step 18 (complete, release 1.0.7) brings the user-mode edition to the kernel edition's features and tools: Windows ACLs (enforced), alternate data streams, `.zfs\snapshot`, block cloning, and full pool and dataset administration through a bridge to upstream `zfs_ioctl.c`. Step 19 runs the same suites on the optimized Release builds: it found and fixed four Release-only defects (patches 0026–0029), and 1.0.12 is the first Release build verified end to end on x64. The repository now contains:
 
 - a Visual Studio/MSBuild-friendly native CMake project;
 - a read-only file-backed block-device abstraction;

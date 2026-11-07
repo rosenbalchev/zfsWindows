@@ -531,3 +531,20 @@ A separate agent ran these tests, driven over SSH by the helper scripts in
 
 Both crashes are intermittent, in the Release userland, and still to be
 investigated.
+
+**Crash hunt with 1.0.12 Release (2026-11-07, zfsTest at 8 CPUs).**
+`Repro-ExportHang.ps1` now:
+- sets WER LocalDumps (full dumps) for `zpool`, `zfs`, `zfswin` and
+  `ZfsWinBroker`;
+- flags NTSTATUS exit codes as crashes;
+- copies any dumps to `out\vm-dumps\<time>`.
+
+A run of 40 rounds (`-Iterations 40`) did `zpool create`, 2 × `zfs create`
+and 41 imports and exports:
+- no crash, no dump, no hang;
+- imports took 2.3–5.3 s, exports 2.0–15.5 s.
+
+The crash did not reproduce in that many runs, so it is still open. The
+next chance of a dump is the ARM64 rerun, which keeps the same LocalDumps
+settings. The loop still writes 0 files per round, so it exercises only
+import, mount, unmount and export.
