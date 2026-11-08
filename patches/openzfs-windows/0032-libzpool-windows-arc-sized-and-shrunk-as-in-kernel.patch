@@ -1,0 +1,123 @@
+diff --git a/lib/libspl/include/os/windows/unistd.h b/lib/libspl/include/os/windows/unistd.h
+index 884d40655..57a42d421 100644
+--- a/lib/libspl/include/os/windows/unistd.h
++++ b/lib/libspl/include/os/windows/unistd.h
+@@ -53,6 +53,7 @@ extern char	*optarg;
+ #define	_SC_PAGE_SIZE		_SC_PAGESIZE
+ #define	_SC_NPROCESSORS_ONLN	15
+ #define	_SC_PHYS_PAGES		500
++#define	_SC_AVPHYS_PAGES	501
+ 
+ #define	X_OK	1
+ 
+diff --git a/lib/libspl/os/windows/posix.c b/lib/libspl/os/windows/posix.c
+index 8ac223e74..efb87b37f 100644
+--- a/lib/libspl/os/windows/posix.c
++++ b/lib/libspl/os/windows/posix.c
+@@ -2136,12 +2136,16 @@ sysconf(int name)
+ 	case _SC_NPROCESSORS_ONLN:
+ 		return (GetLogicalProcessors());
+ 	case _SC_PHYS_PAGES:
++	case _SC_AVPHYS_PAGES:
+ 	case _SC_PAGE_SIZE:
+ 		GetSystemInfo(&info);
+ 		if (name == _SC_PAGE_SIZE)
+ 			return (info.dwPageSize);
+ 		status.dwLength = sizeof (status);
+ 		GlobalMemoryStatusEx(&status);
++		/* Available: free, zeroed and standby (cache) pages. */
++		if (name == _SC_AVPHYS_PAGES)
++			return (status.ullAvailPhys / info.dwPageSize);
+ 		return ((long)(status.ullTotalPhys / info.dwPageSize));
+ 	default:
+ 		return (-1);
+diff --git a/lib/libzpool/arc_os.c b/lib/libzpool/arc_os.c
+index 6ad1a2bcd..98279f251 100644
+--- a/lib/libzpool/arc_os.c
++++ b/lib/libzpool/arc_os.c
+@@ -30,6 +30,59 @@
+ #include <sys/zfs_context.h>
+ #include <sys/arc_impl.h>
+ 
++#ifdef _WIN32
++/*
++ * On Windows libzpool is also the engine of zfswin-um.exe, the user-mode
++ * edition: a service that runs as long as the machine does, not a test.
++ * The test values below let the ARC grow to half the memory and never
++ * shrink it (GitHub issue #3).  A quarter of the memory at most, so the
++ * whole process (the ARC, and the dbufs, dnodes and heap around it) stays
++ * within the third the kernel driver allows, and memory given back when
++ * Windows has less than arc_sys_free available (arc_init()).
++ */
++uint64_t
++arc_default_max(uint64_t min, uint64_t allmem)
++{
++	return (MAX(allmem / 4, min));
++}
++
++uint64_t
++arc_all_memory(void)
++{
++	return (ptob(physmem));
++}
++
++/*
++ * Available memory (free and standby pages).  arc_adapt() asks for every
++ * buffer it adds, so the system call is made at most every 10 ms.
++ */
++uint64_t
++arc_free_memory(void)
++{
++	static volatile uint64_t avail, when;
++	hrtime_t now = gethrtime();
++
++	if (when == 0 || now - when > MSEC2NSEC(10)) {
++		avail = ptob((uint64_t)sysconf(_SC_AVPHYS_PAGES));
++		when = now;
++	}
++	return (avail);
++}
++
++int64_t
++arc_available_memory(void)
++{
++	return ((int64_t)arc_free_memory() - (int64_t)arc_sys_free);
++}
++
++int
++arc_memory_throttle(spa_t *spa, uint64_t reserve, uint64_t txg)
++{
++	(void) spa, (void) reserve, (void) txg;
++	return (0);
++}
++#else
++
+ /*
+  * Return a default max arc size based on the amount of physical memory.
+  * This may be overridden by tuning the zfs_arc_max module parameter.
+@@ -76,6 +129,7 @@ arc_free_memory(void)
+ {
+ 	return (random_in_range(arc_all_memory() * 20 / 100));
+ }
++#endif /* _WIN32 */
+ 
+ void
+ arc_register_hotplug(void)
+diff --git a/module/zfs/arc.c b/module/zfs/arc.c
+index f9206cdfa..041441ecd 100644
+--- a/module/zfs/arc.c
++++ b/module/zfs/arc.c
+@@ -8047,6 +8047,13 @@ arc_init(void)
+ 			    2ULL << SPA_MAXBLOCKSHIFT);
+ 		}
+ 	}
++#elif defined(_WIN32)
++	/*
++	 * zfswin-um.exe (lib/libzpool/arc_os.c): real memory pressure, so the
++	 * kernel's minimum of 1/32 of the memory, and the ARC shrinks while
++	 * Windows has less than 1/16 of it available.
++	 */
++	arc_sys_free = allmem / 16;
+ #else
+ 	/*
+ 	 * In userland, there's only the memory pressure that we artificially
