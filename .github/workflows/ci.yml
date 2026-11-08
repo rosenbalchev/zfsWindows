@@ -49,6 +49,11 @@ jobs:
           submodules: recursive
           clean: true
 
+      # checkout cleans only the top repository; the previous run's applied
+      # patches (and the files they add) stay in the submodules.
+      - name: Clean submodules
+        run: git submodule foreach --recursive "git reset -q --hard; git clean -qffdx"
+
       - name: WinFsp SDK
         run: scripts\fetch-winfsp.ps1
 
