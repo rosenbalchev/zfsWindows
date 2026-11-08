@@ -13,5 +13,6 @@ arm64/kernel: crosscheck: ARM64 user-mode pool read by the kernel driver snapsho
 # Intermittent .zfs snapshot read right after creation (kernel, Debug).
 arm64/kernel: cli snapshot-s1-content
 
-# User mode: no write log or read cache device use seen in the tree stage.
-*/usermode: tree ((slog-written|l2arc-in-use|remove-cache)(, )?)+
+# User mode: no write log or read cache device use seen in the tree stage
+# (x64 reports it as "tree: <n> files in deep directories, all CPUs ...").
+*/usermode: tree(: \d+ files in deep directories, all CPUs)? ((slog-written|l2arc-in-use|remove-cache)(, )?)+
