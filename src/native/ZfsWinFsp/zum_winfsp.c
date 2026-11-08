@@ -1491,14 +1491,20 @@ unmount_all(void)
     ReleaseSRWLockExclusive(&table_lock);
 }
 
-/* Service start: the recorded pools, then every configured mount. */
-static void
-restore_configured(void)
+static void bridge_pool_imported(const char *pool, const char *sources);
+
+/*
+ * Service start: the recorded pools, then every configured mount.  Returns
+ * how many could not be imported or mounted; quiet: no event log entries.
+ */
+static int
+restore_configured(BOOLEAN quiet)
 {
     WCHAR name[256], source[2048], pool[256], dataset[256], mp[MAX_PATH];
     HKEY root, key;
     DWORD i, chars, readonly, size;
     char *upool, *uds, *usrc;
+    int failed = 0;
 
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, POOLS_KEY, 0, KEY_READ, &root) ==
         ERROR_SUCCESS) {
@@ -1510,10 +1516,20 @@ restore_configured(void)
             upool = utf8_of(name);
             usrc = utf8_of(source);
             error = upool && usrc ? zum_pool_import(upool, usrc) : ENOMEM;
-            if (error != 0)
-                FspServiceLog(EVENTLOG_ERROR_TYPE,
-                    L"cannot import pool %s from %s: error %d", name,
-                    source, error);
+            if (error != 0) {
+                failed++;
+                if (!quiet)
+                    FspServiceLog(EVENTLOG_ERROR_TYPE,
+                        L"cannot import pool %s from %s: error %d", name,
+                        source, error);
+            } else {
+                /* Found elsewhere (disks renumbered): record where. */
+                char now[4096];
+
+                zum_pool_sources(upool, now, sizeof (now));
+                if (now[0] != '\0' && strcmp(now, usrc) != 0)
+                    bridge_pool_imported(upool, now);
+            }
             free(upool);
             free(usrc);
         }
@@ -1522,7 +1538,7 @@ restore_configured(void)
 
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, MOUNTS_KEY, 0, KEY_READ, &root) !=
         ERROR_SUCCESS)
-        return;			/* nothing configured */
+        return (failed);	/* nothing configured */
     AcquireSRWLockExclusive(&table_lock);
     for (i = 0; chars = ARRAYSIZE(name), RegEnumKeyExW(root, i, name,
         &chars, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; i++) {
@@ -1538,15 +1554,19 @@ restore_configured(void)
             if (!read_value(key, L"Source", source, ARRAYSIZE(source)) ||
                 source[0] == L'\0')
                 pool_sources(pool, source, ARRAYSIZE(source));
+            int error = ENOMEM;
+
             upool = utf8_of(pool);
             uds = utf8_of(dataset);
             if (upool != NULL && uds != NULL)
-                (void) mount_one(source, upool, uds,
+                error = mount_one(source, upool, uds,
                     wcscmp(mp, L"?:") == 0 ? NULL : mp, readonly != 0,
-                    FALSE);
+                    quiet);
+            if (error != 0 && error != EBUSY)	/* EBUSY: mounted */
+                failed++;
             free(upool);
             free(uds);
-        } else {
+        } else if (!quiet) {
             FspServiceLog(EVENTLOG_ERROR_TYPE,
                 L"mount %s: Pool, Dataset and MountPoint are required",
                 name);
@@ -1555,6 +1575,36 @@ restore_configured(void)
     }
     ReleaseSRWLockExclusive(&table_lock);
     RegCloseKey(root);
+    return (failed);
+}
+
+/*
+ * At boot the service can start before the disks of a recorded pool are
+ * there (and their drivers ready): what failed at start is tried again
+ * every 5 s for 3 minutes, then once more with errors in the event log.
+ */
+#define RESTORE_RETRY_MS	5000
+#define RESTORE_RETRY_TRIES	36
+static HANDLE restore_stop, restore_thread;
+
+static DWORD WINAPI
+restore_retry(LPVOID unused)
+{
+    int tries;
+
+    (void) unused;
+    for (tries = 1; WaitForSingleObject(restore_stop, RESTORE_RETRY_MS) ==
+        WAIT_TIMEOUT; tries++) {
+        if (restore_configured(tries < RESTORE_RETRY_TRIES) == 0) {
+            FspServiceLog(EVENTLOG_INFORMATION_TYPE,
+                L"recorded pools and mounts restored after %d s",
+                tries * RESTORE_RETRY_MS / 1000);
+            break;
+        }
+        if (tries >= RESTORE_RETRY_TRIES)
+            break;
+    }
+    return (0);
 }
 
 /* ---- bridge callbacks (zum_bridge_ops_t) ----------------------------------- */
@@ -2015,7 +2065,12 @@ SvcStart(FSP_SERVICE *service, ULONG argc, PWSTR *argv)
         free(dataset);
         return (error == 0 ? STATUS_SUCCESS : status_of(error));
     }
-    restore_configured();
+    if (restore_configured(TRUE) != 0) {
+        restore_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if (restore_stop != NULL)
+            restore_thread = CreateThread(NULL, 0, restore_retry, NULL, 0,
+                NULL);
+    }
     return (STATUS_SUCCESS);
 }
 
@@ -2031,6 +2086,13 @@ SvcStop(FSP_SERVICE *service)
      * the step-18 VM run, event 7011).
      */
     FspServiceRequestTime(service, 180000);
+    if (restore_thread != NULL) {
+        SetEvent(restore_stop);
+        WaitForSingleObject(restore_thread, INFINITE);
+        CloseHandle(restore_thread);
+        CloseHandle(restore_stop);
+        restore_thread = restore_stop = NULL;
+    }
     bridge_stop();
     t1 = GetTickCount64();
     unmount_all();

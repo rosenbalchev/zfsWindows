@@ -1,0 +1,125 @@
+# Build and VM test suites on self-hosted runners (docs/ci-runners.md).
+# GitHub-hosted runners have neither the WDK and test-signing certificate
+# nor Hyper-V for the test VMs, so every job runs on one of our machines:
+#   label zfswin-x64:   builds both architectures, runs the x64 VM suites
+#   label zfswin-arm64: runs the ARM64 VM suites on the ARM PC
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Configuration of the packages under test
+        type: choice
+        options: [Release, Debug]
+        default: Release
+      tests:
+        description: Run the VM suites after the build
+        type: boolean
+        default: true
+
+# One run per branch at a time; a newer push cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CONFIGURATION: ${{ inputs.configuration || 'Release' }}
+
+jobs:
+  # Both architectures, Release and Debug, with the driver; the packages as
+  # an artifact.  out\ stays in this runner's workspace for test-x64.
+  build:
+    runs-on: [self-hosted, Windows, X64, zfswin-x64]
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: powershell
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          clean: true
+
+      - name: WinFsp SDK
+        run: scripts\fetch-winfsp.ps1
+
+      - name: Build
+        run: scripts\build-release.ps1 -NoIncrement -BuildDriver
+
+      - name: Version
+        id: version
+        run: '"version=$(& scripts\Get-ZfsWinVersion.ps1)" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT'
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: zfswin-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            out/release/${{ steps.version.outputs.version }}/*.msi
+            out/driver-package/zfswindows-test.cer
+            downloads/*/release/SHA256SUMS
+            downloads/*/release/VERSION.json
+          if-no-files-found: error
+
+  # The x64 suites in the zfsTest VM, on the build's out\ (same runner and
+  # workspace, so this checkout must not clean).
+  test-x64:
+    needs: build
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tests }}
+    runs-on: [self-hosted, Windows, X64, zfswin-x64]
+    timeout-minutes: 600
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: x64 user-mode suite
+        run: scripts\ci\Invoke-CiSuite.ps1 -Platform x64 -Edition usermode -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}
+
+      - name: x64 kernel suite
+        if: ${{ !cancelled() }}
+        run: scripts\ci\Invoke-CiSuite.ps1 -Platform x64 -Edition kernel -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}
+
+  # The ARM64 suites in the ZFSTestOnArm VM, on the ARM PC; in parallel
+  # with test-x64.
+  test-arm64:
+    needs: build
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tests }}
+    runs-on: [self-hosted, Windows, ARM64, zfswin-arm64]
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          name: zfswin-${{ needs.build.outputs.version }}-${{ github.sha }}
+          path: artifact
+
+      - name: Place packages
+        run: |
+          $v = '${{ needs.build.outputs.version }}'
+          New-Item -ItemType Directory -Force "out\release\$v", "out\driver-package" | Out-Null
+          Get-ChildItem artifact -Recurse -Filter *.msi | Copy-Item -Destination "out\release\$v"
+          Get-ChildItem artifact -Recurse -Filter zfswindows-test.cer | Copy-Item -Destination "out\driver-package"
+
+      - name: ARM64 user-mode suite
+        run: scripts\ci\Invoke-CiSuite.ps1 -Platform arm64 -Edition usermode -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}
+
+      - name: ARM64 kernel suite
+        if: ${{ !cancelled() }}
+        run: scripts\ci\Invoke-CiSuite.ps1 -Platform arm64 -Edition kernel -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}

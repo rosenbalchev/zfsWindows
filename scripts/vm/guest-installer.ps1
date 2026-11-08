@@ -3,7 +3,7 @@
 # object.  Driven by scripts\vm\Test-InstallerInVm.ps1.
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "filesystem", "datafeatures", "crosscheck", "tree", "treeverify", "samples", "import", "export", "hash")]
+    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "filesystem", "datafeatures", "memory", "wholedisk", "rebootprep", "rebootcheck", "crosscheck", "tree", "treeverify", "samples", "import", "export", "hash")]
     [string]$Stage,
     [string]$Msi = "",
     [ValidateSet("install", "repair", "uninstall")]
@@ -62,7 +62,8 @@ function Retry([scriptblock]$read, [int]$seconds = 30) {
 function MountPath([string]$dataset) {
     $m = (Zfswin @('mount', 'list')).result.mounts | Where-Object dataset -eq $dataset | Select-Object -First 1
     if (-not $m) { return $null }
-    $p = $m.mountpoint
+    # A mount restored from the registry is listed as "Y:/".
+    $p = $m.mountpoint -replace '/', '\'
     if ($p -match '^[A-Za-z]:$') { $p += '\' }
     $p
 }
@@ -862,6 +863,255 @@ try { Set-Content -LiteralPath '$(Join-Path $root "dir\by-user.txt")' 'mine' -Er
         $expected.datasets[$dd].files = @(Manifest $ddRoot)
         $expected.dedupratio = "$freed"
         $expected | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "$work\datafeatures.json"
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # The user-mode engine's memory (issue #3): unique data, twice the
+    # guest's RAM, written the way a sync client writes (a temp file in
+    # 128 KiB chunks, renamed; older files deleted) to a pool with dedup on,
+    # on a 16 GiB sparse image: a deduplicated block's free goes through the
+    # DDT log and lands many txgs later, and a 4 GiB pool filled (98%, then
+    # suspended on ENOSPC) with 1.5 GiB live.  zfswin-um's private bytes must
+    # level off within RAM/3 (an ARC of RAM/4 and all around it), and fall
+    # when another process takes the memory.  User mode only: the kernel
+    # edition's ARC is not in a process.
+    "memory" {
+        $r = [ordered]@{}
+        $zpool = Join-Path $installDir "bin\zpool.exe"
+        $memPool = "zmem"
+        $ram = [long](Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
+        function Engine { [long](@(Get-Process zfswin-um -ErrorAction SilentlyContinue | Select-Object -First 1).PrivateMemorySize64) }
+        function Available { [long](Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 1KB }
+        function MB([long]$bytes) { [long]($bytes / 1MB) }
+        $r.ramMB = MB $ram
+        $r.engineStartMB = MB (Engine)
+        $img = "$images\mem.img"
+        Remove-Item -LiteralPath $img -Force -ErrorAction SilentlyContinue
+        [IO.File]::Create($img).Dispose()
+        & fsutil.exe sparse setflag $img | Out-Null
+        & fsutil.exe file seteof $img (16GB) | Out-Null
+        Check $r "create" (Zfswin @('pool', 'create', $memPool, $img, '-O', 'dedup=on', '-O', 'compression=off', '--yes')).exit 0
+        $root = MountPath $memPool
+        if (-not $root) { $r.mounted = [ordered]@{ value = ""; expected = "a mount path"; pass = $false } }
+        else {
+            $fileSize = 256MB; $live = 6
+            $count = [int][Math]::Ceiling(2 * $ram / $fileSize)
+            $buffer = [byte[]]::new($fileSize)
+            $hashes = @{}; $samples = New-Object Collections.Generic.List[long]
+            $sha = [Security.Cryptography.SHA256]::Create()
+            # Watchdog: writes stalled for 2 minutes -> a full dump of the
+            # engine in C:\zfswin\dumps (the host copies it off the disk).
+            $beat = "$work\mem-heartbeat"; [IO.File]::WriteAllText($beat, "start")
+            $watch = @"
+`$deadline = (Get-Date).AddHours(3)
+while ((Get-Date) -lt `$deadline -and (Get-Process -Id $PID -ErrorAction SilentlyContinue)) {
+    Start-Sleep -Seconds 10
+    if (((Get-Date) - (Get-Item -LiteralPath '$beat').LastWriteTime).TotalSeconds -gt 120) {
+        `$e = Get-Process zfswin-um | Select-Object -First 1
+        New-Item -ItemType Directory -Force C:\zfswin\dumps | Out-Null
+        "stalled at `$(Get-Date -f o): engine `$([long](`$e.PrivateMemorySize64 / 1MB)) MB, `$(`$e.Threads.Count) threads, cpu `$(`$e.CPU) s; `$(Get-Content -LiteralPath '$beat')" | Set-Content C:\zfswin\dumps\hang.txt
+        & rundll32.exe C:\Windows\System32\comsvcs.dll, MiniDump `$e.Id C:\zfswin\dumps\zfswin-um-hang.dmp full
+        Start-Sleep -Seconds 60
+        "dump: `$((Get-Item C:\zfswin\dumps\zfswin-um-hang.dmp -ErrorAction SilentlyContinue).Length) bytes" | Add-Content C:\zfswin\dumps\hang.txt
+        & cmd.exe /c "fsutil volume flush C: >nul 2>&1"
+        break
+    }
+}
+"@
+            $watchdog = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($watch))) -WindowStyle Hidden -PassThru
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            foreach ($n in 1..$count) {
+                [Random]::new($n).NextBytes($buffer)
+                $tmp = Join-Path $root ".f$n.tmp"
+                [IO.File]::WriteAllText($beat, "creating .f$n.tmp")
+                $fs = [IO.FileStream]::new($tmp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 4096)
+                for ($o = 0; $o -lt $fileSize; $o += 128KB) {
+                    $fs.Write($buffer, $o, 128KB)
+                    if (($o -band (16MB - 1)) -eq 0) { [IO.File]::WriteAllText($beat, "writing .f$n.tmp at $($o / 1MB) MB") }
+                }
+                [IO.File]::WriteAllText($beat, "closing and renaming .f$n.tmp")
+                $fs.Dispose()
+                Move-Item -LiteralPath $tmp -Destination (Join-Path $root "f$n.bin")
+                $hashes[$n] = [BitConverter]::ToString($sha.ComputeHash($buffer)) -replace '-', ''
+                [IO.File]::WriteAllText($beat, "deleting f$($n - $live).bin")
+                if ($n -gt $live) { Remove-Item -LiteralPath (Join-Path $root "f$($n - $live).bin") -Force }
+                $samples.Add((Engine))
+                # Streamed to the host, which keeps them if the stage times out.
+                [Console]::Out.WriteLine("progress: file $n/$count at $([int]$t.Elapsed.TotalSeconds) s, engine $(MB $samples[-1]) MB, available $(MB (Available)) MB")
+                [Console]::Out.Flush()
+            }
+            [IO.File]::WriteAllText($beat, "zpool sync")
+            & $zpool sync $memPool 2>&1 | Out-Null
+            Stop-Process -Id $watchdog.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 10
+            $settled = Engine
+            $peak = ($samples | Measure-Object -Maximum).Maximum
+            $half = [int]($samples.Count / 2)
+            $firstHalf = ($samples | Select-Object -First $half | Measure-Object -Maximum).Maximum
+            $lastQuarter = ($samples | Select-Object -Last ([Math]::Max(1, [int]($samples.Count / 4))) | Measure-Object -Maximum).Maximum
+            $r.writtenMB = MB ($count * [long]$fileSize)
+            $r.writeSeconds = [int]$t.Elapsed.TotalSeconds
+            $r.engineMB = @($samples | ForEach-Object { MB $_ })
+            $r.settledMB = MB $settled
+            # The whole process: ARC (RAM/4), dbufs, dedup table and heap,
+            # plus a fixed 256 MiB for the engine and WinFsp themselves.
+            $limit = [long]($ram / 3 + 256MB)
+            $r.peak = [ordered]@{ value = MB $peak; expected = "<= $(MB $limit)"; pass = ($peak -le $limit) }
+            # A leak keeps growing; a cache levels off.
+            $r.levelsOff = [ordered]@{ value = "$(MB $firstHalf) then $(MB $lastQuarter)"; expected = "last quarter <= first half + 15% + 256"; pass = ($lastQuarter -le $firstHalf * 1.15 + 256MB) }
+
+            # Pressure: another process takes memory until the guest has
+            # RAM/32 available (below the ARC's reserve of RAM/16), for 90 s.
+            $target = [long]($ram / 32); $cap = [long]($ram * 3 / 4)
+            $helper = @"
+`$chunks = New-Object Collections.ArrayList; `$total = [long]0; `$rnd = [Random]::new(1)
+`$end = (Get-Date).AddSeconds(100)
+while ((Get-Date) -lt `$end) {
+    `$free = [long](Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 1KB
+    if (`$free -gt $target -and `$total -lt $cap) {
+        try { `$b = [byte[]]::new(64MB); `$rnd.NextBytes(`$b); [void]`$chunks.Add(`$b); `$total += 64MB } catch { Start-Sleep -Milliseconds 500 }
+    } else { Start-Sleep -Milliseconds 500 }
+}
+Start-Sleep -Seconds 600
+"@
+            $before = Engine
+            $p = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helper))) -WindowStyle Hidden -PassThru
+            $low = $before; $pressure = @()
+            foreach ($i in 1..18) {
+                Start-Sleep -Seconds 5
+                $e = Engine; $low = [Math]::Min($low, $e)
+                $pressure += "$(MB $e)/$(MB (Available))"
+            }
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            $r.pressureEngineMBAvailableMB = $pressure
+            $r.releases = [ordered]@{ value = "$(MB $before) -> $(MB $low)"; expected = "at most half"; pass = ($low -le $before / 2) }
+
+            # The data is all there after the pressure.
+            $bad = @()
+            foreach ($n in ($count - $live + 1)..$count) {
+                $h = (Get-FileHash -LiteralPath (Join-Path $root "f$n.bin") -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                if ($h -ne $hashes[$n]) { $bad += $n }
+            }
+            Check $r "data-intact" ($bad -join ',') ""
+        }
+        Check $r "export" (Zfswin @('pool', 'export', $memPool)).exit 0
+        Remove-Item -LiteralPath $img -Force -ErrorAction SilentlyContinue
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # A pool on a whole disk (a VHDX attached in the guest) through a
+    # service restart, as the GUI's mount editor does one (user mode): the
+    # mount moved to another drive letter in the registry, the service
+    # restarted, the pool and its file back on the new letter.  The pool
+    # is recorded as "#offset#length#\\?\PhysicalDriveN", which the
+    # restart could not import (the GUI "destroyed" the pool).  Then the
+    # recorded disk number is made wrong, as after disks are added or
+    # removed: the restart finds the pool on the disks by name.
+    "wholedisk" {
+        $r = [ordered]@{}
+        $wdPool = "zwd"
+        $vhd = "$images\whole.vhdx"
+        $base = "HKLM:\SOFTWARE\OpenZFS for Windows\UserMode"
+        function DiskPart([string[]]$lines) { $f = "$work\diskpart.txt"; Set-Content -LiteralPath $f -Value $lines -Encoding ascii; & diskpart.exe /s $f 2>&1 | Out-String }
+        function RestartAndWait([string]$letter) {
+            Restart-Service ZfsWinUserMode -Force
+            $deadline = (Get-Date).AddMinutes(3)
+            do { Start-Sleep -Seconds 2; $m = MountPath $wdPool } while ($m -ne "$letter\" -and (Get-Date) -lt $deadline)
+            $m
+        }
+        if (Test-Path -LiteralPath $vhd) { DiskPart @("select vdisk file=`"$vhd`"", "detach vdisk") | Out-Null; Remove-Item -LiteralPath $vhd -Force }
+        $r.diskpart = DiskPart @("create vdisk file=`"$vhd`" maximum=2048 type=expandable", "select vdisk file=`"$vhd`"", "attach vdisk")
+        $disk = Get-Disk | Where-Object Location -eq $vhd | Select-Object -First 1
+        $dev = if ($disk) { "\\?\PhysicalDrive$($disk.Number)" } else { "" }
+        $r.device = $dev
+        Check $r "create" (Zfswin @('pool', 'create', $wdPool, $dev, '--yes')).exit 0
+        $root = MountPath $wdPool
+        $bytes = [byte[]]::new(8MB); [Random]::new(31).NextBytes($bytes)
+        $hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)) -replace '-', ''
+        if ($root) { [IO.File]::WriteAllBytes((Join-Path $root "kept.bin"), $bytes) }
+        $r.recorded = (Get-ItemProperty -LiteralPath "$base\Pools\$wdPool" -ErrorAction SilentlyContinue).Sources
+        Check $r "recorded-as-partition" ("$($r.recorded)" -like "#*#*#*PhysicalDrive*") $true
+
+        # The GUI's edit: the same values, another drive letter, a restart.
+        $free = @([char[]](77..89) | Where-Object { -not (Test-Path "$($_):\") -and "$($_):\" -ne $root }) | Select-Object -Last 1
+        $letter = "$($free):"
+        $key = "$base\Mounts\auto-$wdPool"
+        Check $r "mount-recorded" (Test-Path -LiteralPath $key) $true
+        Set-ItemProperty -LiteralPath $key -Name MountPoint -Value $letter
+        $now = RestartAndWait $letter
+        Check $r "pool-after-restart" (@((Zfswin @('pool', 'list')).result.pools | ForEach-Object name) -contains $wdPool) $true
+        Check $r "new-letter" $now "$letter\"
+        Check $r "file-after-restart" $(if ($now) { (Get-FileHash -LiteralPath (Join-Path $now "kept.bin") -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash }) $hash
+
+        # Another disk number recorded: found on the disks by name.
+        if ($r.recorded) {
+            Set-ItemProperty -LiteralPath "$base\Pools\$wdPool" -Name Sources -Value ("$($r.recorded)" -replace 'PhysicalDrive\d+', 'PhysicalDrive99')
+            $now = RestartAndWait $letter
+            Check $r "pool-after-renumber" (@((Zfswin @('pool', 'list')).result.pools | ForEach-Object name) -contains $wdPool) $true
+            Check $r "file-after-renumber" $(if ($now) { (Get-FileHash -LiteralPath (Join-Path $now "kept.bin") -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash }) $hash
+            # Where it was found, recorded: the pool comes back from that.
+            $r.rerecordedAs = (Get-ItemProperty -LiteralPath "$base\Pools\$wdPool" -ErrorAction SilentlyContinue).Sources
+            Check $r "rerecorded" ([bool]$r.rerecordedAs -and "$($r.rerecordedAs)" -notlike "*PhysicalDrive99*") $true
+            $now = RestartAndWait $letter
+            Check $r "pool-after-rerecord" (@((Zfswin @('pool', 'list')).result.pools | ForEach-Object name) -contains $wdPool) $true
+            Check $r "file-after-rerecord" $(if ($now) { (Get-FileHash -LiteralPath (Join-Path $now "kept.bin") -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash }) $hash
+        }
+        Check $r "export" (Zfswin @('pool', 'export', $wdPool)).exit 0
+        DiskPart @("select vdisk file=`"$vhd`"", "detach vdisk") | Out-Null
+        Remove-Item -LiteralPath $vhd -Force -ErrorAction SilentlyContinue
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # Before the guest restarts (Test-UserModeInVm.ps1 phase reboot): pool
+    # zrb on the empty 2 GiB SCSI disk the host added, a file on it, and
+    # its drive letter changed in the registry as the GUI does.
+    "rebootprep" {
+        $r = [ordered]@{}
+        $rbPool = "zrb"
+        $base = "HKLM:\SOFTWARE\OpenZFS for Windows\UserMode"
+        $disk = Get-Disk | Where-Object { $_.Size -eq 2GB -and $_.PartitionStyle -eq 'RAW' } | Select-Object -First 1
+        if ($disk) {
+            if ($disk.IsOffline) { Set-Disk -Number $disk.Number -IsOffline $false }
+            if ($disk.IsReadOnly) { Set-Disk -Number $disk.Number -IsReadOnly $false }
+        }
+        $r.device = if ($disk) { "\\?\PhysicalDrive$($disk.Number)" } else { "" }
+        Check $r "create" (Zfswin @('pool', 'create', $rbPool, $r.device, '--yes')).exit 0
+        $root = MountPath $rbPool
+        $bytes = [byte[]]::new(8MB); [Random]::new(37).NextBytes($bytes)
+        $r.hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)) -replace '-', ''
+        if ($root) { [IO.File]::WriteAllBytes((Join-Path $root "kept.bin"), $bytes) }
+        Check $r "written" ([bool]($root -and (Test-Path -LiteralPath (Join-Path $root "kept.bin")))) $true
+        $free = @([char[]](77..89) | Where-Object { -not (Test-Path "$($_):\") -and "$($_):\" -ne $root }) | Select-Object -Last 1
+        $r.letter = "$($free):"
+        $key = "$base\Mounts\auto-$rbPool"
+        Check $r "mount-recorded" (Test-Path -LiteralPath $key) $true
+        Set-ItemProperty -LiteralPath $key -Name MountPoint -Value $r.letter -ErrorAction SilentlyContinue
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # After the restart: zrb imported and mounted at the new letter by the
+    # service alone (up to 4 minutes after boot), the file intact, the
+    # partition path recorded; then exported so the host can remove the disk.
+    "rebootcheck" {
+        $r = [ordered]@{}
+        $rbPool = "zrb"
+        $base = "HKLM:\SOFTWARE\OpenZFS for Windows\UserMode"
+        $letter = "$($decoded.Letter)"
+        $deadline = (Get-Date).AddMinutes(4)
+        do { $m = MountPath $rbPool; if ($m -ne "$letter\") { Start-Sleep -Seconds 3 } } while ($m -ne "$letter\" -and (Get-Date) -lt $deadline)
+        $r.bootToMount = [math]::Round(((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds)
+        Check $r "pool-after-reboot" (@((Zfswin @('pool', 'list')).result.pools | ForEach-Object name) -contains $rbPool) $true
+        Check $r "mounted-at-new-letter" $m "$letter\"
+        Check $r "file-after-reboot" $(if ($m) { (Get-FileHash -LiteralPath (Join-Path $m "kept.bin") -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash }) "$($decoded.Hash)"
+        $r.recorded = (Get-ItemProperty -LiteralPath "$base\Pools\$rbPool" -ErrorAction SilentlyContinue).Sources
+        Check $r "recorded-as-partition" ("$($r.recorded)" -like "#*#*#*PhysicalDrive*") $true
+        $r.events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime } -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -like '*ZfsWin*' } | Select-Object -First 10 | ForEach-Object { "$($_.LevelDisplayName): $($_.Message)" })
+        Check $r "export" (Zfswin @('pool', 'export', $rbPool)).exit 0
         $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
         $r | ConvertTo-Json -Depth 6 -Compress
     }
