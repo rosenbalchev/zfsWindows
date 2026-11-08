@@ -242,6 +242,27 @@ import_pool(const char *pool, const char *search_path, boolean_t readonly,
     args.path = paths;
     args.can_be_active = B_TRUE;
     error = zpool_find_config(&handle, pool, &config, &args);
+    /*
+     * A pool on whole disks is recorded as "#offset#length#\\?\PhysicalDriveN",
+     * and disk numbers change when disks are added or removed.  Not found
+     * there: look for it by name on the machine's disks, as zpool import
+     * does (only for a pool recorded on disks).  1.0.16 recorded the
+     * display path "/dev/physicaldriveN", which no scan can open.
+     */
+    for (i = 0; error != 0 && i < npaths; i++) {
+        if (paths[i][0] == '#' ||
+            strncasecmp(paths[i], "/dev/physicaldrive", 18) == 0 ||
+            strncasecmp(paths[i], "\\\\?\\PhysicalDrive", 17) == 0 ||
+            strncasecmp(paths[i], "\\\\.\\PhysicalDrive", 17) == 0) {
+            importargs_t all = { 0 };
+
+            all.can_be_active = B_TRUE;
+            cmn_err(CE_NOTE, "pool %s not on %s: searching all disks",
+                pool, paths[i]);
+            error = zpool_find_config(&handle, pool, &config, &all);
+            break;
+        }
+    }
     for (i = 0; i < npaths; i++)
         spa_strfree(paths[i]);
     if (error != 0) {

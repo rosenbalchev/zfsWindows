@@ -4,7 +4,8 @@
 # x64: refusal without WinFsp, install, every admin stage of
 # guest-installer.ps1, the tree stage and the other platforms' tree pools
 # (stage\trees), a service restart, export and uninstall.
-# Settings prepended by the caller: $Version, $MsiTag, $Checkpoint, $TreeLabel.
+# Settings prepended by the caller: $Version, $MsiTag, $Checkpoint, $TreeLabel,
+# and $Only (comma-separated admin stages: setup and those stages only).
 if (-not $Version) { throw "Version not set" }
 if (-not $Checkpoint) { $Checkpoint = 'testsigning-ready-updated' }
 if (-not $TreeLabel) { $TreeLabel = 'arm64-usermode-release' }
@@ -93,13 +94,15 @@ Save
 $s = Open-ArmGuest
 Invoke-Command $s { Remove-Item -Recurse -Force "HKLM:\SOFTWARE\OpenZFS for Windows\UserMode\Mounts" -ErrorAction SilentlyContinue; & sc.exe start ZfsWinUserMode | Out-Null }
 Remove-PSSession $s
-foreach ($stage in "cli", "gui", "powershell", "standard-user", "filesystem", "datafeatures") {
+$adminStages = if ($Only) { @($Only -split ',') } else { @("cli", "gui", "powershell", "standard-user", "filesystem", "datafeatures", "memory", "wholedisk") }
+foreach ($stage in $adminStages) {
     $t = [Diagnostics.Stopwatch]::StartNew(); $r = Guest $stage; $full[$stage] = $r
     if ($stage -eq "gui") { Note "gui ($([int]$t.Elapsed.TotalSeconds) s)" ($r.exit -eq 0 -and -not $r.brokerError -and @($r.pools | Where-Object name -eq 'zwin').Count -eq 1) "exit $($r.exit) $($r.brokerError)" }
     elseif ($stage -eq "standard-user") { Note "standard user" ($r.admin -eq $false -and $r.list.exit -eq 0 -and $r.export.exit -eq 4 -and $r.snapshot.exit -eq 4 -and $r.cmdletExport -eq 'PermissionDenied') "list $($r.list.exit) export $($r.export.exit) snapshot $($r.snapshot.exit) cmdlet $($r.cmdletExport)" }
     else { Checks "$stage ($([int]$t.Elapsed.TotalSeconds) s)" $r }
     Save
 }
+if ($Only) { $results | ForEach-Object { $_ | ConvertTo-Json -Compress }; return }
 
 # --- tree, and the other platforms' tree pools -------------------------------
 $t = [Diagnostics.Stopwatch]::StartNew(); $tree = Guest "tree"; $full.tree = $tree

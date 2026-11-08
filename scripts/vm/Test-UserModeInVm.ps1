@@ -33,6 +33,13 @@ Phases (default: all, in order):
              mounts back after a service restart; the kernel-written pool
              (TestVolumes\vm\installer) read here; this pool saved to
              TestVolumes\vm\crossedition-usermode for the kernel suite.
+  memory     the engine's private bytes while twice the guest's RAM is
+             written with dedup on, and under memory pressure (issue #3).
+  wholedisk  a pool on a whole (virtual) disk through a mount-point change
+             and service restart, as the GUI's mount editor does them.
+  reboot     a pool on a whole SCSI disk the host adds to the VM, its drive
+             letter changed in the registry, the guest restarted: the pool
+             must be imported and mounted at the new letter by itself.
   uninstall  uninstall with a dataset mounted: the volume goes, the pool
              image and WinFsp stay.
 Each phase records its wall-clock duration.  Results go to
@@ -44,7 +51,9 @@ param(
     [string]$Name = "zfsTest",
     # Which build of out\release\<version> to test (...-usermode-debug.msi or ...-usermode.msi).
     [ValidateSet("Debug", "Release")]
-    [string]$Configuration = "Debug"
+    [string]$Configuration = "Debug",
+    # out\release\<version>; default: the current build number.
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,9 +62,9 @@ $state = Get-Content (Join-Path $repo "TestVolumes\vm\$Name.json") -Raw | Conver
 $credential = New-Object PSCredential ($state.user, (ConvertTo-SecureString $state.password -AsPlainText -Force))
 $results = Join-Path $repo "TestVolumes\vm\results.jsonl"
 $Phase = @($Phase | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
-if ($Phase -contains "all") { $Phase = @("setup", "read", "write", "bench", "powercut", "admin", "uninstall") }
+if ($Phase -contains "all") { $Phase = @("setup", "read", "write", "bench", "powercut", "admin", "memory", "wholedisk", "reboot", "uninstall") }
 $winfsp = Join-Path $repo "third_party\winfsp\download\winfsp-2.1.25156.msi"
-$version = & (Join-Path $repo "scripts\Get-ZfsWinVersion.ps1")
+$version = if ($Version) { $Version } else { & (Join-Path $repo "scripts\Get-ZfsWinVersion.ps1") }
 $msi = Join-Path $repo ("out\release\$version\OpenZFS-for-Windows-$version-x64-usermode" + $(if ($Configuration -eq "Debug") { "-debug" } else { "" }) + ".msi")
 $failures = [Collections.Generic.List[string]]::new()
 
@@ -126,18 +135,85 @@ $unmountBlock = {
     }
 }
 
+# The service running and the current guest-installer.ps1 in the guest
+# (the admin phase does this too; memory and wholedisk may run without it).
+function Ready-GuestStages {
+    $s = Open-Guest
+    Invoke-Command $s { New-Item -ItemType Directory -Force C:\zfswin\installer, C:\zfswin\dumps | Out-Null; & sc.exe start ZfsWinUserMode | Out-Null }
+    Copy-Item -ToSession $s (Join-Path $PSScriptRoot "guest-installer.ps1") C:\zfswin\installer\guest-installer.ps1 -Force
+    Remove-PSSession $s
+}
+
+# The turned-off guest's C:\zfswin\dumps, read from its system disk (the
+# checkpoint chain, mounted read-only on the host: only files are copied).
+function Save-GuestDumps([string]$stage) {
+    $to = Join-Path $repo "TestVolumes\vm\dumps\$stage-$(Get-Date -Format yyyyMMdd-HHmmss)"
+    $disk = (Get-VMHardDiskDrive -VMName $Name | Select-Object -First 1).Path
+    try {
+        $mounted = Mount-VHD -Path $disk -ReadOnly -PassThru -ErrorAction Stop | Get-Disk
+        $part = Get-Partition -DiskNumber $mounted.Number | Sort-Object Size -Descending | Select-Object -First 1
+        $letter = ($part | Get-Volume).DriveLetter
+        if (-not $letter) {
+            $free = @([char[]](80..90) | Where-Object { -not (Test-Path "$($_):\") })[-1]
+            $part | Add-PartitionAccessPath -AccessPath "$($free):\" -ErrorAction Stop
+            $letter = $free
+        }
+        New-Item -ItemType Directory -Force $to | Out-Null
+        Copy-Item "$($letter):\zfswin\dumps\*" $to -Recurse -Force -ErrorAction SilentlyContinue
+        @(Get-ChildItem $to | ForEach-Object { "$($_.Name) $($_.Length)" })
+    } catch { "dumps not copied: $($_.Exception.Message)" }
+    finally { Dismount-VHD -Path $disk -ErrorAction SilentlyContinue }
+}
+
 # One stage of scripts\vm\guest-installer.ps1, for this edition.
-function Guest($stage, [hashtable]$arguments = @{}) {
+# With -TimeoutMinutes, a stage that runs longer, or prints no "progress:"
+# line for -StallMinutes, fails as "hung": the VM is turned off, what the
+# guest put in C:\zfswin\dumps is copied off its disk to
+# TestVolumes\vm\dumps\<stage>-<time>, and it goes back to "usermode".
+function Guest($stage, [hashtable]$arguments = @{}, [int]$TimeoutMinutes = 0, [int]$StallMinutes = 0) {
     $arguments.Edition = "usermode"
     $s = Open-Guest
+    $work = {
+        param($stage, $arguments)
+        $ErrorActionPreference = "Continue"
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($arguments | ConvertTo-Json -Compress)))
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\zfswin\installer\guest-installer.ps1 -Stage $stage -ArgumentsBase64 $encoded 2>$null
+    }
     try {
-        $json = Invoke-Command $s {
-            param($stage, $arguments)
-            $ErrorActionPreference = "Continue"
-            $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($arguments | ConvertTo-Json -Compress)))
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\zfswin\installer\guest-installer.ps1 -Stage $stage -ArgumentsBase64 $encoded 2>$null
-        } -ArgumentList $stage, $arguments
-    } finally { Remove-PSSession $s }
+        if ($TimeoutMinutes -gt 0) {
+            $job = Invoke-Command $s $work -ArgumentList $stage, $arguments -AsJob
+            $lines = New-Object Collections.Generic.List[object]
+            $end = (Get-Date).AddMinutes($TimeoutMinutes); $lastProgress = Get-Date; $done = $false
+            while (-not $done -and (Get-Date) -lt $end -and ($StallMinutes -le 0 -or ((Get-Date) - $lastProgress).TotalMinutes -lt $StallMinutes)) {
+                $done = [bool](Wait-Job $job -Timeout 30)
+                foreach ($l in @(Receive-Job $job -ErrorAction SilentlyContinue)) {
+                    $lines.Add($l)
+                    if ("$l".StartsWith('progress:')) { $lastProgress = Get-Date; Write-Host "  [$stage] $l" }
+                }
+            }
+            if (-not $done) {
+                $progress = @($lines | Where-Object { "$_".StartsWith('progress:') } | Select-Object -Last 5)
+                Stop-Job $job -ErrorAction SilentlyContinue
+                # Hung, or only slow?  A new session, 2 minutes at most.
+                $probe = Start-Job -ScriptBlock {
+                    param($n, $c)
+                    Invoke-Command -VMName $n -Credential $c { "answers: engine $([long]((Get-Process zfswin-um -EA SilentlyContinue).PrivateMemorySize64 / 1MB)) MB, available $([long]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1KB)) MB" }
+                } -ArgumentList $Name, $credential
+                $alive = if (Wait-Job $probe -Timeout 120) { "$(Receive-Job $probe -ErrorAction SilentlyContinue)" } else { "no answer" }
+                Remove-Job $probe -Force -ErrorAction SilentlyContinue
+                Write-Warning "guest stage $stage timed out; last progress: $($progress -join ' | '); guest: $alive"
+                Stop-VM -Name $Name -TurnOff -Force -ErrorAction SilentlyContinue
+                $saved = Save-GuestDumps $stage
+                # The later stages start from the installed guest again.
+                Restore-VMCheckpoint -VMName $Name -Name "usermode" -Confirm:$false
+                Start-VM -Name $Name
+                return [pscustomobject]@{ failed = @("hung (no progress for $StallMinutes min or over $TimeoutMinutes min; VM restored to usermode)"); progress = $progress; guest = $alive; dumps = $saved }
+            }
+            $json = $lines.ToArray() + @(Receive-Job $job)
+        } else {
+            $json = Invoke-Command $s $work -ArgumentList $stage, $arguments
+        }
+    } finally { Remove-PSSession $s -ErrorAction SilentlyContinue }
     $text = ($json | Where-Object { "$_".StartsWith('{') } | Select-Object -Last 1)
     if (-not $text) { throw "guest stage $stage printed no JSON: $($json | Out-String)" }
     $text | ConvertFrom-Json
@@ -159,6 +235,15 @@ if ($Phase -contains "setup") {
     Start-VM -Name $Name
     Start-Sleep -Seconds 30
     $s = Open-Guest
+    # No Windows Update in the test VM: an update it began downloading
+    # during setup held the shutdown before the "usermode" checkpoint
+    # (TrustedInstaller stop-pending) until Stop-VM gave up.
+    Invoke-Command $s {
+        foreach ($svc in "wuauserv", "UsoSvc") {
+            Stop-Service $svc -Force -ErrorAction SilentlyContinue
+            Set-Service $svc -StartupType Disabled -ErrorAction SilentlyContinue
+        }
+    }
     Invoke-Command $s { New-Item -ItemType Directory -Force C:\zfswin\um, C:\zfswin\tools, C:\zfswin\fixtures, C:\zfswin\images\single, C:\zfswin\images\lz4-pristine, C:\zfswin\dumps | Out-Null }
     Copy-Item -ToSession $s $winfsp C:\zfswin\um\winfsp.msi -Force
     Copy-Item -ToSession $s $msi C:\zfswin\um\zfswin-usermode.msi -Force
@@ -434,6 +519,57 @@ if ($Phase -contains "admin") {
     Remove-PSSession $s
     Record "admin" @{ timings = $timings; dumps = $dumps; seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1) }
     Expect "admin: no crash dumps" (@($dumps).Count -eq 0) ($dumps -join ', ')
+}
+
+if ($Phase -contains "memory") {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    Ready-GuestStages
+    $mem = Guest "memory" -TimeoutMinutes 90 -StallMinutes 6
+    $mem | Add-Member -NotePropertyName seconds -NotePropertyValue ([math]::Round($watch.Elapsed.TotalSeconds, 1)) -Force
+    Record "memory" $mem
+    Expect "memory: the engine levels off and gives memory back (issue #3)" (@($mem.failed).Count -eq 0) ("$($mem.failed -join ', '); peak $($mem.peak.value) MB, settled $($mem.settledMB) MB, pressure $($mem.releases.value)")
+}
+
+if ($Phase -contains "wholedisk") {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    Ready-GuestStages
+    $wd = Guest "wholedisk"
+    $wd | Add-Member -NotePropertyName seconds -NotePropertyValue ([math]::Round($watch.Elapsed.TotalSeconds, 1)) -Force
+    Record "wholedisk" $wd
+    Expect "wholedisk: the pool survives a GUI mount edit and service restart" (@($wd.failed).Count -eq 0) ($wd.failed -join ', ')
+}
+
+if ($Phase -contains "reboot") {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    Ready-GuestStages
+    # A real disk of the VM (a diskpart-attached VHDX would not come back
+    # after the restart).
+    $vhd = Join-Path $repo "TestVolumes\vm\reboot-disk.vhdx"
+    Get-VMHardDiskDrive -VMName $Name | Where-Object Path -eq $vhd | Remove-VMHardDiskDrive
+    Remove-Item -LiteralPath $vhd -Force -ErrorAction SilentlyContinue
+    New-VHD -Path $vhd -SizeBytes 2GB -Dynamic | Out-Null
+    Add-VMHardDiskDrive -VMName $Name -ControllerType SCSI -Path $vhd
+    Start-Sleep -Seconds 5
+    $prep = Guest "rebootprep"
+    $s = Open-Guest
+    $bootBefore = Invoke-Command $s { (Get-CimInstance Win32_OperatingSystem).LastBootUpTime }
+    Invoke-Command $s { Restart-Computer -Force }
+    Remove-PSSession $s -ErrorAction SilentlyContinue
+    # Wait for the restarted guest (not the one still shutting down).
+    $deadline = (Get-Date).AddMinutes(10)
+    do {
+        Start-Sleep -Seconds 10
+        $boot = $null
+        try { $s = New-PSSession -VMName $Name -Credential $credential -ErrorAction Stop; $boot = Invoke-Command $s { (Get-CimInstance Win32_OperatingSystem).LastBootUpTime }; Remove-PSSession $s } catch {}
+    } while ((-not $boot -or $boot -eq $bootBefore) -and (Get-Date) -lt $deadline)
+    $check = Guest "rebootcheck" @{ Letter = $prep.letter; Hash = $prep.hash }
+    Get-VMHardDiskDrive -VMName $Name | Where-Object Path -eq $vhd | Remove-VMHardDiskDrive
+    Remove-Item -LiteralPath $vhd -Force -ErrorAction SilentlyContinue
+    $rb = [ordered]@{ prep = $prep; check = $check; rebooted = [bool]($boot -and $boot -ne $bootBefore)
+                      failed = @(@($prep.failed) + @($check.failed) | Where-Object { $_ }); seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1) }
+    if (-not $rb.rebooted) { $rb.failed += "rebooted" }
+    Record "reboot" $rb
+    Expect "reboot: the pool is imported and mounted at its new letter after a restart" (@($rb.failed).Count -eq 0) ($rb.failed -join ', ')
 }
 
 if ($Phase -contains "uninstall") {

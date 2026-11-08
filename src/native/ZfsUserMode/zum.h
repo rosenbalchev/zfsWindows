@@ -85,6 +85,8 @@ int zum_engine_stop(void);
 void zum_engine_set_cachefile(const char *path);
 /* Import one pool by name from search_path (see zum_fs_open()). */
 int zum_pool_import(const char *pool, const char *search_path);
+/* An imported pool's leaf vdev paths, ';'-separated ("" if not imported). */
+void zum_pool_sources(const char *pool, char *out, size_t size);
 
 /*
  * The ZFS ioctl bridge (user mode): requests arrive from zpool.exe/zfs.exe

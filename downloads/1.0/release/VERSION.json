@@ -1,18 +1,18 @@
 ﻿{
     "product":  "OpenZFS for Windows",
-    "version":  "1.0.16",
+    "version":  "1.0.18",
     "configuration":  "Release",
     "architectures":  [
                           "x64",
                           "arm64"
                       ],
-    "built":  "2026-11-07T22:09:07Z",
-    "builtFromCommit":  "aca9fcedec374c531662e1bee5a41cebd5527b2d",
+    "built":  "2026-11-08T08:43:39Z",
+    "builtFromCommit":  "d51825099343e1b20511974a422d4106ec1cedc3",
     "workingTreeModified":  true,
     "openzfs":  "zfs-2.4.4 (OpenZFS submodule); openzfs-windows zfswin-2.4.1rc17 + patches/openzfs-windows",
     "variants":  {
-                     "kernel":  "OpenZFS-for-Windows-1.0.16-\u003carch\u003e-testsigned.msi: kernel driver, test-signed (needs test signing and Secure Boot off)",
-                     "usermode":  "OpenZFS-for-Windows-1.0.16-\u003carch\u003e-usermode.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
+                     "kernel":  "OpenZFS-for-Windows-1.0.18-\u003carch\u003e-testsigned.msi: kernel driver, test-signed (needs test signing and Secure Boot off)",
+                     "usermode":  "OpenZFS-for-Windows-1.0.18-\u003carch\u003e-usermode.msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"
                  },
     "build":  "optimized native code (/O2); OpenZFS keeps its own consistency checks (ZFS_DEBUG) in the user-mode engine, as upstream libzpool does",
     "tested":  "x64 Debug and Release: Windows 11 24H2 VM suites (scripts/vm) and upstream OpenZFS validation on Linux, as recorded in the README for each release. arm64: see the README."

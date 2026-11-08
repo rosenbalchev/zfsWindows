@@ -585,3 +585,96 @@ both GPT partitions were intact.
 
 The kernel edition had no problem (same test: created, exported,
 imported).
+
+## 0032 — libzpool: the user-mode ARC sized and shrunk as in the kernel
+
+libzpool's ARC memory functions (`lib/libzpool/arc_os.c`) are the ones
+for ztest. The user-mode edition's engine, `zfswin-um.exe`, is libzpool,
+and it got the same values (GitHub issue #3, "most of the system memory
+after 15–20 GB written, dedup on"):
+
+- **ARC ceiling:** half the memory minus 1 GiB (`arc_all_memory()` is half
+  of it, `arc_default_max()` takes 5/8 or all but 1 GiB of that).
+- **ARC floor:** half the ceiling (`arc_init()`, userland branch), so a
+  quarter of the memory once filled.
+- **No memory pressure:** `arc_available_memory()` reports plenty, except
+  a random -1 KiB on one call in a hundred; `arc_free_memory()` is a random
+  number, and `arc_sys_free` is 0. The ARC never shrank, however little
+  memory Windows had left.
+
+On Windows the patch uses the kernel driver's sizing instead:
+- `arc_all_memory()` is all of the memory, `arc_default_max()` a quarter
+  of it, so that the whole process (the ARC, and the dbufs, dnodes and
+  heap around it) stays within the third the kernel driver gives its ARC;
+- the floor stays at 1/32 (`arc_set_limits()`);
+- `arc_free_memory()` is the memory Windows reports available (free and
+  standby pages, `sysconf(_SC_AVPHYS_PAGES)`, new in libspl), read at most
+  every 10 ms because `arc_adapt()` asks for every buffer;
+- `arc_sys_free` is 1/16 of the memory: below that, the ARC gives memory
+  back.
+
+Other platforms' userland (ztest, zdb) is unchanged.
+
+## 0033 — libzutil: the import scan takes a partition path
+
+A pool on a whole disk has vdevs named `#<offset>#<length>#\?\PhysicalDriveN`
+(0031). The user-mode service records them as the pool's sources and, when
+it starts, imports the pool from them with `zpool_find_config()`. The scan
+`stat()`ed each source, found no such file and skipped it silently. The
+pool did not come back after a service restart; the GUI's mount editor
+restarts the service, so changing a drive letter there made the pool
+disappear (its data was intact; `zpool import` brought it back).
+
+`zpool_find_import_scan()` now adds a `#` path as a slice of its own, and
+`zpool_open_func()` already reads the labels at that offset.
+
+The engine (`src/native/ZfsUserMode/zum_pool_um.c`) also looks for a pool
+recorded on disks on all disks by name when it is not at the recorded path
+(disk numbers change when disks are added or removed), and the service
+records the new path.
+
+The engine recorded each leaf's `vdev_path`, which for a disk is the
+display name `/dev/physicaldriveN` that no scan can open; the path a disk is
+opened by is its physpath. `zum_pool_sources()` now records the physpath
+when it has the `#` form, and a pool recorded as `/dev/physicaldriveN` (by
+1.0.16) is looked for on all disks and recorded again.
+
+## 0034 — libzpool: an ABD's chunks in one allocation
+
+libzpool simulates the kernel's scatter ABDs with one
+`umem_alloc_aligned(4096, 4096)` per 4 KiB chunk. On Windows that is
+`_aligned_malloc()`, which takes size + alignment + a pointer from the heap:
+about 8 KiB per 4 KiB page. Every byte the ARC held cost two in
+`zfswin-um.exe` (GitHub issue #3: a process far above the ARC ceiling).
+
+On Windows `abd_alloc_chunks()` now allocates one region of n × 4 KiB per
+ABD, 64-byte aligned (what the SIMD checksum and RAID-Z code asks of a
+mapped chunk), and points the iovecs into it; `abd_free_chunks()` frees it.
+Only the owning ABD frees chunks; offset views copy the iovecs. Chunk
+addresses were never used for I/O: a scatter ABD is borrowed into a linear
+buffer for it. Other platforms' userland is unchanged.
+
+### 0032–0034: verified (1.0.18, Release, user mode)
+
+`scripts\vm\Test-UserModeInVm.ps1 -Phase memory,wholedisk,reboot` (x64) and
+`scripts\vm\arm\Test-ArmSuite.ps1 -Edition usermode -Only memory,wholedisk`
+(ARM64), 8 GiB guests, 16 GiB of unique data written to a dedup pool:
+
+| | x64 | ARM64 |
+| --- | --- | --- |
+| engine peak (limit RAM/3 + 256 MiB = 2986 MiB) | 2522 MiB | 2550 MiB |
+| level, first half / last quarter | 2430 / 2517 MiB | 2397 / 2550 MiB |
+| under memory pressure | 2353 → 700 MiB | 1816 → 677 MiB |
+| whole-disk pool after a mount edit + restart, a renumbered disk, the path recorded again | passed | passed |
+| whole-disk SCSI pool after a guest restart, at its new drive letter | 13 s after boot | (not run) |
+
+1.0.16 failed the same stages: the pool was not imported after a restart,
+and the engine's private bytes were twice the ARC (0034).
+
+The first runs of the memory stage stopped writing after 4.3 GiB on a 4 GiB
+pool: the pool was 98% allocated with 1.5 GiB live, and suspended
+(`ZIO_SUSPEND_IOERR`, allocating writes failed with ENOSPC). Frees of
+deduplicated blocks go through the DDT log and land many txgs later, and
+the writer was let in. The stage now uses a 16 GiB pool; a full dedup pool
+suspending instead of failing writes with ENOSPC is upstream behaviour,
+not addressed here.
