@@ -29,6 +29,9 @@ concurrency:
 env:
   CONFIGURATION: ${{ inputs.configuration || 'Release' }}
 
+# Every run step uses Windows PowerShell with -ExecutionPolicy Bypass: on a
+# client SKU the default policy (Restricted) refuses the step's own script.
+
 jobs:
   # Both architectures, Release and Debug, with the driver; the packages as
   # an artifact.  out\ stays in this runner's workspace for test-x64.
@@ -37,7 +40,7 @@ jobs:
     timeout-minutes: 180
     defaults:
       run:
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -76,7 +79,7 @@ jobs:
     timeout-minutes: 600
     defaults:
       run:
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -98,7 +101,7 @@ jobs:
     timeout-minutes: 300
     defaults:
       run:
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       - uses: actions/checkout@v4
         with:
