@@ -35,6 +35,10 @@ $package = Join-Path $root ("out\driver-package" + $(if ($Configuration -eq "Rel
 $cmakeArch = '-DOPENSSL_ROOT_DIR="C:/Program Files/OpenSSL-Win64"'
 if ($Architecture -eq "arm64") {
     $ssl = (Join-Path $root "out\vcpkg-openssl\installed\arm64-windows-static") -replace '\\', '/'
+    # A CI checkout has no out\; the runner's data folder mirrors it.
+    if (-not (Test-Path "$ssl/debug/lib/libcrypto.lib") -and $env:ZFSWIN_CI_DATA) {
+        $ssl = (Join-Path $env:ZFSWIN_CI_DATA "out\vcpkg-openssl\installed\arm64-windows-static") -replace '\\', '/'
+    }
     if (-not (Test-Path "$ssl/debug/lib/libcrypto.lib")) { throw "ARM64 OpenSSL is missing: build it with vcpkg into out\vcpkg-openssl (see docs/building.md)." }
     $sslLib = if ($Configuration -eq "Debug") { "$ssl/debug/lib" } else { "$ssl/lib" }
     $cmakeArch = ('-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=ARM64 -DOPENSSL_ROOT_DIR="{0}" -DOPENSSL_INCLUDE_DIR="{0}/include" ' +

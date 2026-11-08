@@ -39,9 +39,10 @@ and ARM64 C++ tools, the WDK, the .NET SDK, WiX, CMake, Git) and the
    | `out\dotnet-runtime\` | `out\dotnet-runtime\` |
    | `out\driver-tools\` | `out\driver-tools\` |
    | `out\release\1.0.65000\` (the upgrade test package) | `out\release\1.0.65000\` |
+   | `out\vcpkg-openssl\installed\arm64-windows-static\` (ARM64 OpenSSL for the build) | `out\vcpkg-openssl\installed\arm64-windows-static\` |
 
    ```powershell
-   foreach ($p in "TestVolumes", "out\dotnet-runtime", "out\driver-tools", "out\release\1.0.65000") {
+   foreach ($p in "TestVolumes", "out\dotnet-runtime", "out\driver-tools", "out\release\1.0.65000", "out\vcpkg-openssl\installed\arm64-windows-static") {
        robocopy "D:\Projects\zfsWindows\$p" "D:\zfswin-ci\$p" /E
    }
    ```
