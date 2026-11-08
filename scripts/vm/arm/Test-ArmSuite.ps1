@@ -17,6 +17,7 @@ Runtime and WinFsp installers are expected in the stage folder already.
 
   Test-ArmSuite.ps1 -Edition kernel -Configuration Release
   Test-ArmSuite.ps1 -Edition usermode -Configuration Debug
+  Test-ArmSuite.ps1 -Edition usermode -Only memory   (setup and that stage)
 #>
 [CmdletBinding()]
 param(
@@ -25,7 +26,9 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$Version = "",
-    [string]$Checkpoint = "testsigning-ready-updated"
+    [string]$Checkpoint = "testsigning-ready-updated",
+    # User mode: only these admin stages (comma-separated), no tree pools.
+    [string]$Only = ""
 )
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -58,7 +61,7 @@ foreach ($tree in @(Get-ChildItem (Join-Path $repo "TestVolumes\vm") -Directory 
 
 # The suite, with this run's settings in front of it.
 $job = Join-Path $env:TEMP "arm-$label-$PID.ps1"
-$prefix = "`$Version = '$Version'`r`n`$MsiTag = '$tag'`r`n`$Checkpoint = '$Checkpoint'`r`n`$TreeLabel = '$label'`r`n"
+$prefix = "`$Version = '$Version'`r`n`$MsiTag = '$tag'`r`n`$Checkpoint = '$Checkpoint'`r`n`$TreeLabel = '$label'`r`n`$Only = '$Only'`r`n"
 [IO.File]::WriteAllText($job, $prefix + [IO.File]::ReadAllText($suite), (New-Object Text.UTF8Encoding $true))
 try {
     & powershell -NoProfile -ExecutionPolicy Bypass -File $invoke -Upload "$msi;$(Join-Path $repo 'scripts\vm\guest-installer.ps1');$(Join-Path $repo 'out\driver-package\zfswindows-test.cer')" -ScriptFile $job | Out-Null
@@ -66,13 +69,17 @@ try {
 
 # Results from files (the session may have dropped).
 $out = Join-Path $repo "TestVolumes\vm"
+# An earlier run's results must not stand in for a run that produced none.
+Remove-Item (Join-Path $out "$label.json"), (Join-Path $out "$label.jsonl") -Force -ErrorAction SilentlyContinue
 & scp -q @sshOptions "${target}:C:/zfswin-arm/stage/$full" (Join-Path $out "$label.json")
 & scp -q @sshOptions "${target}:C:/zfswin-arm/stage/$lines" (Join-Path $out "$label.jsonl")
 $own = Join-Path $out "tree-$label"
-New-Item -ItemType Directory -Force $own | Out-Null
-foreach ($f in "tree.img", "tree-manifest.tsv") {
-    Remove-Item (Join-Path $own $f) -Force -ErrorAction SilentlyContinue
-    & scp -q @sshOptions "${target}:C:/zfswin-arm/stage/tree-$label/$f" (Join-Path $own $f)
+if (-not $Only) {
+    New-Item -ItemType Directory -Force $own | Out-Null
+    foreach ($f in "tree.img", "tree-manifest.tsv") {
+        Remove-Item (Join-Path $own $f) -Force -ErrorAction SilentlyContinue
+        & scp -q @sshOptions "${target}:C:/zfswin-arm/stage/tree-$label/$f" (Join-Path $own $f)
+    }
 }
 $checks = @(Get-Content (Join-Path $out "$label.jsonl") -ErrorAction SilentlyContinue | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
 foreach ($c in $checks) { $d = "$($c.detail)" -replace '\s+', ' '; "{0} {1}: {2}" -f $(if ($c.ok) { 'OK  ' } else { 'FAIL' }), $c.stage, $d.Substring(0, [Math]::Min(220, $d.Length)) }
