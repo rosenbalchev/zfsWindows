@@ -229,12 +229,17 @@ zfs_ioctl_init_os(void)
         zfs_secpolicy_mount_um, NO_NAME, B_FALSE, POOL_CHECK_NONE);
 }
 
-/* Leaf vdev paths of an imported pool, ';'-separated (the pool's sources). */
-static void
-pool_sources(const char *pool, char *out, size_t size)
+/*
+ * Leaf vdev paths of an imported pool, ';'-separated (the pool's sources).
+ * A disk's vdev_path is the display name "/dev/physicaldriveN"; the path it
+ * is opened by, "#offset#length#\\?\PhysicalDriveN", is its physpath.
+ */
+void
+zum_pool_sources(const char *pool, char *out, size_t size)
 {
     vdev_t *leaves[64];
     spa_t *spa;
+    const char *path;
     int count, i;
 
     out[0] = '\0';
@@ -245,7 +250,11 @@ pool_sources(const char *pool, char *out, size_t size)
     for (i = 0; i < count; i++) {
         if (i > 0)
             (void) strlcat(out, ";", size);
-        (void) strlcat(out, leaves[i]->vdev_path, size);
+        path = leaves[i]->vdev_path;
+        if (leaves[i]->vdev_physpath != NULL &&
+            leaves[i]->vdev_physpath[0] == '#')
+            path = leaves[i]->vdev_physpath;
+        (void) strlcat(out, path, size);
     }
     spa_config_exit(spa, SCL_VDEV, FTAG);
     spa_close(spa, FTAG);
@@ -375,7 +384,7 @@ zum_ioctl(uint64_t request, uint32_t client_pid, zum_ioctl_buffers_t *io)
     if (error == 0 && bridge_ops != NULL) {
         if ((request == ZFS_IOC_POOL_CREATE ||
             request == ZFS_IOC_POOL_IMPORT) && bridge_ops->pool_imported) {
-            pool_sources(name, sources, sizeof (sources));
+            zum_pool_sources(name, sources, sizeof (sources));
             bridge_ops->pool_imported(name, sources);
         }
         if ((request == ZFS_IOC_POOL_EXPORT ||
