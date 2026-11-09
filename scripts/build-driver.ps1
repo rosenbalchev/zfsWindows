@@ -60,14 +60,24 @@ $quiet = (Join-Path $root "cmake\OpenZfsQuietUpstream.cmake") -replace '\\', '/'
 & (Join-Path $PSScriptRoot "apply-openzfs-patches.ps1")
 New-Item -ItemType Directory -Force -Path (Join-Path $openZfs "out\build") | Out-Null
 
+$configure = '"{0}" -S "{1}" -B "{2}" -G Ninja -Wno-dev -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} {5} -DCMAKE_PROJECT_INCLUDE="{6}"' -f $cmake, $openZfs, $build, $ninja, $Configuration, $cmakeArch, $quiet
+# zfs_gitrev.h (git describe of the submodule) is written at configure
+# time too.
+$configureKey = $configure + "`nopenzfs-windows " + (& git -C $openZfs rev-parse HEAD).Trim()
+$configureStamp = Join-Path $build "zfswin-configure.txt"
 $commands = @(
     'set "PATH={0};C:\Program Files\LLVM\bin;%PATH%"' -f (Split-Path -Parent $vswhere)
     'call "{0}" -arch={1} -host_arch=x64' -f $devShell, $Architecture
-    '"{0}" -S "{1}" -B "{2}" -G Ninja -Wno-dev -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} {5} -DCMAKE_PROJECT_INCLUDE="{6}"' -f $cmake, $openZfs, $build, $ninja, $Configuration, $cmakeArch, $quiet
+    # A configure regenerates headers every kernel object includes, so it
+    # runs only for a new tree or a changed command line; Ninja re-runs CMake
+    # itself when a CMakeLists.txt changes.
+    if (-not (Test-Path (Join-Path $build "build.ninja")) -or -not (Test-Path $configureStamp) -or
+        (Get-Content $configureStamp -Raw).Trim() -ne $configureKey) { $configure }
     '"{0}" --build "{1}" --target {2} --parallel 8' -f $cmake, $build, ($targets -join ' ')
 ) -join ' && '
 & cmd.exe /d /s /c $commands
 if ($LASTEXITCODE -ne 0) { throw "Driver build failed with exit code $LASTEXITCODE." }
+Set-Content -Encoding ascii $configureStamp $configureKey
 
 # --- package --------------------------------------------------------------
 if (Test-Path $package) { Remove-Item -Recurse -Force $package }
