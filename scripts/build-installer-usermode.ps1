@@ -18,7 +18,9 @@ param(
     [Parameter(Mandatory)][string]$Version,
     # Debug: ...-usermode-debug.msi from the debug trees; Release: plain names.
     [ValidateSet("Debug", "Release")]
-    [string]$Configuration = "Debug"
+    [string]$Configuration = "Debug",
+    # Skips the ICE checks (build-installer.ps1 -NoValidation).
+    [switch]$NoValidation
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,11 +56,14 @@ foreach ($required in (Join-Path $admin "ZfsWinGui.exe"), (Join-Path $admin "zfs
 }
 Copy-Item (Join-Path $admin "zfswin.exe"), (Join-Path $admin "ZfsWinBroker.exe"), (Join-Path $admin "ZfsWinGui.exe") (Join-Path $payload "bin")
 foreach ($tool in "zpool.exe", "zfs.exe") { Copy-Item (Join-Path $driver $tool) (Join-Path $payload "bin") }
-Copy-Item (Join-Path $build "zfswin-um.pdb") (Join-Path $payload "symbols")
-Copy-Item (Join-Path $admin "symbols\*.pdb") (Join-Path $payload "symbols")
-foreach ($pdb in "zpool.pdb", "zfs.pdb") {
-    $p = Join-Path $driver "symbols\$pdb"
-    if (Test-Path $p) { Copy-Item $p (Join-Path $payload "symbols") }
+# PDBs in the Debug package only (the .wixproj leaves them out of Release).
+if ($Configuration -eq "Debug") {
+    Copy-Item (Join-Path $build "zfswin-um.pdb") (Join-Path $payload "symbols")
+    Copy-Item (Join-Path $admin "symbols\*.pdb") (Join-Path $payload "symbols")
+    foreach ($pdb in "zpool.pdb", "zfs.pdb") {
+        $p = Join-Path $driver "symbols\$pdb"
+        if (Test-Path $p) { Copy-Item $p (Join-Path $payload "symbols") }
+    }
 }
 Copy-Item (Join-Path $root "src\powershell\ZfsWin\*") (Join-Path $payload "ZfsWin")
 $psd1 = Join-Path $payload "ZfsWin\ZfsWin.psd1"
@@ -89,7 +94,7 @@ foreach ($script in Get-ChildItem (Join-Path $payload "ZfsWin") -Include *.psm1,
 
 $wixproj = Join-Path $root "installer\ZfsWin.UserMode\ZfsWin.UserMode.wixproj"
 $bin = Join-Path $root "out\installer-build\usermode-$Architecture-$($Configuration.ToLowerInvariant())"
-& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:ZfsWinVersion=$Version" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
+& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:ZfsWinVersion=$Version" "-p:PackageConfiguration=$Configuration" "-p:SuppressValidation=$([bool]$NoValidation)" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
 if ($LASTEXITCODE -ne 0) { throw "WiX build failed." }
 New-Item -ItemType Directory -Force $release | Out-Null
 $msi = Join-Path $release "OpenZFS-for-Windows-$Version-$Architecture-usermode$tag.msi"

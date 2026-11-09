@@ -22,6 +22,10 @@ on:
         description: Run the VM suites after the build
         type: boolean
         default: false
+      clean:
+        description: Clean build (discard the runner's kept build trees)
+        type: boolean
+        default: false
 
 # One run per branch at a time; a newer push cancels the older run.
 concurrency:
@@ -35,9 +39,10 @@ env:
 # client SKU the default policy (Restricted) refuses the step's own script.
 
 jobs:
-  # Both architectures, Release and Debug, with the driver; one artifact per
-  # architecture and configuration.  out\ stays in this runner's workspace
-  # for test-x64.
+  # Both architectures with the driver, one artifact per architecture and
+  # configuration: Release only for a pull request, Release and Debug
+  # otherwise.  out\ stays in this runner's workspace, for test-x64 and as
+  # the next run's incremental build trees.
   build:
     runs-on: [self-hosted, Windows, X64, zfswin-x64]
     timeout-minutes: 180
@@ -50,10 +55,20 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-          clean: true
+          clean: false
 
-      # checkout cleans only the top repository; the previous run's applied
-      # patches (and the files they add) stay in the submodules.
+      # Everything but out\, whose Ninja build trees make the compile
+      # incremental; the previous run's packages are dropped.  The "clean"
+      # input discards out\ as well.
+      - name: Clean workspace
+        run: |
+          git reset -q --hard
+          git clean -qffdx -e /out/
+          $drop = if ('${{ inputs.clean }}' -eq 'true') { @("out") } else { @("out\release", "out\installer-payload", "out\installer-build") }
+          foreach ($d in $drop) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
+
+      # The previous run's applied patches (and the files they add) stay in
+      # the submodules.
       - name: Clean submodules
         run: git submodule foreach --recursive "git reset -q --hard; git clean -qffdx"
 
@@ -72,8 +87,11 @@ jobs:
       - name: WinFsp SDK
         run: scripts\fetch-winfsp.ps1
 
+      # No ICE validation in CI (numbered releases keep it).
       - name: Build
-        run: scripts\build-release.ps1 -NoIncrement -BuildDriver
+        run: |
+          $configurations = if ('${{ github.event_name }}' -eq 'pull_request') { "Release" } else { "Release,Debug" }
+          scripts\build-release.ps1 -NoIncrement -BuildDriver -NoValidation -Configuration $configurations
 
       # Release file names are plain, Debug ones end in -debug; the test
       # certificate goes with every package.
@@ -89,6 +107,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload x64 Debug
+        if: ${{ github.event_name != 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-debug
@@ -111,6 +130,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload ARM64 Debug
+        if: ${{ github.event_name != 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-debug

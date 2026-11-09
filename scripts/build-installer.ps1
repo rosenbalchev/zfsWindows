@@ -31,7 +31,10 @@ param(
     # ...-debug.msi) or Release (out\driver-package-release, plain names).
     # The .NET tools are always Release builds.
     [ValidateSet("Debug", "Release")]
-    [string]$Configuration = "Debug"
+    [string]$Configuration = "Debug",
+    # Skips Windows Installer validation (the ICE checks) for a faster CI
+    # build; numbered releases keep it.
+    [switch]$NoValidation
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,7 +49,7 @@ $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\si
     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
 
 if ($Variant -eq "usermode") {
-    & (Join-Path $PSScriptRoot "build-installer-usermode.ps1") -Architecture $Architecture -Version $version -Configuration $Configuration
+    & (Join-Path $PSScriptRoot "build-installer-usermode.ps1") -Architecture $Architecture -Version $version -Configuration $Configuration -NoValidation:$NoValidation
     return
 }
 
@@ -70,8 +73,11 @@ foreach ($tool in "zpool.exe", "zfs.exe", "zdb.exe", "kstat.exe", "zfsinstaller.
 foreach ($file in "OpenZFS.inf", "OpenZFS.sys", "OpenZFS.cat", "OpenZFS.man", "OpenZVOL.inf", "OpenZVOL.sys", "OpenZVOL.cat") {
     Copy-Item (Join-Path $driver $file) (Join-Path $payload "driver")
 }
-Copy-Item (Join-Path $admin "symbols\*.pdb") (Join-Path $payload "symbols")
-Copy-Item (Join-Path $driver "symbols\*.pdb") (Join-Path $payload "symbols")
+# PDBs in the Debug package only (the .wixproj leaves them out of Release).
+if ($Configuration -eq "Debug") {
+    Copy-Item (Join-Path $admin "symbols\*.pdb") (Join-Path $payload "symbols")
+    Copy-Item (Join-Path $driver "symbols\*.pdb") (Join-Path $payload "symbols")
+}
 Copy-Item (Join-Path $root "src\powershell\ZfsWin\*") (Join-Path $payload "ZfsWin")
 # The module manifest carries the build's version (stamped before signing).
 $psd1 = Join-Path $payload "ZfsWin\ZfsWin.psd1"
@@ -113,7 +119,7 @@ $wixproj = Join-Path $root "installer\ZfsWin.Installer\ZfsWin.Installer.wixproj"
 $bin = Join-Path $root "out\installer-build\$Architecture-$($Configuration.ToLowerInvariant())"
 # Its own intermediate folder per build: a shared obj\ makes WiX skip the
 # link step for the second configuration and then miss the MSI (MSB3030).
-& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:TestSigningThumbprint=$($cert.Thumbprint)" "-p:ZfsWinVersion=$version" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
+& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:TestSigningThumbprint=$($cert.Thumbprint)" "-p:ZfsWinVersion=$version" "-p:PackageConfiguration=$Configuration" "-p:SuppressValidation=$([bool]$NoValidation)" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
 if ($LASTEXITCODE -ne 0) { throw "WiX build failed." }
 New-Item -ItemType Directory -Force $release | Out-Null
 $msi = Join-Path $release "OpenZFS-for-Windows-$version-$Architecture-testsigned$tag.msi"

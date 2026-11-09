@@ -7,7 +7,7 @@ demand, with *Run the VM suites* ticked. It has three jobs:
 
 | Job | Runner label | What it does |
 | --- | --- | --- |
-| `build` | `zfswin-x64` | Driver, user-mode engine, admin suite and the four MSIs (x64/ARM64 × kernel/user mode) in Release and Debug; uploads four artifacts, `OpenZFS-for-Windows-<version>-<x64\|arm64>-<release\|debug>`, each with the kernel and user-mode MSIs, the SBOM and the test certificate |
+| `build` | `zfswin-x64` | Driver, user-mode engine, admin suite and the four MSIs (x64/ARM64 × kernel/user mode) in Release and Debug (Release only for a pull request); uploads an artifact per architecture and configuration, `OpenZFS-for-Windows-<version>-<x64\|arm64>-<release\|debug>`, each with the kernel and user-mode MSIs, the SBOM and the test certificate |
 | `test-x64` | `zfswin-x64` | `Test-UserModeInVm.ps1`, then `Test-InstallerInVm.ps1`, in the `zfsTest` VM |
 | `test-arm64` | `zfswin-arm64` | `host-usermode-suite.ps1`, then `host-kernel-suite.ps1`, in the `ZFSTestOnArm` VM (in parallel with `test-x64`) |
 
@@ -25,6 +25,15 @@ Every CI run gets its own version: build number = the committed
 `build/BUILD_NUMBER` + the run number (`github.run_number`), written to the
 runner's workspace only, never committed. Numbered releases are still made
 by hand with `scripts\build-release.ps1`.
+
+To keep the build short:
+- `out\` stays in the runner's workspace between runs, so Ninja rebuilds
+  only what changed. *Run workflow* with *Clean build* ticked discards it.
+- The MSIs skip the ICE validation (`build-release.ps1 -NoValidation`).
+- Packages: Debug MSIs carry the PDBs and use fast compression (mszip);
+  Release MSIs have no PDBs and the best compression (high). This is set in
+  the `.wixproj` files from the packaged configuration, so it applies to
+  hand-made releases too.
 
 ## 1. The x64 PC (label `zfswin-x64`)
 
