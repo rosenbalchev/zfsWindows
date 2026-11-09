@@ -15,8 +15,10 @@
     <!-- ICE03: the upstream zpool/zfs version resources use LANGID 0x4009,
          which ICE03 does not accept (as in the kernel package).
          ICE38/ICE43/ICE57 treat the Start-menu shortcuts of this per-machine
-         package as per-user data; with ALLUSERS=1 they go to the common Start menu. -->
-    <SuppressIces>ICE03;ICE38;ICE43;ICE57</SuppressIces>
+         package as per-user data; with ALLUSERS=1 they go to the common Start menu.
+         ICE69: the shortcuts' targets are in other components, all in the one
+         feature, Main: they never point at a file that is not installed. -->
+    <SuppressIces>ICE03;ICE38;ICE43;ICE57;ICE69</SuppressIces>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />

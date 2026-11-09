@@ -38,3 +38,6 @@ add_subdirectory("${ZFSWINDOWS_ROOT}/src/native/ZfsWinFsp"
     "${CMAKE_BINARY_DIR}/zfswin-um")
 add_subdirectory("${ZFSWINDOWS_ROOT}/src/native/ZfsUserModeTest"
     "${CMAKE_BINARY_DIR}/zfs-um-test")
+
+# After our directories, so only upstream's go quiet.
+include("${CMAKE_CURRENT_LIST_DIR}/OpenZfsQuietUpstream.cmake")
