@@ -3,6 +3,8 @@
 # nor Hyper-V for the test VMs, so every job runs on one of our machines:
 #   label zfswin-x64:   builds both architectures, runs the x64 VM suites
 #   label zfswin-arm64: runs the ARM64 VM suites on the ARM PC
+# The VM suites are off for now: they run only on demand (Run workflow with
+# "Run the VM suites" ticked).
 name: CI
 
 on:
@@ -19,7 +21,7 @@ on:
       tests:
         description: Run the VM suites after the build
         type: boolean
-        default: true
+        default: false
 
 # One run per branch at a time; a newer push cancels the older run.
 concurrency:
@@ -33,8 +35,9 @@ env:
 # client SKU the default policy (Restricted) refuses the step's own script.
 
 jobs:
-  # Both architectures, Release and Debug, with the driver; the packages as
-  # an artifact.  out\ stays in this runner's workspace for test-x64.
+  # Both architectures, Release and Debug, with the driver; one artifact per
+  # architecture and configuration.  out\ stays in this runner's workspace
+  # for test-x64.
   build:
     runs-on: [self-hosted, Windows, X64, zfswin-x64]
     timeout-minutes: 180
@@ -54,32 +57,75 @@ jobs:
       - name: Clean submodules
         run: git submodule foreach --recursive "git reset -q --hard; git clean -qffdx"
 
+      # Every run its own version: the committed build number plus the run
+      # number, written to the workspace only (the next checkout resets it).
+      - name: Build number
+        run: |
+          $file = (Resolve-Path build\BUILD_NUMBER).Path
+          $n = [int]((Get-Content $file -Raw).Trim()) + ${{ github.run_number }}
+          [IO.File]::WriteAllText($file, "$n`n")
+
+      - name: Version
+        id: version
+        run: '"version=$(& scripts\Get-ZfsWinVersion.ps1)" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT'
+
       - name: WinFsp SDK
         run: scripts\fetch-winfsp.ps1
 
       - name: Build
         run: scripts\build-release.ps1 -NoIncrement -BuildDriver
 
-      - name: Version
-        id: version
-        run: '"version=$(& scripts\Get-ZfsWinVersion.ps1)" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT'
-
-      - name: Upload packages
+      # Release file names are plain, Debug ones end in -debug; the test
+      # certificate goes with every package.
+      - name: Upload x64 Release
         uses: actions/upload-artifact@v4
         with:
-          name: zfswin-${{ steps.version.outputs.version }}-${{ github.sha }}
+          name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-release
           path: |
-            out/release/${{ steps.version.outputs.version }}/*.msi
-            out/driver-package/zfswindows-test.cer
-            downloads/*/release/SHA256SUMS
-            downloads/*/release/VERSION.json
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-testsigned.msi
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-usermode.msi
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64.cdx.json
+            out/release/${{ steps.version.outputs.version }}/zfswindows-test.cer
+          if-no-files-found: error
+
+      - name: Upload x64 Debug
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-debug
+          path: |
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-testsigned-debug.msi
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-usermode-debug.msi
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-debug.cdx.json
+            out/release/${{ steps.version.outputs.version }}/zfswindows-test.cer
+          if-no-files-found: error
+
+      - name: Upload ARM64 Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-release
+          path: |
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-testsigned.msi
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-usermode.msi
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64.cdx.json
+            out/release/${{ steps.version.outputs.version }}/zfswindows-test.cer
+          if-no-files-found: error
+
+      - name: Upload ARM64 Debug
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-debug
+          path: |
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-testsigned-debug.msi
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-usermode-debug.msi
+            out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-debug.cdx.json
+            out/release/${{ steps.version.outputs.version }}/zfswindows-test.cer
           if-no-files-found: error
 
   # The x64 suites in the zfsTest VM, on the build's out\ (same runner and
-  # workspace, so this checkout must not clean).
+  # workspace, so this checkout must not clean).  On demand only.
   test-x64:
     needs: build
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tests }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.tests }}
     runs-on: [self-hosted, Windows, X64, zfswin-x64]
     timeout-minutes: 600
     defaults:
@@ -98,10 +144,10 @@ jobs:
         run: scripts\ci\Invoke-CiSuite.ps1 -Platform x64 -Edition kernel -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}
 
   # The ARM64 suites in the ZFSTestOnArm VM, on the ARM PC; in parallel
-  # with test-x64.
+  # with test-x64.  On demand only.
   test-arm64:
     needs: build
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tests }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.tests }}
     runs-on: [self-hosted, Windows, ARM64, zfswin-arm64]
     timeout-minutes: 300
     defaults:
@@ -115,7 +161,7 @@ jobs:
       - name: Download packages
         uses: actions/download-artifact@v4
         with:
-          name: zfswin-${{ needs.build.outputs.version }}-${{ github.sha }}
+          name: OpenZFS-for-Windows-${{ needs.build.outputs.version }}-arm64-${{ inputs.configuration == 'Debug' && 'debug' || 'release' }}
           path: artifact
 
       - name: Place packages
