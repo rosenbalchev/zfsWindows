@@ -678,3 +678,18 @@ deduplicated blocks go through the DDT log and land many txgs later, and
 the writer was let in. The stage now uses a 16 GiB pool; a full dedup pool
 suspending instead of failing writes with ENOSPC is upstream behaviour,
 not addressed here.
+
+## 0035 — CMake: configure-time generated files rewritten only when they change
+
+Every configure rewrote two sets of generated files, so even a
+reconfigure with nothing changed recompiled the whole driver (about 330
+objects per tree, every CI run; GitHub issue #9):
+
+- `FindWdk.cmake` wrote `CMakeFiles/wdkflags.h` with `file(WRITE)`. Every
+  kernel object force-includes it (`/FI`).
+- `module/os/windows/CMakeLists.txt` ran `ctrpp` straight into the source
+  tree (`OpenZFS_perf.h`, `OpenZFS_perf.rc`, `OpenZFS_counters.h`). All
+  build trees share those files.
+
+Both now write to the build tree first and copy with `cmake -E
+copy_if_different`. The generated contents are unchanged.

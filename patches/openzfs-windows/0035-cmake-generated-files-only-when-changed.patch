@@ -1,0 +1,51 @@
+diff --git a/contrib/windows/cmake/FindWdk.cmake b/contrib/windows/cmake/FindWdk.cmake
+index a870fd773..a434f10a7 100644
+--- a/contrib/windows/cmake/FindWdk.cmake
++++ b/contrib/windows/cmake/FindWdk.cmake
+@@ -86,7 +86,10 @@ set(WDK_WINVER "0x0601" CACHE STRING "Default WINVER for WDK targets")
+ set(WDK_NTDDI_VERSION "" CACHE STRING "Specified NTDDI_VERSION for WDK targets if needed")
+ 
+ set(WDK_ADDITIONAL_FLAGS_FILE "${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/wdkflags.h")
+-file(WRITE ${WDK_ADDITIONAL_FLAGS_FILE} "#pragma runtime_checks(\"suc\", off)")
++# Every kernel object force-includes it: rewritten only when it changes, so
++# a reconfigure does not recompile the whole driver.
++file(WRITE "${WDK_ADDITIONAL_FLAGS_FILE}.new" "#pragma runtime_checks(\"suc\", off)")
++execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${WDK_ADDITIONAL_FLAGS_FILE}.new" "${WDK_ADDITIONAL_FLAGS_FILE}")
+ 
+ set(WDK_COMPILE_FLAGS
+     "/Zp8" # set struct alignment
+diff --git a/module/os/windows/CMakeLists.txt b/module/os/windows/CMakeLists.txt
+index f58e7c9cc..0c13a68d5 100644
+--- a/module/os/windows/CMakeLists.txt
++++ b/module/os/windows/CMakeLists.txt
+@@ -100,11 +100,16 @@ if (NOT CTRPP_PROGRAM)
+ 	message(FATAL_ERROR "Failed to find ctrpp.exe")
+ endif()
+ 
++# ctrpp writes into this build tree; its outputs are copied into the source
++# tree only when they change, so a reconfigure does not recompile what
++# includes them (and build trees sharing the source tree see no rewrite).
++set(CTRPP_OUT "${CMAKE_CURRENT_BINARY_DIR}/ctrpp")
++file(MAKE_DIRECTORY "${CTRPP_OUT}")
+ execute_process(
+ 	COMMAND "${CTRPP_PROGRAM}"
+-		-o "${CMAKE_CURRENT_SOURCE_DIR}/OpenZFS_perf.h"
+-		-rc "${CMAKE_CURRENT_SOURCE_DIR}/OpenZFS_perf.rc"
+-		-ch "${CMAKE_CURRENT_SOURCE_DIR}/OpenZFS_counters.h"
++		-o "${CTRPP_OUT}/OpenZFS_perf.h"
++		-rc "${CTRPP_OUT}/OpenZFS_perf.rc"
++		-ch "${CTRPP_OUT}/OpenZFS_counters.h"
+ 		"${CMAKE_CURRENT_SOURCE_DIR}/OpenZFS.man"
+ 	RESULT_VARIABLE CTRPP_RESULT
+ 	OUTPUT_VARIABLE CTRPP_STDOUT
+@@ -117,6 +122,10 @@ if (NOT CTRPP_RESULT EQUAL 0)
+ 		"stdout: ${CTRPP_STDOUT}\n"
+ 		"stderr: ${CTRPP_STDERR}")
+ endif()
++foreach(CTRPP_FILE OpenZFS_perf.h OpenZFS_perf.rc OpenZFS_counters.h)
++	execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different
++		"${CTRPP_OUT}/${CTRPP_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${CTRPP_FILE}")
++endforeach()
+ 
+ file(GLOB CSOURCES CONFIGURE_DEPENDS "*.c")
+ 

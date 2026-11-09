@@ -49,6 +49,10 @@ by hand with `scripts\build-release.ps1`.
 To keep the build short:
 - `out\` stays in the runner's workspace between runs, so Ninja rebuilds
   only what changed. *Run workflow* with *Clean build* ticked discards it.
+- CMake configures a tree only when it is new or its command line, the
+  submodule commit or (for the engine) the version changed
+  (`zfswin-configure.txt` in the tree); patch 0035 keeps a reconfigure
+  from rewriting the headers every driver object includes.
 - The submodules stay patched between runs: they are reset (and the patches
   re-applied) only when their pinned commits or `patches/` change, since the
   patched headers would otherwise recompile the whole driver

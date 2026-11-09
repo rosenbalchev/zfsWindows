@@ -68,17 +68,26 @@ if ($Coverage) {
 # OpenZFS currently generates this header into the source tree at configure time.
 New-Item -ItemType Directory -Force -Path (Join-Path $openZfs "out\build") | Out-Null
 
-$configure = @(
+$configure = '"{0}" -S "{1}" -B "{2}" -G Ninja -Wno-dev -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} -DCMAKE_C_COMPILER="{5}" -DCMAKE_CXX_COMPILER="{5}" -DCMAKE_ASM_COMPILER="{5}" {8} -DZFSWINDOWS_ROOT="{6}" -DCMAKE_PROJECT_INCLUDE="{7}"' -f $cmake, $openZfs, $BuildDirectory, $ninja, $Configuration, $clang, ($root -replace '\\','/'), ($overlay -replace '\\','/'), $cmakeArch
+# zfs_gitrev.h (git describe of the submodule) and zfswin-um's version are
+# written at configure time too.
+$configureKey = $configure + "`nopenzfs-windows " + (& git -C $openZfs rev-parse HEAD).Trim() + "`nZFSWIN_VERSION=$env:ZFSWIN_VERSION"
+$configureStamp = Join-Path $BuildDirectory "zfswin-configure.txt"
+$commands = @(
     # VsDevCmd resolves vswhere.exe from PATH, which a bare cmd.exe may lack.
     'set "PATH={0};%PATH%"' -f (Split-Path -Parent $vswhere)
     'call "{0}" -arch={1} -host_arch=x64' -f $devShell, $Architecture
     'set "PATH=C:\Program Files\LLVM\bin;%PATH%"'
-    '"{0}" -S "{1}" -B "{2}" -G Ninja -Wno-dev -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} -DCMAKE_C_COMPILER="{5}" -DCMAKE_CXX_COMPILER="{5}" -DCMAKE_ASM_COMPILER="{5}" {8} -DZFSWINDOWS_ROOT="{6}" -DCMAKE_PROJECT_INCLUDE="{7}"' -f $cmake, $openZfs, $BuildDirectory, $ninja, $Configuration, $clang, ($root -replace '\\','/'), ($overlay -replace '\\','/'), $cmakeArch
+    # Configure only for a new tree or a changed command line (as in
+    # build-driver.ps1); Ninja re-runs CMake itself when a CMakeLists.txt changes.
+    if (-not (Test-Path (Join-Path $BuildDirectory "build.ninja")) -or -not (Test-Path $configureStamp) -or
+        (Get-Content $configureStamp -Raw).Trim() -ne $configureKey) { $configure }
     '"{0}" --build "{1}" --target {2} --parallel 8' -f $cmake, $BuildDirectory, ($Targets -join ' ')
 ) -join ' && '
 
-& cmd.exe /d /s /c $configure
+& cmd.exe /d /s /c $commands
 if ($LASTEXITCODE -ne 0) { throw "OpenZFS write-core build failed with exit code $LASTEXITCODE." }
+Set-Content -Encoding ascii $configureStamp $configureKey
 
 if ($Targets -contains "zfs-write-core") {
     $binary = Join-Path $BuildDirectory "zfs-write-core\zfs-write-core.exe"
