@@ -60,24 +60,29 @@ powershell -ExecutionPolicy Bypass -File scripts\fetch-winfsp.ps1
 powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 -BuildDriver   # increments the build number
 ```
 
-`build-release.ps1` builds every package twice, Release and Debug, and
-writes two self-contained folders.
-
-`downloads\1.0\release\` (optimized native code):
+`build-release.ps1` builds every package twice, Release and Debug, into one
+self-contained folder, `out\release\1.0.N\`:
 
 ```text
-OpenZFS-for-Windows-1.0.N-x64-testsigned.msi   kernel-driver variant
+OpenZFS-for-Windows-1.0.N-x64-testsigned.msi   kernel-driver variant (Release: optimized native code)
 OpenZFS-for-Windows-1.0.N-x64-usermode.msi     user-mode (WinFsp) variant
 OpenZFS-for-Windows-1.0.N-x64.cdx.json         CycloneDX SBOM
-OpenZFS-for-Windows-1.0.N-arm64-*.msi, .cdx.json   the same for ARM64 (cross-built, untested)
+OpenZFS-for-Windows-1.0.N-x64-*-debug.msi, -debug.cdx.json   the same, Debug
+OpenZFS-for-Windows-1.0.N-arm64-*.msi, .cdx.json   the same for ARM64 (cross-built)
 zfswindows-test.cer                            the test-signing certificate
-VERSION.json                                   version, configuration, commit, OpenZFS base
+VERSION.json                                   version, configurations, commit, OpenZFS base
 SHA256SUMS                                     checksums of the above
 ```
 
-`downloads\1.0\debug\` holds the same files, but built unoptimized with full
-debug checks. Their names end in `-debug`, such as
+Debug packages are built unoptimized with full debug checks, and their
+names end in `-debug`, such as
 `OpenZFS-for-Windows-1.0.N-x64-usermode-debug.msi`.
+
+Packages are never committed (`downloads/` is ignored). CI builds the same
+folder on every run (`.github/workflows/ci.yml`): a pull request builds
+Debug only and keeps the packages as workflow artifacts; a push to `master`
+builds Release and Debug and publishes them as the GitHub release
+`v1.0.N`.
 
 The native trees are built per configuration:
 

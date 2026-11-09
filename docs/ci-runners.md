@@ -6,11 +6,12 @@ packages under test). The x64 unit tests run in every build. Coverage runs
 on every push to `master` and on demand (*Measure the unit tests' code
 coverage*). The ARM64 unit tests and the VM integration tests are disabled
 for pushes and pull requests: they run only on demand, with *Run the ARM64
-unit tests* or *Run the VM integration tests* ticked. It has five jobs:
+unit tests* or *Run the VM integration tests* ticked. It has six jobs:
 
 | Job | Runner label | What it does |
 | --- | --- | --- |
-| `build` | `zfswin-x64` | Driver, user-mode engine, admin suite and the four MSIs (x64/ARM64 × kernel/user mode) in Release and Debug (Release only for a pull request); uploads an artifact per architecture and configuration, `OpenZFS-for-Windows-<version>-<x64\|arm64>-<release\|debug>`, each with the kernel and user-mode MSIs, the SBOM and the test certificate; then the x64 unit tests (`scripts/test-usermode.ps1`: the Release user-mode engine in the test process on image files, no VM), results as `unit-test-results-x64-<version>` |
+| `build` | `zfswin-x64` | Driver, user-mode engine, admin suite and the four MSIs (x64/ARM64 × kernel/user mode) in Release and Debug on `master`, Debug only for a pull request or a manual run on another branch (plus Release when the VM integration tests run on Release); uploads an artifact per architecture and configuration, `OpenZFS-for-Windows-<version>-<x64\|arm64>-<release\|debug>`, each with the kernel and user-mode MSIs, the SBOM, the test certificate, `VERSION.json` and `SHA256SUMS`; then the x64 unit tests (`scripts/test-usermode.ps1`: the user-mode engine in the test process on image files, no VM; Release when it was built, otherwise Debug), results as `unit-test-results-x64-<version>` |
+| `release` | `zfswin-x64` | On a push to `master` only: publishes every package of the build as the GitHub release `v<version>` (notes generated from the merged pull requests); the README links to `releases/latest` |
 | `unit-tests-arm64` | `zfswin-arm64` | The same unit tests on the ARM PC itself, no VM, with the ARM64 engine the build cross-compiled |
 | `coverage` | `zfswin-x64` | The engine built instrumented (`build-write-core.ps1 -Coverage`: clang source-based coverage, `out\openzfs-write-coverage`, never packaged), the unit tests on it (`test-usermode.ps1 -Coverage`); the HTML report of our code and OpenZFS `module\zfs` as `coverage-html-<version>` |
 | `vm-integration-x64` | `zfswin-x64` | `Test-UserModeInVm.ps1`, then `Test-InstallerInVm.ps1`, in the `zfsTest` VM |

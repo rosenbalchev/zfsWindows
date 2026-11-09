@@ -12,30 +12,26 @@ nested submodules are not needed.
 
 ## Download and install (1.0)
 
-> **Latest: 1.0.16** (2026-11-07), in
-> [`downloads/1.0/release/`](downloads/1.0/release/), with its Debug build in
-> [`downloads/1.0/debug/`](downloads/1.0/debug/).
-> - 1.0.16 is 1.0.15 plus patch 0031: the user-mode edition can create pools
->   on whole physical disks (issue #1). That fix was checked on x64 and
->   ARM64; the full VM suites below ran on 1.0.15.
-> - Both builds passed the VM suites on **x64 and ARM64**, kernel and user
->   mode. On x64 that includes install, upgrade, repair and uninstall.
-> - Pools written on each platform and edition were read back correctly on
->   the others and validated by upstream OpenZFS on Linux (plan step 19).
-> - 1.0.8–1.0.14 are superseded: Release-only optimizer bugs (patches
->   0026–0029), a mount race with many datasets (0030), and two
->   `zfswin`/broker bugs.
+> **[Download the latest release](https://github.com/rosenbalchev/zfsWindows/releases/latest)**
+> from GitHub Releases.
 
-Versions are `1.0.N`; the build number goes up with every release build.
-Each version comes in two builds:
+Every pull request merged into `master` is built by CI and published as a
+GitHub release `v1.0.N`; the build number goes up with every release. The
+installers are never committed to this repository. What changed and what
+was verified in each version is in the release notes and in
+[`CHANGELOG.md`](CHANGELOG.md).
 
-| Folder | Build | For |
+Each release has two builds of every package:
+
+| Build | File names | For |
 | --- | --- | --- |
-| [`downloads/1.0/release/`](downloads/1.0/release/) | **Release**: optimized native code; file names as below | normal use |
-| [`downloads/1.0/debug/`](downloads/1.0/debug/) | **Debug**: unoptimized native code with full debug checks; file names end in `-debug` | diagnosing problems |
+| **Release**: optimized native code | as below | normal use |
+| **Debug**: unoptimized native code with full debug checks | end in `-debug` | diagnosing problems |
 
-Each folder has its own `SHA256SUMS`, `VERSION.json` and the test
-certificate. There are two packages, and you install one of them:
+Each release also has one `SHA256SUMS`, `VERSION.json`, the SBOMs
+(`*.cdx.json`) and the test certificate. Pull request builds are Debug only
+and are kept as workflow artifacts of their CI run, not released. There are
+two packages, and you install one of them:
 
 | Package | What it is | Requirements |
 | --- | --- | --- |

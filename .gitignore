@@ -8,3 +8,7 @@ __pycache__/
 
 # WinFsp release and extracted SDK (scripts/fetch-winfsp.ps1)
 third_party/winfsp/
+
+# Release builds (scripts/build-release.ps1 writes to out\publish; stable
+# versions are published as GitHub releases, never committed)
+/downloads/
