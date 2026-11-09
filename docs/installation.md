@@ -2,9 +2,11 @@
 
 ## Choose a variant
 
-The release in `downloads/1.0/release/` (optimized) and
-`downloads/1.0/debug/` (debug checks, file names ending in `-debug`) has two
-packages. Install one of them; each refuses to install next to the other.
+Download from the
+[latest GitHub release](https://github.com/rosenbalchev/zfsWindows/releases/latest).
+It has a Release build (optimized) and a Debug build (debug checks, file
+names ending in `-debug`) of two packages. Install one of them; each refuses
+to install next to the other.
 
 | | **User mode** (`…-x64-usermode.msi`) | **Kernel mode** (`…-x64-testsigned.msi`) |
 | --- | --- | --- |
@@ -22,12 +24,14 @@ either variant imports anywhere OpenZFS 2.4 runs. The README's *User mode
 or kernel mode? Feature matrix* lists every feature and whether it is
 tested, implemented or missing in each edition.
 
-First verify the download:
+First verify the download. Save the release's `SHA256SUMS` next to the
+package, then, in that folder (files you did not download are skipped):
 
 ```powershell
-cd downloads\1.0\release      # or downloads\1.0\debug
+cd $HOME\Downloads
 Get-Content SHA256SUMS | ForEach-Object {
     $hash, $name = $_ -split '\s+', 2
+    if (-not (Test-Path $name)) { return }
     if ((Get-FileHash $name -Algorithm SHA256).Hash -ne $hash) { "MISMATCH $name" } else { "ok $name" }
 }
 ```
