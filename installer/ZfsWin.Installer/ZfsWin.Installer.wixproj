@@ -17,8 +17,11 @@
          ICE03 does not accept; step 17 stamps real version resources.
          ICE38/ICE43/ICE57: they treat the Start-menu shortcuts of this
          per-machine package as per-user data and demand an HKCU key path;
-         with ALLUSERS=1 the shortcuts go to the common Start menu. -->
-    <SuppressIces>ICE03;ICE38;ICE43;ICE57</SuppressIces>
+         with ALLUSERS=1 the shortcuts go to the common Start menu.
+         ICE69: the shortcuts' targets (ZfsWinGui.exe, README.html) are in
+         other components; all of them are in the one feature, Main, so the
+         shortcuts never point at a file that is not installed. -->
+    <SuppressIces>ICE03;ICE38;ICE43;ICE57;ICE69</SuppressIces>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />

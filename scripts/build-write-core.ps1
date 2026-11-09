@@ -9,7 +9,11 @@ param(
     # arm64 cross-compiles (clang-cl --target, MSVC ARM64 libraries, vcpkg
     # arm64-windows-static OpenSSL); the tools only run on an ARM64 machine.
     [ValidateSet("x64", "arm64")]
-    [string]$Architecture = "x64"
+    [string]$Architecture = "x64",
+    # Clang source-based coverage (-fprofile-instr-generate
+    # -fcoverage-mapping) in a tree of its own, out\openzfs-write-coverage,
+    # for scripts\test-usermode.ps1 -Coverage.  x64 only; never packaged.
+    [switch]$Coverage
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,8 +21,9 @@ $ErrorActionPreference = "Stop"
 $Targets = @($Targets | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $root = Split-Path -Parent $PSScriptRoot
 $openZfs = Join-Path $root "third_party\openzfs-windows"
+if ($Coverage -and $Architecture -ne "x64") { throw "-Coverage builds x64 only." }
 if (-not $BuildDirectory) {
-    $BuildDirectory = Join-Path $root ("out\openzfs-write-$($Configuration.ToLowerInvariant())" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }))
+    $BuildDirectory = Join-Path $root ("out\openzfs-write-$(if ($Coverage) { "coverage" } else { $Configuration.ToLowerInvariant() })" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }))
 }
 $cmakeArch = '-DOPENSSL_ROOT_DIR="C:/Program Files/OpenSSL-Win64"'
 if ($Architecture -eq "arm64") {
@@ -48,6 +53,15 @@ if (-not (Test-Path $clang)) { throw "LLVM clang-cl was not found at $clang." }
 if (-not (Test-Path "C:\Program Files\OpenSSL-Win64\include\openssl\ssl.h")) {
     throw "OpenSSL development headers were not found."
 }
+# Coverage: every C file instrumented (ours and OpenZFS), linked with
+# clang's profile runtime from its resource directory.
+if ($Coverage) {
+    # Its 8.3 name: "Program Files" would split the linker option.
+    $profileRuntime = (New-Object -ComObject Scripting.FileSystemObject).GetFolder(
+        (Join-Path (& $clang --print-resource-dir).Trim() "lib\windows")).ShortPath -replace '\\', '/'
+    $cmakeArch += (' -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS /W3 -fprofile-instr-generate -fcoverage-mapping"' +
+        ' -DCMAKE_SHARED_LINKER_FLAGS="/machine:x64 /LIBPATH:{0}" -DCMAKE_EXE_LINKER_FLAGS="/machine:x64 /LIBPATH:{0}"') -f $profileRuntime
+}
 
 & (Join-Path $PSScriptRoot "apply-openzfs-patches.ps1")
 
@@ -59,7 +73,7 @@ $configure = @(
     'set "PATH={0};%PATH%"' -f (Split-Path -Parent $vswhere)
     'call "{0}" -arch={1} -host_arch=x64' -f $devShell, $Architecture
     'set "PATH=C:\Program Files\LLVM\bin;%PATH%"'
-    '"{0}" -S "{1}" -B "{2}" -G Ninja -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} -DCMAKE_C_COMPILER="{5}" -DCMAKE_CXX_COMPILER="{5}" -DCMAKE_ASM_COMPILER="{5}" {8} -DZFSWINDOWS_ROOT="{6}" -DCMAKE_PROJECT_INCLUDE="{7}"' -f $cmake, $openZfs, $BuildDirectory, $ninja, $Configuration, $clang, ($root -replace '\\','/'), ($overlay -replace '\\','/'), $cmakeArch
+    '"{0}" -S "{1}" -B "{2}" -G Ninja -Wno-dev -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} -DCMAKE_C_COMPILER="{5}" -DCMAKE_CXX_COMPILER="{5}" -DCMAKE_ASM_COMPILER="{5}" {8} -DZFSWINDOWS_ROOT="{6}" -DCMAKE_PROJECT_INCLUDE="{7}"' -f $cmake, $openZfs, $BuildDirectory, $ninja, $Configuration, $clang, ($root -replace '\\','/'), ($overlay -replace '\\','/'), $cmakeArch
     '"{0}" --build "{1}" --target {2} --parallel 8' -f $cmake, $BuildDirectory, ($Targets -join ' ')
 ) -join ' && '
 

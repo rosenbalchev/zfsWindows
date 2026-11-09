@@ -2,21 +2,32 @@
 
 `.github/workflows/ci.yml` runs on every push to `master`, on every pull
 request, and on demand (Actions → CI → Run workflow, with Release or Debug
-packages under test). The x64 unit tests run in every build. The ARM64
-unit tests and the VM integration tests are disabled for pushes and pull
-requests: they run only on demand, with *Run the ARM64 unit tests* or *Run
-the VM integration tests* ticked. It has four jobs:
+packages under test). The x64 unit tests run in every build. Coverage runs
+on every push to `master` and on demand (*Measure the unit tests' code
+coverage*). The ARM64 unit tests and the VM integration tests are disabled
+for pushes and pull requests: they run only on demand, with *Run the ARM64
+unit tests* or *Run the VM integration tests* ticked. It has five jobs:
 
 | Job | Runner label | What it does |
 | --- | --- | --- |
 | `build` | `zfswin-x64` | Driver, user-mode engine, admin suite and the four MSIs (x64/ARM64 × kernel/user mode) in Release and Debug (Release only for a pull request); uploads an artifact per architecture and configuration, `OpenZFS-for-Windows-<version>-<x64\|arm64>-<release\|debug>`, each with the kernel and user-mode MSIs, the SBOM and the test certificate; then the x64 unit tests (`scripts/test-usermode.ps1`: the Release user-mode engine in the test process on image files, no VM), results as `unit-test-results-x64-<version>` |
 | `unit-tests-arm64` | `zfswin-arm64` | The same unit tests on the ARM PC itself, no VM, with the ARM64 engine the build cross-compiled |
+| `coverage` | `zfswin-x64` | The engine built instrumented (`build-write-core.ps1 -Coverage`: clang source-based coverage, `out\openzfs-write-coverage`, never packaged), the unit tests on it (`test-usermode.ps1 -Coverage`); the HTML report of our code and OpenZFS `module\zfs` as `coverage-html-<version>` |
 | `vm-integration-x64` | `zfswin-x64` | `Test-UserModeInVm.ps1`, then `Test-InstallerInVm.ps1`, in the `zfsTest` VM |
 | `vm-integration-arm64` | `zfswin-arm64` | `host-usermode-suite.ps1`, then `host-kernel-suite.ps1`, in the `ZFSTestOnArm` VM (in parallel with `vm-integration-x64`) |
 
 GitHub-hosted runners cannot do any of this: they have no WDK and test-signing
 certificate, and no Hyper-V for the test VMs. So both jobs run on our own
 machines: the x64 PC (build and x64 VM) and the ARM PC (ARM64 VM).
+
+**Test and coverage pages.** Each unit test job writes its results to the
+run's summary page (Actions → the run → the job's summary): totals, a
+table per test class, and every failed and skipped test with its message.
+The coverage job adds the coverage of our code (`src\native`, per file),
+of OpenZFS `module\zfs` and of the whole engine; the line-by-line view is
+the `coverage-html-<version>` artifact (open `index.html`).  Locally the
+same pages are `out\test-results\usermode-<arch>-<configuration>\summary.md`
+and `out\coverage\summary.md`, `out\coverage\html\index.html`.
 
 The unit tests' Linux reference-image checks (`LinuxImageTests`, two 5 GiB
 pools hashed in full, about 2.5 minutes) are skipped in CI: the checkout
