@@ -63,7 +63,8 @@ Step "administration suite" { Run "build-admin.ps1" @("-Architecture", ($Archite
 foreach ($config in $Configuration) {
     foreach ($arch in $Architecture) {
         if ($BuildDriver) { Step "driver ($arch, $config)" { Run "build-driver.ps1" @("-Architecture", $arch, "-Configuration", $config) } }
-        Step "user-mode file system ($arch, $config)" { Run "build-write-core.ps1" @("-Targets", "zfs-write-core,zfswin-um", "-Architecture", $arch, "-Configuration", $config) }
+        # zfs-um-test: the engine for the unit tests (scripts\test-usermode.ps1).
+        Step "user-mode file system ($arch, $config)" { Run "build-write-core.ps1" @("-Targets", "zfs-write-core,zfswin-um,zfs-um-test", "-Architecture", $arch, "-Configuration", $config) }
         $validation = @(if ($NoValidation) { "-NoValidation" })
         Step "kernel-driver MSI ($arch, $config)" { Run "build-installer.ps1" (@("-Architecture", $arch, "-Variant", "kernel", "-Configuration", $config) + $validation) }
         Step "user-mode MSI ($arch, $config)" { Run "build-installer.ps1" (@("-Architecture", $arch, "-Variant", "usermode", "-Configuration", $config) + $validation) }
