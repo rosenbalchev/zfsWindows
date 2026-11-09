@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Program.cs: the scenarios the tests run in a process of their own. -->
+    <OutputType>Exe</OutputType>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <!-- Which build tree's engine (scripts\build-write-core.ps1 -Targets zfs-um-test). -->
+    <ZfsUmConfiguration Condition="'$(ZfsUmConfiguration)' == ''">Release</ZfsUmConfiguration>
+    <ZfsUmArchitecture Condition="'$(ZfsUmArchitecture)' == ''">x64</ZfsUmArchitecture>
+    <ZfsUmTree>$(MSBuildThisFileDirectory)../../out/openzfs-write-$(ZfsUmConfiguration.ToLowerInvariant())</ZfsUmTree>
+    <ZfsUmTree Condition="'$(ZfsUmArchitecture)' != 'x64'">$(ZfsUmTree)-$(ZfsUmArchitecture)</ZfsUmTree>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/managed/Zfs.Interop/Zfs.Interop.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="$(ZfsUmTree)/zfs-um-test/ZfsUserModeTest.dll" Link="ZfsUserModeTest.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(ZfsUmTree)/zfs-um-test/ZfsUserModeTest.dll')" />
+  </ItemGroup>
+</Project>

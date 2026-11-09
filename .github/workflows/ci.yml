@@ -1,10 +1,15 @@
 # Build and VM test suites on self-hosted runners (docs/ci-runners.md).
 # GitHub-hosted runners have neither the WDK and test-signing certificate
 # nor Hyper-V for the test VMs, so every job runs on one of our machines:
-#   label zfswin-x64:   builds both architectures, runs the x64 VM suites
-#   label zfswin-arm64: runs the ARM64 VM suites on the ARM PC
-# The VM suites are off for now: they run only on demand (Run workflow with
-# "Run the VM suites" ticked).
+#   label zfswin-x64:   builds both architectures, runs the x64 unit tests
+#                       and the x64 VM integration tests
+#   label zfswin-arm64: runs the ARM64 unit tests and VM integration tests
+#                       on the ARM PC
+# The x64 unit tests (the user-mode engine on image files, no VM) run on
+# every build.  The ARM64 unit tests and the VM integration tests are
+# disabled for pushes and pull requests: they run only on demand (Run
+# workflow with "Run the ARM64 unit tests" or "Run the VM integration
+# tests" ticked).
 name: CI
 
 on:
@@ -18,8 +23,12 @@ on:
         type: choice
         options: [Release, Debug]
         default: Release
-      tests:
-        description: Run the VM suites after the build
+      vm-integration-tests:
+        description: Run the VM integration tests after the build
+        type: boolean
+        default: false
+      arm64-unit-tests:
+        description: Run the ARM64 unit tests after the build
         type: boolean
         default: false
       clean:
@@ -41,7 +50,7 @@ env:
 jobs:
   # Both architectures with the driver, one artifact per architecture and
   # configuration: Release only for a pull request, Release and Debug
-  # otherwise.  out\ stays in this runner's workspace, for test-x64 and as
+  # otherwise.  out\ stays in this runner's workspace, for vm-integration-x64 and as
   # the next run's incremental build trees.
   build:
     runs-on: [self-hosted, Windows, X64, zfswin-x64]
@@ -115,6 +124,27 @@ jobs:
       - name: Record submodule state
         run: Set-Content -Encoding ascii out\ci-submodules.stamp '${{ steps.submodules.outputs.state }}'
 
+      # The user-mode engine (Release) in the test process, on image files.
+      - name: Unit tests (x64)
+        run: scripts\test-usermode.ps1 -Architecture x64 -Configuration Release
+
+      - name: Upload x64 unit test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results-x64-${{ steps.version.outputs.version }}
+          path: out/test-results/usermode-x64-release
+          if-no-files-found: ignore
+
+      # The ARM64 engine for unit-tests-arm64, which cannot run it here.
+      - name: Upload ARM64 unit test engine
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.arm64-unit-tests }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-engine-arm64-${{ steps.version.outputs.version }}
+          path: out/openzfs-write-release-arm64/zfs-um-test/ZfsUserModeTest.dll
+          if-no-files-found: error
+
       # Release file names are plain, Debug ones end in -debug; the test
       # certificate goes with every package.  MSIs are compressed already,
       # so the upload stores them as they are.
@@ -168,11 +198,12 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  # The x64 suites in the zfsTest VM, on the build's out\ (same runner and
-  # workspace, so this checkout must not clean).  On demand only.
-  test-x64:
+  # x64 VM integration tests in the zfsTest VM, on the build's out\ (same
+  # runner and workspace, so this checkout must not clean).  On demand only.
+  vm-integration-x64:
+    name: VM integration tests (x64)
     needs: build
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.tests }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.vm-integration-tests }}
     runs-on: [self-hosted, Windows, X64, zfswin-x64]
     timeout-minutes: 600
     defaults:
@@ -183,18 +214,19 @@ jobs:
         with:
           clean: false
 
-      - name: x64 user-mode suite
+      - name: x64 user-mode VM integration tests
         run: scripts\ci\Invoke-CiSuite.ps1 -Platform x64 -Edition usermode -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}
 
-      - name: x64 kernel suite
+      - name: x64 kernel VM integration tests
         if: ${{ !cancelled() }}
         run: scripts\ci\Invoke-CiSuite.ps1 -Platform x64 -Edition kernel -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}
 
-  # The ARM64 suites in the ZFSTestOnArm VM, on the ARM PC; in parallel
-  # with test-x64.  On demand only.
-  test-arm64:
+  # ARM64 VM integration tests in the ZFSTestOnArm VM, on the ARM PC; in
+  # parallel with vm-integration-x64.  On demand only.
+  vm-integration-arm64:
+    name: VM integration tests (ARM64)
     needs: build
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.tests }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.vm-integration-tests }}
     runs-on: [self-hosted, Windows, ARM64, zfswin-arm64]
     timeout-minutes: 300
     defaults:
@@ -218,9 +250,42 @@ jobs:
           Get-ChildItem artifact -Recurse -Filter *.msi | Copy-Item -Destination "out\release\$v"
           Get-ChildItem artifact -Recurse -Filter zfswindows-test.cer | Copy-Item -Destination "out\driver-package"
 
-      - name: ARM64 user-mode suite
+      - name: ARM64 user-mode VM integration tests
         run: scripts\ci\Invoke-CiSuite.ps1 -Platform arm64 -Edition usermode -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}
 
-      - name: ARM64 kernel suite
+      - name: ARM64 kernel VM integration tests
         if: ${{ !cancelled() }}
         run: scripts\ci\Invoke-CiSuite.ps1 -Platform arm64 -Edition kernel -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}
+
+  # The ARM64 unit tests on the ARM PC itself (no VM), with the engine the
+  # build job cross-compiled.  On demand only.
+  unit-tests-arm64:
+    name: Unit tests (ARM64)
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.arm64-unit-tests }}
+    runs-on: [self-hosted, Windows, ARM64, zfswin-arm64]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Download engine
+        uses: actions/download-artifact@v4
+        with:
+          name: unit-test-engine-arm64-${{ needs.build.outputs.version }}
+          path: out/openzfs-write-release-arm64/zfs-um-test
+
+      - name: Unit tests (ARM64)
+        run: scripts\test-usermode.ps1 -Architecture arm64 -Configuration Release
+
+      - name: Upload ARM64 unit test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results-arm64-${{ needs.build.outputs.version }}
+          path: out/test-results/usermode-arm64-release
+          if-no-files-found: ignore
