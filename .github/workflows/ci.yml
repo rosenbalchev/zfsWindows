@@ -6,10 +6,12 @@
 #   label zfswin-arm64: runs the ARM64 unit tests and VM integration tests
 #                       on the ARM PC
 # The x64 unit tests (the user-mode engine on image files, no VM) run on
-# every build.  The ARM64 unit tests and the VM integration tests are
-# disabled for pushes and pull requests: they run only on demand (Run
-# workflow with "Run the ARM64 unit tests" or "Run the VM integration
-# tests" ticked).
+# every build; their results are the build job's summary page.  Coverage
+# (an instrumented engine, its own job and summary page, the HTML report as
+# an artifact) runs on every push to master and on demand.  The ARM64 unit
+# tests and the VM integration tests are disabled for pushes and pull
+# requests: they run only on demand (Run workflow with "Run the ARM64 unit
+# tests" or "Run the VM integration tests" ticked).
 name: CI
 
 on:
@@ -29,6 +31,10 @@ on:
         default: false
       arm64-unit-tests:
         description: Run the ARM64 unit tests after the build
+        type: boolean
+        default: false
+      coverage:
+        description: Measure the unit tests' code coverage after the build
         type: boolean
         default: false
       clean:
@@ -63,7 +69,7 @@ jobs:
     steps:
       # Submodules in the "Submodules" step: checkout would force them back
       # to the pinned commit every run.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           clean: false
 
@@ -115,10 +121,12 @@ jobs:
       - name: WinFsp SDK
         run: scripts\fetch-winfsp.ps1
 
-      # No ICE validation in CI (numbered releases keep it).
+      # No ICE validation in CI (numbered releases keep it).  An array, not
+      # "Release,Debug": the step runs the script with -Command, where
+      # ValidateSet sees the joined string before the script splits it.
       - name: Build
         run: |
-          $configurations = if ('${{ github.event_name }}' -eq 'pull_request') { "Release" } else { "Release,Debug" }
+          $configurations = if ('${{ github.event_name }}' -eq 'pull_request') { @("Release") } else { @("Release", "Debug") }
           scripts\build-release.ps1 -NoIncrement -BuildDriver -NoValidation -Configuration $configurations
 
       - name: Record submodule state
@@ -130,7 +138,7 @@ jobs:
 
       - name: Upload x64 unit test results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: unit-test-results-x64-${{ steps.version.outputs.version }}
           path: out/test-results/usermode-x64-release
@@ -139,7 +147,7 @@ jobs:
       # The ARM64 engine for unit-tests-arm64, which cannot run it here.
       - name: Upload ARM64 unit test engine
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.arm64-unit-tests }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: unit-test-engine-arm64-${{ steps.version.outputs.version }}
           path: out/openzfs-write-release-arm64/zfs-um-test/ZfsUserModeTest.dll
@@ -149,7 +157,7 @@ jobs:
       # certificate goes with every package.  MSIs are compressed already,
       # so the upload stores them as they are.
       - name: Upload x64 Release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-release
           path: |
@@ -162,7 +170,7 @@ jobs:
 
       - name: Upload x64 Debug
         if: ${{ github.event_name != 'pull_request' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-debug
           path: |
@@ -174,7 +182,7 @@ jobs:
           compression-level: 0
 
       - name: Upload ARM64 Release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-release
           path: |
@@ -187,7 +195,7 @@ jobs:
 
       - name: Upload ARM64 Debug
         if: ${{ github.event_name != 'pull_request' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-debug
           path: |
@@ -210,7 +218,7 @@ jobs:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           clean: false
 
@@ -233,12 +241,12 @@ jobs:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           clean: true
 
       - name: Download packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: OpenZFS-for-Windows-${{ needs.build.outputs.version }}-arm64-${{ inputs.configuration == 'Debug' && 'debug' || 'release' }}
           path: artifact
@@ -269,12 +277,12 @@ jobs:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           clean: true
 
       - name: Download engine
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: unit-test-engine-arm64-${{ needs.build.outputs.version }}
           path: out/openzfs-write-release-arm64/zfs-um-test
@@ -284,8 +292,41 @@ jobs:
 
       - name: Upload ARM64 unit test results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: unit-test-results-arm64-${{ needs.build.outputs.version }}
           path: out/test-results/usermode-arm64-release
+          if-no-files-found: ignore
+
+  # Unit test coverage: the engine built instrumented (clang source-based
+  # coverage, out\openzfs-write-coverage, never packaged), the unit tests on
+  # it, the summary as this job's summary page and the HTML report as the
+  # coverage-html artifact.  Same runner and workspace as build, so this
+  # checkout must not clean.  On every push to master and on demand.
+  coverage:
+    name: Coverage (x64)
+    needs: build
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.coverage) }}
+    runs-on: [self-hosted, Windows, X64, zfswin-x64]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          clean: false
+
+      - name: Instrumented engine
+        run: scripts\build-write-core.ps1 -Targets zfs-um-test -Architecture x64 -Configuration Release -Coverage
+
+      - name: Unit tests with coverage
+        run: scripts\test-usermode.ps1 -Coverage
+
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-html-${{ needs.build.outputs.version }}
+          path: out/coverage/html
           if-no-files-found: ignore

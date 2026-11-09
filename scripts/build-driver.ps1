@@ -54,13 +54,16 @@ $ninja = Join-Path $vs "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja
 $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
 
+# Upstream's warnings off, its generated code unchanged (cmake\OpenZfsQuietUpstream.cmake).
+$quiet = (Join-Path $root "cmake\OpenZfsQuietUpstream.cmake") -replace '\\', '/'
+
 & (Join-Path $PSScriptRoot "apply-openzfs-patches.ps1")
 New-Item -ItemType Directory -Force -Path (Join-Path $openZfs "out\build") | Out-Null
 
 $commands = @(
     'set "PATH={0};C:\Program Files\LLVM\bin;%PATH%"' -f (Split-Path -Parent $vswhere)
     'call "{0}" -arch={1} -host_arch=x64' -f $devShell, $Architecture
-    '"{0}" -S "{1}" -B "{2}" -G Ninja -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} {5}' -f $cmake, $openZfs, $build, $ninja, $Configuration, $cmakeArch
+    '"{0}" -S "{1}" -B "{2}" -G Ninja -Wno-dev -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} {5} -DCMAKE_PROJECT_INCLUDE="{6}"' -f $cmake, $openZfs, $build, $ninja, $Configuration, $cmakeArch, $quiet
     '"{0}" --build "{1}" --target {2} --parallel 8' -f $cmake, $build, ($targets -join ' ')
 ) -join ' && '
 & cmd.exe /d /s /c $commands
