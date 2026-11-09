@@ -52,9 +52,10 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # Submodules in the "Submodules" step: checkout would force them back
+      # to the pinned commit every run.
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
           clean: false
 
       # Everything but out\, whose Ninja build trees make the compile
@@ -67,10 +68,28 @@ jobs:
           $drop = if ('${{ inputs.clean }}' -eq 'true') { @("out") } else { @("out\release", "out\installer-payload", "out\installer-build") }
           foreach ($d in $drop) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
 
-      # The previous run's applied patches (and the files they add) stay in
-      # the submodules.
-      - name: Clean submodules
-        run: git submodule foreach --recursive "git reset -q --hard; git clean -qffdx"
+      # The patches touch headers nearly every driver file includes
+      # (isa_defs.h), so re-applying them recompiles the whole driver.  The
+      # submodules are reset (and the patches re-applied by the build) only
+      # when the pinned commits or the patches differ from the last
+      # successful build's, recorded in out\ci-submodules.stamp.
+      - name: Submodules
+        id: submodules
+        run: |
+          $state = (@(git ls-tree -r HEAD | Where-Object { $_ -like "160000 *" }) +
+              @(Get-ChildItem patches -Recurse -File | Sort-Object FullName | Get-FileHash | ForEach-Object Hash)) -join "`n"
+          $hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($state))) -replace '-'
+          $stamp = "out\ci-submodules.stamp"
+          if ((Test-Path $stamp) -and (Get-Content $stamp -Raw).Trim() -eq $hash) {
+              Write-Host "Submodules and patches unchanged: kept as patched."
+          } else {
+              if (Test-Path $stamp) { Remove-Item $stamp }
+              git submodule foreach --recursive "git reset -q --hard; git clean -qffdx"
+          }
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth 1
+          if ($LASTEXITCODE -ne 0) { throw "git submodule update failed." }
+          "state=$hash" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
 
       # Every run its own version: the committed build number plus the run
       # number, written to the workspace only (the next checkout resets it).
@@ -92,6 +111,9 @@ jobs:
         run: |
           $configurations = if ('${{ github.event_name }}' -eq 'pull_request') { "Release" } else { "Release,Debug" }
           scripts\build-release.ps1 -NoIncrement -BuildDriver -NoValidation -Configuration $configurations
+
+      - name: Record submodule state
+        run: Set-Content -Encoding ascii out\ci-submodules.stamp '${{ steps.submodules.outputs.state }}'
 
       # Release file names are plain, Debug ones end in -debug; the test
       # certificate goes with every package.  MSIs are compressed already,

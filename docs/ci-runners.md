@@ -29,6 +29,10 @@ by hand with `scripts\build-release.ps1`.
 To keep the build short:
 - `out\` stays in the runner's workspace between runs, so Ninja rebuilds
   only what changed. *Run workflow* with *Clean build* ticked discards it.
+- The submodules stay patched between runs: they are reset (and the patches
+  re-applied) only when their pinned commits or `patches/` change, since the
+  patched headers would otherwise recompile the whole driver
+  (`out\ci-submodules.stamp`).
 - The MSIs skip the ICE validation (`build-release.ps1 -NoValidation`).
 - Packages: Debug MSIs carry the PDBs, Release MSIs have none, and both
   use fast compression (mszip; "high" is several times slower for about
