@@ -94,7 +94,8 @@ jobs:
           scripts\build-release.ps1 -NoIncrement -BuildDriver -NoValidation -Configuration $configurations
 
       # Release file names are plain, Debug ones end in -debug; the test
-      # certificate goes with every package.
+      # certificate goes with every package.  MSIs are compressed already,
+      # so the upload stores them as they are.
       - name: Upload x64 Release
         uses: actions/upload-artifact@v4
         with:
@@ -105,6 +106,7 @@ jobs:
             out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64.cdx.json
             out/release/${{ steps.version.outputs.version }}/zfswindows-test.cer
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload x64 Debug
         if: ${{ github.event_name != 'pull_request' }}
@@ -117,6 +119,7 @@ jobs:
             out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-debug.cdx.json
             out/release/${{ steps.version.outputs.version }}/zfswindows-test.cer
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload ARM64 Release
         uses: actions/upload-artifact@v4
@@ -128,6 +131,7 @@ jobs:
             out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64.cdx.json
             out/release/${{ steps.version.outputs.version }}/zfswindows-test.cer
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload ARM64 Debug
         if: ${{ github.event_name != 'pull_request' }}
@@ -140,6 +144,7 @@ jobs:
             out/release/${{ steps.version.outputs.version }}/OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-debug.cdx.json
             out/release/${{ steps.version.outputs.version }}/zfswindows-test.cer
           if-no-files-found: error
+          compression-level: 0
 
   # The x64 suites in the zfsTest VM, on the build's out\ (same runner and
   # workspace, so this checkout must not clean).  On demand only.
