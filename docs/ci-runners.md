@@ -2,17 +2,26 @@
 
 `.github/workflows/ci.yml` runs on every push to `master`, on every pull
 request, and on demand (Actions → CI → Run workflow, with Release or Debug
-packages and an option to skip the VM suites). It has three jobs:
+packages under test). The x64 unit tests run in every build. The ARM64
+unit tests and the VM integration tests are disabled for pushes and pull
+requests: they run only on demand, with *Run the ARM64 unit tests* or *Run
+the VM integration tests* ticked. It has four jobs:
 
 | Job | Runner label | What it does |
 | --- | --- | --- |
-| `build` | `zfswin-x64` | Driver, user-mode engine, admin suite and the four MSIs (x64/ARM64 × kernel/user mode) in Release and Debug; uploads the packages as the artifact `zfswin-<version>-<commit>` |
-| `test-x64` | `zfswin-x64` | `Test-UserModeInVm.ps1`, then `Test-InstallerInVm.ps1`, in the `zfsTest` VM |
-| `test-arm64` | `zfswin-arm64` | `host-usermode-suite.ps1`, then `host-kernel-suite.ps1`, in the `ZFSTestOnArm` VM (in parallel with `test-x64`) |
+| `build` | `zfswin-x64` | Driver, user-mode engine, admin suite and the four MSIs (x64/ARM64 × kernel/user mode) in Release and Debug (Release only for a pull request); uploads an artifact per architecture and configuration, `OpenZFS-for-Windows-<version>-<x64\|arm64>-<release\|debug>`, each with the kernel and user-mode MSIs, the SBOM and the test certificate; then the x64 unit tests (`scripts/test-usermode.ps1`: the Release user-mode engine in the test process on image files, no VM), results as `unit-test-results-x64-<version>` |
+| `unit-tests-arm64` | `zfswin-arm64` | The same unit tests on the ARM PC itself, no VM, with the ARM64 engine the build cross-compiled |
+| `vm-integration-x64` | `zfswin-x64` | `Test-UserModeInVm.ps1`, then `Test-InstallerInVm.ps1`, in the `zfsTest` VM |
+| `vm-integration-arm64` | `zfswin-arm64` | `host-usermode-suite.ps1`, then `host-kernel-suite.ps1`, in the `ZFSTestOnArm` VM (in parallel with `vm-integration-x64`) |
 
 GitHub-hosted runners cannot do any of this: they have no WDK and test-signing
 certificate, and no Hyper-V for the test VMs. So both jobs run on our own
 machines: the x64 PC (build and x64 VM) and the ARM PC (ARM64 VM).
+
+The unit tests' Linux reference-image checks (`LinuxImageTests`, two 5 GiB
+pools hashed in full, about 2.5 minutes) are skipped in CI: the checkout
+has no `TestVolumes\`. To run them in the build job, set
+`ZFSWIN_LINUX_IMAGES` to `%ZFSWIN_CI_DATA%\TestVolumes` for that step.
 
 A suite job fails only on a **new** failure. The checks every run reports
 (the upstream ACL and snapshot gaps, and so on) are listed in
@@ -20,9 +29,23 @@ A suite job fails only on a **new** failure. The checks every run reports
 against it and writes a summary to the job page. Remove a line there once
 that check passes.
 
-CI builds keep the version in `build/BUILD_NUMBER` (`build-release.ps1
--NoIncrement`); numbered releases are still made by hand with
-`scripts\build-release.ps1`.
+Every CI run gets its own version: build number = the committed
+`build/BUILD_NUMBER` + the run number (`github.run_number`), written to the
+runner's workspace only, never committed. Numbered releases are still made
+by hand with `scripts\build-release.ps1`.
+
+To keep the build short:
+- `out\` stays in the runner's workspace between runs, so Ninja rebuilds
+  only what changed. *Run workflow* with *Clean build* ticked discards it.
+- The submodules stay patched between runs: they are reset (and the patches
+  re-applied) only when their pinned commits or `patches/` change, since the
+  patched headers would otherwise recompile the whole driver
+  (`out\ci-submodules.stamp`).
+- The MSIs skip the ICE validation (`build-release.ps1 -NoValidation`).
+- Packages: Debug MSIs carry the PDBs, Release MSIs have none, and both
+  use fast compression (mszip; "high" is several times slower for about
+  20% smaller packages). This is set in the `.wixproj` files, so it applies
+  to hand-made releases too.
 
 ## 1. The x64 PC (label `zfswin-x64`)
 
@@ -39,9 +62,10 @@ and ARM64 C++ tools, the WDK, the .NET SDK, WiX, CMake, Git) and the
    | `out\dotnet-runtime\` | `out\dotnet-runtime\` |
    | `out\driver-tools\` | `out\driver-tools\` |
    | `out\release\1.0.65000\` (the upgrade test package) | `out\release\1.0.65000\` |
+   | `out\vcpkg-openssl\installed\arm64-windows-static\` (ARM64 OpenSSL for the build) | `out\vcpkg-openssl\installed\arm64-windows-static\` |
 
    ```powershell
-   foreach ($p in "TestVolumes", "out\dotnet-runtime", "out\driver-tools", "out\release\1.0.65000") {
+   foreach ($p in "TestVolumes", "out\dotnet-runtime", "out\driver-tools", "out\release\1.0.65000", "out\vcpkg-openssl\installed\arm64-windows-static") {
        robocopy "D:\Projects\zfsWindows\$p" "D:\zfswin-ci\$p" /E
    }
    ```
@@ -80,7 +104,7 @@ and ARM64 C++ tools, the WDK, the .NET SDK, WiX, CMake, Git) and the
    New-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem -Name LongPathsEnabled -Value 1 -PropertyType DWord -Force
    ```
 
-5. **Do not use the `zfsTest` VM by hand while a `test-x64` job runs**: every
+5. **Do not use the `zfsTest` VM by hand while a `vm-integration-x64` job runs**: every
    suite restores its checkpoints.
 
 ## 2. The ARM PC (label `zfswin-arm64`)
@@ -90,8 +114,11 @@ WinFsp and .NET installers in `C:\zfswin-arm\stage` are already there from
 the manual ARM runs; the job uses the same folder.
 
 1. **Git for Windows (ARM64)** from https://git-scm.com/download/win; the
-   checkout action needs it. Nothing else: the job only runs PowerShell
-   scripts and Hyper-V.
+   checkout action needs it. The VM integration tests need nothing else:
+   they only run PowerShell scripts and Hyper-V. The unit tests
+   (`unit-tests-arm64`) also need the **.NET 10 SDK (ARM64)**, from
+   https://dotnet.microsoft.com/download/dotnet/10.0, to build and run the
+   test project.
 
 2. **Data folder** `C:\zfswin-arm\ci` with one file, `ZFSTestOnArm.json`:
 
@@ -126,9 +153,9 @@ the manual ARM runs; the job uses the same folder.
 
 ## 3. Check it
 
-Actions → CI → *Run workflow* on the branch, with *Run the VM suites* off:
+Actions → CI → *Run workflow* on the branch, with *Run the VM integration tests* off:
 only `build` runs, and the artifact appears on the run's page. Then run it
-again with the suites on.
+again with the VM integration tests on.
 
 Both runners must show as *Idle* under Settings → Actions → Runners. A job
 waits ("Waiting for a runner to pick up this job") while its machine is

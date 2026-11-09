@@ -36,7 +36,7 @@
     <SummaryInformation Description="OpenZFS for Windows $(var.Version), user mode: ZFS datasets as Windows volumes through WinFsp" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of OpenZFS for Windows (user mode) is already installed." />
-    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="$(var.Compression)" />
 
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/winfsp/winfsp" />
     <Property Id="ARPCOMMENTS" Value="OpenZFS in user mode, through WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos" />
@@ -154,9 +154,12 @@
       <Files Include="$(var.Payload)\licenses\**" />
     </ComponentGroup>
 
+    <!-- PDBs in the Debug package only, as in the kernel package. -->
+<?if $(var.Symbols) = "yes" ?>
     <ComponentGroup Id="Symbols" Directory="SYMBOLSFOLDER">
       <Files Include="$(var.Payload)\symbols\**" />
     </ComponentGroup>
+<?endif?>
 
     <ComponentGroup Id="PowerShellModule" Directory="PSMODULEFOLDER">
       <Files Include="$(var.Payload)\ZfsWin\**" />
@@ -166,7 +169,9 @@
       <ComponentGroupRef Id="Service" />
       <ComponentGroupRef Id="PowerShellModule" />
       <ComponentGroupRef Id="Licenses" />
+<?if $(var.Symbols) = "yes" ?>
       <ComponentGroupRef Id="Symbols" />
+<?endif?>
       <ComponentGroupRef Id="ReadMe" />
       <ComponentGroupRef Id="Shortcuts" />
     </Feature>
