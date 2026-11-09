@@ -5,13 +5,12 @@
   <PropertyGroup>
     <OutputName>OpenZFS-for-Windows-$(ZfsWinVersion)-$(Platform)-usermode</OutputName>
     <Payload Condition="'$(Payload)' == ''">..\..\out\installer-payload\usermode-$(Platform)</Payload>
-    <!-- As in the kernel package: Debug installs the PDBs and compresses
-         fast (mszip); Release has no PDBs and compresses best (high). -->
+    <!-- As in the kernel package: Debug installs the PDBs, Release has
+         none; both compress with mszip. -->
     <PackageConfiguration Condition="'$(PackageConfiguration)' == ''">Debug</PackageConfiguration>
     <Symbols Condition="'$(PackageConfiguration)' == 'Debug'">yes</Symbols>
     <Symbols Condition="'$(PackageConfiguration)' != 'Debug'">no</Symbols>
-    <Compression Condition="'$(PackageConfiguration)' == 'Debug'">mszip</Compression>
-    <Compression Condition="'$(PackageConfiguration)' != 'Debug'">high</Compression>
+    <Compression Condition="'$(Compression)' == ''">mszip</Compression>
     <DefineConstants>Version=$(ZfsWinVersion);Payload=$(Payload);Symbols=$(Symbols);Compression=$(Compression)</DefineConstants>
     <!-- ICE03: the upstream zpool/zfs version resources use LANGID 0x4009,
          which ICE03 does not accept (as in the kernel package).

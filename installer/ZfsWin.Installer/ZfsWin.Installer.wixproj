@@ -6,13 +6,12 @@
     <OutputName>OpenZFS-for-Windows-$(ZfsWinVersion)-$(Platform)</OutputName>
     <Payload Condition="'$(Payload)' == ''">..\..\out\installer-payload\$(Platform)</Payload>
     <!-- The native build packaged (build-installer.ps1 -Configuration).
-         Debug: PDBs installed, fast compression (mszip); Release: no PDBs,
-         the smallest package (high). -->
+         Debug installs the PDBs; Release leaves them out.  Both compress
+         with mszip: several times faster than high, about 20% larger. -->
     <PackageConfiguration Condition="'$(PackageConfiguration)' == ''">Debug</PackageConfiguration>
     <Symbols Condition="'$(PackageConfiguration)' == 'Debug'">yes</Symbols>
     <Symbols Condition="'$(PackageConfiguration)' != 'Debug'">no</Symbols>
-    <Compression Condition="'$(PackageConfiguration)' == 'Debug'">mszip</Compression>
-    <Compression Condition="'$(PackageConfiguration)' != 'Debug'">high</Compression>
+    <Compression Condition="'$(Compression)' == ''">mszip</Compression>
     <DefineConstants>Version=$(ZfsWinVersion);Payload=$(Payload);TestSigningThumbprint=$(TestSigningThumbprint);Symbols=$(Symbols);Compression=$(Compression)</DefineConstants>
     <!-- ICE03: the upstream tools' version resources use LANGID 0x4009, which
          ICE03 does not accept; step 17 stamps real version resources.

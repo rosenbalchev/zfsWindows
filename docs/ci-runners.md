@@ -30,10 +30,10 @@ To keep the build short:
 - `out\` stays in the runner's workspace between runs, so Ninja rebuilds
   only what changed. *Run workflow* with *Clean build* ticked discards it.
 - The MSIs skip the ICE validation (`build-release.ps1 -NoValidation`).
-- Packages: Debug MSIs carry the PDBs and use fast compression (mszip);
-  Release MSIs have no PDBs and the best compression (high). This is set in
-  the `.wixproj` files from the packaged configuration, so it applies to
-  hand-made releases too.
+- Packages: Debug MSIs carry the PDBs, Release MSIs have none, and both
+  use fast compression (mszip; "high" is several times slower for about
+  20% smaller packages). This is set in the `.wixproj` files, so it applies
+  to hand-made releases too.
 
 ## 1. The x64 PC (label `zfswin-x64`)
 
