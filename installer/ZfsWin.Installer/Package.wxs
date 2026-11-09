@@ -35,7 +35,7 @@
          which Windows Installer rejects: error 2613.) -->
     <MajorUpgrade Schedule="afterInstallExecute"
                   DowngradeErrorMessage="A newer version of OpenZFS for Windows is already installed." />
-    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="$(var.Compression)" />
 
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/openzfsonwindows/openzfs" />
     <Property Id="ARPCOMMENTS" Value="OpenZFS file system driver and administration tools" />
@@ -164,11 +164,14 @@
       <Files Include="$(var.Payload)\licenses\**" />
     </ComponentGroup>
 
-    <!-- Symbols policy: PDBs for the shipped binaries are installed so crash
-         dumps from users can be analysed; they contain no secrets. -->
+    <!-- Symbols policy: the Debug package installs the PDBs for the shipped
+         binaries so crash dumps can be analysed (they contain no secrets);
+         the Release package leaves them out (three quarters of its size). -->
+<?if $(var.Symbols) = "yes" ?>
     <ComponentGroup Id="Symbols" Directory="SYMBOLSFOLDER">
       <Files Include="$(var.Payload)\symbols\**" />
     </ComponentGroup>
+<?endif?>
 
     <ComponentGroup Id="PowerShellModule" Directory="PSMODULEFOLDER">
       <Files Include="$(var.Payload)\ZfsWin\**" />
@@ -178,7 +181,9 @@
       <ComponentGroupRef Id="Tools" />
       <ComponentGroupRef Id="Driver" />
       <ComponentGroupRef Id="Licenses" />
+<?if $(var.Symbols) = "yes" ?>
       <ComponentGroupRef Id="Symbols" />
+<?endif?>
       <ComponentGroupRef Id="PowerShellModule" />
       <ComponentGroupRef Id="ReadMe" />
       <ComponentGroupRef Id="Shortcuts" />

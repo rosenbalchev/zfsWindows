@@ -31,7 +31,9 @@ param(
     # with full checks (file names end in -debug).  The .NET tools are
     # Release builds in both.
     [ValidateSet("Debug", "Release")]
-    [string[]]$Configuration = @("Release", "Debug")
+    [string[]]$Configuration = @("Release", "Debug"),
+    # Skips the MSIs' ICE validation (CI); numbered releases keep it.
+    [switch]$NoValidation
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,8 +64,9 @@ foreach ($config in $Configuration) {
     foreach ($arch in $Architecture) {
         if ($BuildDriver) { Step "driver ($arch, $config)" { Run "build-driver.ps1" @("-Architecture", $arch, "-Configuration", $config) } }
         Step "user-mode file system ($arch, $config)" { Run "build-write-core.ps1" @("-Targets", "zfs-write-core,zfswin-um", "-Architecture", $arch, "-Configuration", $config) }
-        Step "kernel-driver MSI ($arch, $config)" { Run "build-installer.ps1" @("-Architecture", $arch, "-Variant", "kernel", "-Configuration", $config) }
-        Step "user-mode MSI ($arch, $config)" { Run "build-installer.ps1" @("-Architecture", $arch, "-Variant", "usermode", "-Configuration", $config) }
+        $validation = @(if ($NoValidation) { "-NoValidation" })
+        Step "kernel-driver MSI ($arch, $config)" { Run "build-installer.ps1" (@("-Architecture", $arch, "-Variant", "kernel", "-Configuration", $config) + $validation) }
+        Step "user-mode MSI ($arch, $config)" { Run "build-installer.ps1" (@("-Architecture", $arch, "-Variant", "usermode", "-Configuration", $config) + $validation) }
     }
 }
 
