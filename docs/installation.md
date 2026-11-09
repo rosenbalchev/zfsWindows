@@ -162,7 +162,7 @@ It installs the following:
 | `zfswin.exe`, `ZfsWinBroker.exe`, `zpool.exe`, `zfs.exe`, `zdb.exe`, `kstat.exe`, `zfsinstaller.exe` | `%ProgramFiles%\OpenZFS for Windows\bin`, added to the system `PATH` |
 | The **ZfsWinBroker** service (automatic start, LocalSystem, restricted privileges, restarts on failure) | Service Control Manager |
 | The `ZfsWin` PowerShell module | `%ProgramFiles%\WindowsPowerShell\Modules\ZfsWin\<version>` |
-| Licenses, `VERSION.json` and symbols (PDBs, for crash-dump analysis) | `licenses`, `symbols` under the install folder |
+| Licenses, `VERSION.json`, and (Debug packages only) symbols (PDBs, for crash-dump analysis) | `licenses`, `symbols` under the install folder |
 | The event source `ZfsWinBroker` | Application log |
 
 Setup never deletes, formats or rewrites pool data. That includes install,
@@ -248,7 +248,8 @@ a disk, mounting it at a drive letter or folder, and having it mount at boot.
 - `ZfsWinBroker.exe --console`, from an elevated prompt with the service
   stopped, runs the broker in the foreground and prints each command.
 - Driver installation: `%WINDIR%\INF\setupapi.dev.log`. Driver crashes:
-  `%WINDIR%\MEMORY.DMP`, analysed with the PDBs in the `symbols` folder.
+  `%WINDIR%\MEMORY.DMP`, analysed with the PDBs in the `symbols` folder
+  (installed by the Debug packages; Release packages ship without them).
 
 ## Recovery
 

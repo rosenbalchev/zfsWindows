@@ -36,3 +36,5 @@ add_subdirectory("${ZFSWINDOWS_ROOT}/src/native/ZfsWriteCore"
     "${CMAKE_BINARY_DIR}/zfs-write-core")
 add_subdirectory("${ZFSWINDOWS_ROOT}/src/native/ZfsWinFsp"
     "${CMAKE_BINARY_DIR}/zfswin-um")
+add_subdirectory("${ZFSWINDOWS_ROOT}/src/native/ZfsUserModeTest"
+    "${CMAKE_BINARY_DIR}/zfs-um-test")
