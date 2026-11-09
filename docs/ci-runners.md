@@ -58,6 +58,11 @@ To keep the build short:
   patched headers would otherwise recompile the whole driver
   (`out\ci-submodules.stamp`).
 - The MSIs skip the ICE validation (`build-release.ps1 -NoValidation`).
+- The combinations build side by side (`build-release.ps1 -Parallel`, see
+  `docs/building.md`): the administration suite and one lane per
+  architecture and configuration, then all MSIs. The Build step's output
+  has one group per lane; a failed build uploads `out\logs` as
+  `build-logs-<version>`.
 - Packages: Debug MSIs carry the PDBs, Release MSIs have none, and both
   use fast compression (mszip; "high" is several times slower for about
   20% smaller packages). This is set in the `.wixproj` files, so it applies

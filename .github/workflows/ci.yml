@@ -87,7 +87,7 @@ jobs:
         run: |
           git reset -q --hard
           git clean -qffdx -e /out/
-          $drop = if ('${{ inputs.clean }}' -eq 'true') { @("out") } else { @("out\release", "out\installer-payload", "out\installer-build") }
+          $drop = if ('${{ inputs.clean }}' -eq 'true') { @("out") } else { @("out\release", "out\installer-payload", "out\installer-build", "out\logs") }
           foreach ($d in $drop) { if (Test-Path $d) { Remove-Item -Recurse -Force $d } }
 
       # The patches touch headers nearly every driver file includes
@@ -143,11 +143,21 @@ jobs:
 
       # No ICE validation in CI.  An array, not "Release,Debug": the step
       # runs the script with -Command, where ValidateSet sees the joined
-      # string before the script splits it.
+      # string before the script splits it.  -Parallel: one lane per
+      # architecture and configuration, their logs grouped in the step's
+      # output and kept in out\logs.
       - name: Build
         run: |
           $configurations = '${{ steps.plan.outputs.configurations }}' -split ','
-          scripts\build-release.ps1 -NoIncrement -BuildDriver -NoValidation -Configuration $configurations
+          scripts\build-release.ps1 -NoIncrement -BuildDriver -NoValidation -Parallel -Configuration $configurations
+
+      - name: Upload build logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: build-logs-${{ steps.version.outputs.version }}
+          path: out/logs
+          if-no-files-found: ignore
 
       - name: Record submodule state
         run: Set-Content -Encoding ascii out\ci-submodules.stamp '${{ steps.submodules.outputs.state }}'

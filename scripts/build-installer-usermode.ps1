@@ -20,7 +20,9 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Debug",
     # Skips the ICE checks (build-installer.ps1 -NoValidation).
-    [switch]$NoValidation
+    [switch]$NoValidation,
+    # No restore and no SHA256SUMS.txt (build-installer.ps1 -ParallelLane).
+    [switch]$ParallelLane
 )
 
 $ErrorActionPreference = "Stop"
@@ -94,7 +96,8 @@ foreach ($script in Get-ChildItem (Join-Path $payload "ZfsWin") -Include *.psm1,
 
 $wixproj = Join-Path $root "installer\ZfsWin.UserMode\ZfsWin.UserMode.wixproj"
 $bin = Join-Path $root "out\installer-build\usermode-$Architecture-$($Configuration.ToLowerInvariant())"
-& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:ZfsWinVersion=$Version" "-p:PackageConfiguration=$Configuration" "-p:SuppressValidation=$([bool]$NoValidation)" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
+$restore = @(if ($ParallelLane) { "--no-restore" })
+& dotnet build $wixproj -c Release @restore "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:ZfsWinVersion=$Version" "-p:PackageConfiguration=$Configuration" "-p:SuppressValidation=$([bool]$NoValidation)" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
 if ($LASTEXITCODE -ne 0) { throw "WiX build failed." }
 New-Item -ItemType Directory -Force $release | Out-Null
 $msi = Join-Path $release "OpenZFS-for-Windows-$Version-$Architecture-usermode$tag.msi"
@@ -102,7 +105,9 @@ Copy-Item (Join-Path $bin "OpenZFS-for-Windows-$Version-$Architecture-usermode.m
 & $signtool sign /q /fd sha256 /sha1 $cert.Thumbprint /d "OpenZFS for Windows $Version (user mode)" $msi
 if ($LASTEXITCODE -ne 0) { throw "signtool failed for the MSI" }
 
-Get-ChildItem $release -File | Where-Object Name -ne "SHA256SUMS.txt" | ForEach-Object {
-    "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
-} | Set-Content -Encoding ascii (Join-Path $release "SHA256SUMS.txt")
+if (-not $ParallelLane) {
+    Get-ChildItem $release -File | Where-Object Name -ne "SHA256SUMS.txt" | ForEach-Object {
+        "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+    } | Set-Content -Encoding ascii (Join-Path $release "SHA256SUMS.txt")
+}
 Write-Output $msi

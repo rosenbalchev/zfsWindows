@@ -13,7 +13,11 @@ param(
     # Clang source-based coverage (-fprofile-instr-generate
     # -fcoverage-mapping) in a tree of its own, out\openzfs-write-coverage,
     # for scripts\test-usermode.ps1 -Coverage.  x64 only; never packaged.
-    [switch]$Coverage
+    [switch]$Coverage,
+    # Ninja jobs (build-driver.ps1 -Jobs).
+    [int]$Jobs = 8,
+    # Patches and configure (when needed) only (build-driver.ps1 -ConfigureOnly).
+    [switch]$ConfigureOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,6 +77,8 @@ $configure = '"{0}" -S "{1}" -B "{2}" -G Ninja -Wno-dev -DCMAKE_MAKE_PROGRAM="{3
 # written at configure time too.
 $configureKey = $configure + "`nopenzfs-windows " + (& git -C $openZfs rev-parse HEAD).Trim() + "`nZFSWIN_VERSION=$env:ZFSWIN_VERSION"
 $configureStamp = Join-Path $BuildDirectory "zfswin-configure.txt"
+$needsConfigure = -not (Test-Path (Join-Path $BuildDirectory "build.ninja")) -or -not (Test-Path $configureStamp) -or
+    (Get-Content $configureStamp -Raw).Trim() -ne $configureKey
 $commands = @(
     # VsDevCmd resolves vswhere.exe from PATH, which a bare cmd.exe may lack.
     'set "PATH={0};%PATH%"' -f (Split-Path -Parent $vswhere)
@@ -80,14 +86,15 @@ $commands = @(
     'set "PATH=C:\Program Files\LLVM\bin;%PATH%"'
     # Configure only for a new tree or a changed command line (as in
     # build-driver.ps1); Ninja re-runs CMake itself when a CMakeLists.txt changes.
-    if (-not (Test-Path (Join-Path $BuildDirectory "build.ninja")) -or -not (Test-Path $configureStamp) -or
-        (Get-Content $configureStamp -Raw).Trim() -ne $configureKey) { $configure }
-    '"{0}" --build "{1}" --target {2} --parallel 8' -f $cmake, $BuildDirectory, ($Targets -join ' ')
+    if ($needsConfigure) { $configure }
+    if (-not $ConfigureOnly) { '"{0}" --build "{1}" --target {2} --parallel {3}' -f $cmake, $BuildDirectory, ($Targets -join ' '), $Jobs }
 ) -join ' && '
+if ($ConfigureOnly -and -not $needsConfigure) { return }
 
 & cmd.exe /d /s /c $commands
 if ($LASTEXITCODE -ne 0) { throw "OpenZFS write-core build failed with exit code $LASTEXITCODE." }
 Set-Content -Encoding ascii $configureStamp $configureKey
+if ($ConfigureOnly) { return }
 
 if ($Targets -contains "zfs-write-core") {
     $binary = Join-Path $BuildDirectory "zfs-write-core\zfs-write-core.exe"

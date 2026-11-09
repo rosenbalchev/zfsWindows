@@ -34,7 +34,11 @@ param(
     [string]$Configuration = "Debug",
     # Skips Windows Installer validation (the ICE checks) for a faster CI
     # build; numbered releases keep it.
-    [switch]$NoValidation
+    [switch]$NoValidation,
+    # Run by build-release.ps1 -Parallel beside the other MSIs: the WiX
+    # projects are restored already, and out\release\<version> is shared, so
+    # the certificate copy and the checksums are left to build-release.ps1.
+    [switch]$ParallelLane
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,7 +53,7 @@ $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\si
     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
 
 if ($Variant -eq "usermode") {
-    & (Join-Path $PSScriptRoot "build-installer-usermode.ps1") -Architecture $Architecture -Version $version -Configuration $Configuration -NoValidation:$NoValidation
+    & (Join-Path $PSScriptRoot "build-installer-usermode.ps1") -Architecture $Architecture -Version $version -Configuration $Configuration -NoValidation:$NoValidation -ParallelLane:$ParallelLane
     return
 }
 
@@ -119,14 +123,15 @@ $wixproj = Join-Path $root "installer\ZfsWin.Installer\ZfsWin.Installer.wixproj"
 $bin = Join-Path $root "out\installer-build\$Architecture-$($Configuration.ToLowerInvariant())"
 # Its own intermediate folder per build: a shared obj\ makes WiX skip the
 # link step for the second configuration and then miss the MSI (MSB3030).
-& dotnet build $wixproj -c Release "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:TestSigningThumbprint=$($cert.Thumbprint)" "-p:ZfsWinVersion=$version" "-p:PackageConfiguration=$Configuration" "-p:SuppressValidation=$([bool]$NoValidation)" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
+$restore = @(if ($ParallelLane) { "--no-restore" })
+& dotnet build $wixproj -c Release @restore "-p:Platform=$Architecture" "-p:Payload=$payload" "-p:TestSigningThumbprint=$($cert.Thumbprint)" "-p:ZfsWinVersion=$version" "-p:PackageConfiguration=$Configuration" "-p:SuppressValidation=$([bool]$NoValidation)" "-p:OutputPath=$bin\" "-p:IntermediateOutputPath=$bin\obj\"
 if ($LASTEXITCODE -ne 0) { throw "WiX build failed." }
 New-Item -ItemType Directory -Force $release | Out-Null
 $msi = Join-Path $release "OpenZFS-for-Windows-$version-$Architecture-testsigned$tag.msi"
 Copy-Item (Join-Path $bin "OpenZFS-for-Windows-$version-$Architecture.msi") $msi -Force
 & $signtool sign /q /fd sha256 /sha1 $cert.Thumbprint /d "OpenZFS for Windows $version" $msi
 if ($LASTEXITCODE -ne 0) { throw "signtool failed for the MSI" }
-Copy-Item (Join-Path $driver "zfswindows-test.cer") $release -Force
+if (-not $ParallelLane) { Copy-Item (Join-Path $driver "zfswindows-test.cer") $release -Force }
 
 # --- checksums and SBOM ------------------------------------------------------------
 $components = foreach ($f in Get-ChildItem $payload -Recurse -File | Where-Object Extension -in ".exe", ".sys", ".cat", ".inf", ".psm1", ".psd1") {
@@ -150,8 +155,10 @@ $components += [ordered]@{ type = "framework"; name = ".NET NativeAOT runtime (i
     components = @($components)
 } | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 (Join-Path $release "OpenZFS-for-Windows-$version-$Architecture$tag.cdx.json")
 
-Get-ChildItem $release -File | Where-Object Name -ne "SHA256SUMS.txt" | ForEach-Object {
-    "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
-} | Set-Content -Encoding ascii (Join-Path $release "SHA256SUMS.txt")
-Get-ChildItem $release -File | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+if (-not $ParallelLane) {
+    Get-ChildItem $release -File | Where-Object Name -ne "SHA256SUMS.txt" | ForEach-Object {
+        "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+    } | Set-Content -Encoding ascii (Join-Path $release "SHA256SUMS.txt")
+    Get-ChildItem $release -File | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+}
 Write-Output $msi
