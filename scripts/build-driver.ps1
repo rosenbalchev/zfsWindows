@@ -22,7 +22,14 @@ param(
     # arm64 cross-compiles with the MSVC/WDK ARM64 tools and the vcpkg
     # arm64-windows-static OpenSSL in out\vcpkg-openssl (plan step 17).
     [ValidateSet("x64", "arm64")]
-    [string]$Architecture = "x64"
+    [string]$Architecture = "x64",
+    # Ninja jobs; build-release.ps1 -Parallel lowers it while several trees
+    # compile at once.
+    [int]$Jobs = 8,
+    # Patches, test-signing certificate and configure (when needed) only:
+    # the steps that write outside this tree, which build-release.ps1
+    # -Parallel runs one tree at a time before the trees build side by side.
+    [switch]$ConfigureOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,6 +65,15 @@ $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\si
 $quiet = (Join-Path $root "cmake\OpenZfsQuietUpstream.cmake") -replace '\\', '/'
 
 & (Join-Path $PSScriptRoot "apply-openzfs-patches.ps1")
+# The test-signing certificate (created on first use) signs the package below.
+$subject = "CN=zfsWindows Test Signing"
+$cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+    Where-Object Subject -eq $subject | Select-Object -First 1
+if (-not $cert) {
+    $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $subject `
+        -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy NonExportable `
+        -NotAfter (Get-Date).AddYears(3)
+}
 New-Item -ItemType Directory -Force -Path (Join-Path $openZfs "out\build") | Out-Null
 
 $configure = '"{0}" -S "{1}" -B "{2}" -G Ninja -Wno-dev -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE={4} {5} -DCMAKE_PROJECT_INCLUDE="{6}"' -f $cmake, $openZfs, $build, $ninja, $Configuration, $cmakeArch, $quiet
@@ -65,19 +81,22 @@ $configure = '"{0}" -S "{1}" -B "{2}" -G Ninja -Wno-dev -DCMAKE_MAKE_PROGRAM="{3
 # time too.
 $configureKey = $configure + "`nopenzfs-windows " + (& git -C $openZfs rev-parse HEAD).Trim()
 $configureStamp = Join-Path $build "zfswin-configure.txt"
+$needsConfigure = -not (Test-Path (Join-Path $build "build.ninja")) -or -not (Test-Path $configureStamp) -or
+    (Get-Content $configureStamp -Raw).Trim() -ne $configureKey
 $commands = @(
     'set "PATH={0};C:\Program Files\LLVM\bin;%PATH%"' -f (Split-Path -Parent $vswhere)
     'call "{0}" -arch={1} -host_arch=x64' -f $devShell, $Architecture
     # A configure regenerates headers every kernel object includes, so it
     # runs only for a new tree or a changed command line; Ninja re-runs CMake
     # itself when a CMakeLists.txt changes.
-    if (-not (Test-Path (Join-Path $build "build.ninja")) -or -not (Test-Path $configureStamp) -or
-        (Get-Content $configureStamp -Raw).Trim() -ne $configureKey) { $configure }
-    '"{0}" --build "{1}" --target {2} --parallel 8' -f $cmake, $build, ($targets -join ' ')
+    if ($needsConfigure) { $configure }
+    if (-not $ConfigureOnly) { '"{0}" --build "{1}" --target {2} --parallel {3}' -f $cmake, $build, ($targets -join ' '), $Jobs }
 ) -join ' && '
+if ($ConfigureOnly -and -not $needsConfigure) { return }
 & cmd.exe /d /s /c $commands
 if ($LASTEXITCODE -ne 0) { throw "Driver build failed with exit code $LASTEXITCODE." }
 Set-Content -Encoding ascii $configureStamp $configureKey
+if ($ConfigureOnly) { return }
 
 # --- package --------------------------------------------------------------
 if (Test-Path $package) { Remove-Item -Recurse -Force $package }
@@ -100,14 +119,6 @@ Get-ChildItem $driver, $zvol, "$build\cmd" -Recurse -Filter *.pdb |
     Copy-Item -Destination (Join-Path $package "symbols")
 
 # --- test signing -----------------------------------------------------------
-$subject = "CN=zfsWindows Test Signing"
-$cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
-    Where-Object Subject -eq $subject | Select-Object -First 1
-if (-not $cert) {
-    $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $subject `
-        -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy NonExportable `
-        -NotAfter (Get-Date).AddYears(3)
-}
 Export-Certificate -Cert $cert -FilePath (Join-Path $package "zfswindows-test.cer") | Out-Null
 foreach ($file in "OpenZFS.sys", "OpenZFS.cat", "OpenZVOL.sys", "OpenZVOL.cat", "zfsinstaller.exe") {
     & $signtool sign /q /fd sha256 /sha1 $cert.Thumbprint (Join-Path $package $file)

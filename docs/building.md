@@ -74,6 +74,21 @@ VERSION.json                                   version, configurations, commit, 
 SHA256SUMS                                     checksums of the above
 ```
 
+`-Parallel` (what CI uses) builds the combinations side by side. It first
+configures every tree and restores the WiX projects, one at a time, because
+those steps write into shared folders (the submodule, `installer\*\obj`).
+It then runs the administration suite and one lane per architecture and
+configuration (driver, engine) at once, then all the MSIs at once. Each
+lane logs to `out\logs\<lane>.log`, and the logs are printed when the phase
+ends. If one lane fails, the others are stopped and the failing log's end
+is printed last. Ninja's jobs are split between the compiling lanes
+(processor threads / lanes, at least 2).
+
+CMake configures a tree only when it is new, or when its command line, the
+submodule commit or (for the engine) the version changed
+(`<tree>\zfswin-configure.txt`). An unchanged driver tree then rebuilds in
+seconds.
+
 Debug packages are built unoptimized with full debug checks, and their
 names end in `-debug`, such as
 `OpenZFS-for-Windows-1.0.N-x64-usermode-debug.msi`.

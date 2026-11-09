@@ -33,7 +33,13 @@ param(
     [ValidateSet("Debug", "Release")]
     [string[]]$Configuration = @("Release", "Debug"),
     # Skips the MSIs' ICE validation (CI); numbered releases keep it.
-    [switch]$NoValidation
+    [switch]$NoValidation,
+    # Builds the combinations side by side (CI): every write they share
+    # (patches, certificate, configures, WiX restore) first, one at a time;
+    # then the administration suite and one lane per architecture and
+    # configuration (driver, engine); then all MSIs.  Each lane logs to
+    # out\logs\<lane>.log, printed when the phase ends.
+    [switch]$Parallel
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,16 +64,109 @@ function Run($script, [string[]]$arguments) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $script) @arguments
 }
 
-Step "administration suite" { Run "build-admin.ps1" @("-Architecture", ($Architecture -join ',')) }
-foreach ($config in $Configuration) {
-    foreach ($arch in $Architecture) {
-        if ($BuildDriver) { Step "driver ($arch, $config)" { Run "build-driver.ps1" @("-Architecture", $arch, "-Configuration", $config) } }
-        # zfs-um-test: the engine for the unit tests (scripts\test-usermode.ps1).
-        Step "user-mode file system ($arch, $config)" { Run "build-write-core.ps1" @("-Targets", "zfs-write-core,zfswin-um,zfs-um-test", "-Architecture", $arch, "-Configuration", $config) }
-        $validation = @(if ($NoValidation) { "-NoValidation" })
-        Step "kernel-driver MSI ($arch, $config)" { Run "build-installer.ps1" (@("-Architecture", $arch, "-Variant", "kernel", "-Configuration", $config) + $validation) }
-        Step "user-mode MSI ($arch, $config)" { Run "build-installer.ps1" (@("-Architecture", $arch, "-Variant", "usermode", "-Configuration", $config) + $validation) }
+# zfs-um-test: the engine for the unit tests (scripts\test-usermode.ps1).
+$engineTargets = "zfs-write-core,zfswin-um,zfs-um-test"
+$validation = @(if ($NoValidation) { "-NoValidation" })
+
+# Runs each lane (name -> list of @(script, arguments)) as its own process,
+# its steps in order, output to out\logs\<lane>.log.  The first failed lane
+# stops the others; the logs are printed (grouped in GitHub Actions) when
+# all have ended.
+function Invoke-Lanes($phase, $lanes) {
+    $logs = Join-Path $root "out\logs"
+    New-Item -ItemType Directory -Force $logs | Out-Null
+    Write-Host "-- $phase ($($lanes.Keys -join ', '))"
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $running = [ordered]@{}
+    foreach ($name in $lanes.Keys) {
+        $steps = foreach ($step in $lanes[$name]) {
+            'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{0}" {1}' -f (Join-Path $PSScriptRoot $step[0]), ($step[1] -join ' ')
+        }
+        $log = Join-Path $logs "$name.log"
+        $process = Start-Process cmd.exe -ArgumentList ('/d /s /c "({0}) > "{1}" 2>&1"' -f ($steps -join ' && '), $log) -NoNewWindow -PassThru
+        $null = $process.Handle  # keeps ExitCode readable after the exit
+        $running[$name] = [pscustomobject]@{ Process = $process; Log = $log; Seconds = $null; ExitCode = $null }
     }
+    $failed = $null
+    while (@($running.Values | Where-Object { $null -eq $_.ExitCode }).Count) {
+        foreach ($name in @($running.Keys)) {
+            $lane = $running[$name]
+            if ($null -ne $lane.ExitCode -or -not $lane.Process.HasExited) { continue }
+            $lane.ExitCode = $lane.Process.ExitCode
+            $lane.Seconds = $watch.Elapsed.TotalSeconds
+            if ($lane.ExitCode -ne 0 -and -not $failed) {
+                $failed = $name
+                foreach ($other in $running.Values | Where-Object { -not $_.Process.HasExited }) {
+                    & cmd.exe /d /c "taskkill /T /F /PID $($other.Process.Id) >nul 2>&1"
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    foreach ($name in $running.Keys) {
+        $lane = $running[$name]
+        $title = "{0}: {1}, {2:n0} s" -f $name, $(if ($lane.ExitCode -eq 0) { "done" } elseif ($name -eq $failed) { "failed ($($lane.ExitCode))" } else { "stopped" }), $lane.Seconds
+        if ($env:GITHUB_ACTIONS) { Write-Host "::group::$title" } else { Write-Host "---- $title" }
+        Get-Content $lane.Log | Write-Host
+        if ($env:GITHUB_ACTIONS) { Write-Host "::endgroup::" }
+    }
+    foreach ($name in $running.Keys) { Write-Host ("   {0} {1:n0} s" -f $name, $running[$name].Seconds) }
+    if ($failed) {
+        Write-Host "== $failed failed; the end of $($running[$failed].Log):"
+        Get-Content $running[$failed].Log -Tail 40 | Write-Host
+        throw "$phase failed: $failed."
+    }
+    Write-Host ("   {0} done in {1:n0} s" -f $phase, $watch.Elapsed.TotalSeconds)
+}
+
+if (-not $Parallel) {
+    Step "administration suite" { Run "build-admin.ps1" @("-Architecture", ($Architecture -join ',')) }
+    foreach ($config in $Configuration) {
+        foreach ($arch in $Architecture) {
+            if ($BuildDriver) { Step "driver ($arch, $config)" { Run "build-driver.ps1" @("-Architecture", $arch, "-Configuration", $config) } }
+            Step "user-mode file system ($arch, $config)" { Run "build-write-core.ps1" @("-Targets", $engineTargets, "-Architecture", $arch, "-Configuration", $config) }
+            Step "kernel-driver MSI ($arch, $config)" { Run "build-installer.ps1" (@("-Architecture", $arch, "-Variant", "kernel", "-Configuration", $config) + $validation) }
+            Step "user-mode MSI ($arch, $config)" { Run "build-installer.ps1" (@("-Architecture", $arch, "-Variant", "usermode", "-Configuration", $config) + $validation) }
+        }
+    }
+} else {
+    $combinations = foreach ($config in $Configuration) { foreach ($arch in $Architecture) { [pscustomobject]@{ Arch = $arch; Config = $config; Name = "$arch-$($config.ToLowerInvariant())" } } }
+    # Configures write into the shared submodule (generated headers, WPP
+    # files), so they run here, one tree at a time; the lanes then only build.
+    Step "prepare" {
+        foreach ($c in $combinations) {
+            if ($BuildDriver) {
+                Run "build-driver.ps1" @("-Architecture", $c.Arch, "-Configuration", $c.Config, "-ConfigureOnly")
+                if ($LASTEXITCODE -ne 0) { throw "Configuring the driver ($($c.Name)) failed." }
+            }
+            Run "build-write-core.ps1" @("-Targets", $engineTargets, "-Architecture", $c.Arch, "-Configuration", $c.Config, "-ConfigureOnly")
+            if ($LASTEXITCODE -ne 0) { throw "Configuring the engine ($($c.Name)) failed." }
+        }
+        foreach ($project in "ZfsWin.Installer", "ZfsWin.UserMode") {
+            & dotnet restore (Join-Path $root "installer\$project\$project.wixproj")
+            if ($LASTEXITCODE -ne 0) { throw "Restoring $project failed." }
+        }
+    }
+    # The processor's threads shared between the lanes that compile.
+    $jobs = [string][math]::Max(2, [math]::Ceiling([Environment]::ProcessorCount / @($combinations).Count))
+    $lanes = [ordered]@{ admin = , @("build-admin.ps1", @("-Architecture", ($Architecture -join ','))) }
+    foreach ($c in $combinations) {
+        $lanes[$c.Name] = @(
+            if ($BuildDriver) { , @("build-driver.ps1", @("-Architecture", $c.Arch, "-Configuration", $c.Config, "-Jobs", $jobs)) }
+            , @("build-write-core.ps1", @("-Targets", $engineTargets, "-Architecture", $c.Arch, "-Configuration", $c.Config, "-Jobs", $jobs))
+        )
+    }
+    Invoke-Lanes "build" $lanes
+    $lanes = [ordered]@{}
+    foreach ($c in $combinations) {
+        foreach ($variant in "kernel", "usermode") {
+            $lanes["msi-$($c.Name)-$variant"] = , @("build-installer.ps1", (@("-Architecture", $c.Arch, "-Variant", $variant, "-Configuration", $c.Config, "-ParallelLane") + $validation))
+        }
+    }
+    Invoke-Lanes "MSIs" $lanes
+    # Left to this script by the lanes (build-installer.ps1 -ParallelLane).
+    $c = @($combinations)[0]
+    Copy-Item (Join-Path $root ("out\driver-package" + $(if ($c.Config -eq "Release") { "-release" } else { "" }) + $(if ($c.Arch -eq "x64") { "" } else { "-$($c.Arch)" }) + "\zfswindows-test.cer")) (Join-Path $root "out\release\$version") -Force
 }
 
 # --- publish: out\release\<version>, self-contained ---------------------------
