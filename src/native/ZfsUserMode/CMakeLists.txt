@@ -43,6 +43,7 @@ add_library(zfs-um-core STATIC
     zum_api.c
     zum_xattr.c
     zum_pool_um.c
+    zum_kstat_um.c
 )
 target_link_libraries(zfs-um-core PRIVATE zfs-um-internal)
 target_include_directories(zfs-um-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

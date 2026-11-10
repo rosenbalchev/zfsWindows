@@ -59,4 +59,5 @@ verification and update the step rather than creating duplicate work.
 | 16 | `16-gui-administration-tool.md` | ZfsWinGui: status, compression/dedup/sync, mirrors, read/write caches, user-mode mounts | in-progress |
 | 17 | `17-documentation-and-1.0-distribution.md` | 1.0 docs, x64/ARM64 downloads of both variants, Windows support matrix, ZFS vs NTFS/ReFS | planned |
 | 18 | `18-user-mode-feature-parity_completed.md` | User mode: ACLs, streams, `.zfs\snapshot`, block cloning, pool/dataset administration through an ioctl bridge, image files | complete |
+| 20 | `20-gui-dashboard-and-monitoring.md` | GUI (issue #17): HTML overview, damaged files, redundancy and drive health, live rates and ARC memory, snapshot create/restore/temporary mount; both editions | implemented; VM/manual verification pending |
 

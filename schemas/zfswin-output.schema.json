@@ -22,7 +22,11 @@
     { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "mount.list" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/mountList" } } } },
     { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "pool.discover" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/importable" } } } },
     { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "scrub.status" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/scrubStatus" } } } },
-    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "version" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/version" } } } }
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "version" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/version" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "pool.errors" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/poolErrors" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "pool.iostat" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/poolIostat" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "memory.stats" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/memoryStats" } } } },
+    { "if": { "properties": { "ok": { "const": true }, "operation": { "const": "dataset.count" } } }, "then": { "properties": { "result": { "$ref": "#/$defs/datasetCount" } } } }
   ],
   "$defs": {
     "count": { "type": ["integer", "null"], "minimum": 0 },
@@ -212,6 +216,108 @@
         "protocol": { "const": 1 },
         "userland": { "type": ["string", "null"] },
         "kernel": { "type": ["string", "null"] }
+      }
+    },
+    "poolErrors": {
+      "type": "object",
+      "required": ["pool", "errorCount", "files", "devices"],
+      "properties": {
+        "pool": { "type": "string" },
+        "state": { "type": ["string", "null"] },
+        "errorCount": { "type": "integer" },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["text", "kind"],
+            "properties": {
+              "text": { "type": "string" },
+              "kind": { "enum": ["file", "object", "metadata"] },
+              "dataset": { "type": ["string", "null"] },
+              "snapshot": { "type": ["string", "null"] },
+              "path": { "type": ["string", "null"] },
+              "object": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "logError": { "type": ["string", "null"] },
+        "devices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "readErrors", "writeErrors", "checksumErrors"],
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": ["string", "null"] },
+              "path": { "type": ["string", "null"] },
+              "group": { "type": "string" },
+              "state": { "type": ["string", "null"] },
+              "readErrors": { "type": "integer" },
+              "writeErrors": { "type": "integer" },
+              "checksumErrors": { "type": "integer" }
+            }
+          }
+        },
+        "scan": { "$ref": "#/$defs/scan" }
+      }
+    },
+    "ioCounters": {
+      "type": "object",
+      "required": ["name", "readOps", "writeOps", "readBytes", "writeBytes"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": ["string", "null"] },
+        "path": { "type": ["string", "null"] },
+        "readOps": { "type": "integer", "minimum": 0 },
+        "writeOps": { "type": "integer", "minimum": 0 },
+        "readBytes": { "type": "integer", "minimum": 0 },
+        "writeBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "poolIostat": {
+      "type": "object",
+      "required": ["pool", "sampledAt", "total", "vdevs"],
+      "properties": {
+        "pool": { "type": "string" },
+        "sampledAt": { "type": "integer", "description": "Unix time in milliseconds." },
+        "total": { "$ref": "#/$defs/ioCounters" },
+        "vdevs": { "type": "array", "items": { "$ref": "#/$defs/ioCounters" } }
+      }
+    },
+    "memoryStats": {
+      "type": "object",
+      "required": ["source", "arc", "dedupTables"],
+      "properties": {
+        "source": { "enum": ["kernel", "user-mode", null] },
+        "arc": {
+          "type": ["object", "null"],
+          "properties": {
+            "size": { "$ref": "#/$defs/count" }, "target": { "$ref": "#/$defs/count" }, "min": { "$ref": "#/$defs/count" }, "max": { "$ref": "#/$defs/count" },
+            "mruSize": { "$ref": "#/$defs/count" }, "mfuSize": { "$ref": "#/$defs/count" }, "metadataSize": { "$ref": "#/$defs/count" },
+            "hits": { "$ref": "#/$defs/count" }, "misses": { "$ref": "#/$defs/count" }, "hitRatio": { "type": ["number", "null"] },
+            "l2Size": { "$ref": "#/$defs/count" }, "l2AllocatedSize": { "$ref": "#/$defs/count" }, "l2Hits": { "$ref": "#/$defs/count" },
+            "l2Misses": { "$ref": "#/$defs/count" }, "l2HitRatio": { "type": ["number", "null"] }
+          }
+        },
+        "dedupTables": { "type": "array", "items": { "type": "object", "required": ["pool"], "properties": { "pool": { "type": "string" }, "bytes": { "$ref": "#/$defs/count" } } } },
+        "userModeServicePrivateBytes": { "$ref": "#/$defs/count" }
+      }
+    },
+    "datasetCount": {
+      "type": "object",
+      "required": ["dataset", "mounted", "objects", "files", "folders", "complete", "countedAt"],
+      "properties": {
+        "dataset": { "type": "string" },
+        "mountpoint": { "type": ["string", "null"] },
+        "mounted": { "type": "boolean" },
+        "objects": { "$ref": "#/$defs/count" },
+        "files": { "$ref": "#/$defs/count" },
+        "folders": { "$ref": "#/$defs/count" },
+        "bytes": { "$ref": "#/$defs/count" },
+        "skipped": { "$ref": "#/$defs/count" },
+        "complete": { "type": "boolean" },
+        "countedAt": { "type": "integer" },
+        "seconds": { "type": "number" }
       }
     }
   }

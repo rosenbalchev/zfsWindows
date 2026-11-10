@@ -26,6 +26,13 @@ public class CommandLineTests
     [InlineData("snapshot list tank/a", "snapshot.list", """{"root":"tank/a"}""")]
     [InlineData("snapshot create tank/a@s1 -r", "snapshot.create", """{"recursive":true,"snapshot":"tank/a@s1"}""")]
     [InlineData("version", "version", "{}")]
+    [InlineData("pool errors tank", "pool.errors", """{"pool":"tank"}""")]
+    [InlineData("pool clear tank", "pool.clear", """{"pool":"tank"}""")]
+    [InlineData("pool iostat tank", "pool.iostat", """{"pool":"tank"}""")]
+    [InlineData("memory stats", "memory.stats", "{}")]
+    [InlineData("dataset count tank/a --objects-only", "dataset.count", """{"objectsOnly":true,"dataset":"tank/a"}""")]
+    [InlineData("snapshot mount tank/a@s1 --at Y:", "snapshot.mount", """{"mountPoint":"Y:","snapshot":"tank/a@s1"}""")]
+    [InlineData("snapshot unmount tank/a@s1", "snapshot.unmount", """{"snapshot":"tank/a@s1"}""")]
     public void MapsCommandsToOperations(string line, string operation, string arguments)
     {
         ParsedCommand c = Parse(line);
@@ -39,6 +46,7 @@ public class CommandLineTests
     [InlineData(@"pool create tank --mirror D:\p\a.img D:\p\b.img -o ashift=12 -O compression=lz4 --yes", "pool.create")]
     [InlineData("dataset destroy tank/a -r --yes", "dataset.destroy")]
     [InlineData("snapshot destroy tank/a@s1 --yes", "snapshot.destroy")]
+    [InlineData("snapshot rollback tank/a@s1 --destroy-newer --yes", "snapshot.rollback")]
     [InlineData(@"vdev attach tank D:\p\a.img D:\p\b.img --yes", "vdev.attach")]
     [InlineData(@"vdev detach tank D:\p\b.img --yes", "vdev.detach")]
     [InlineData(@"vdev replace tank D:\p\a.img D:\p\c.img --yes", "vdev.replace")]
@@ -96,6 +104,8 @@ public class CommandLineTests
             "snapshot list", "snapshot create t@s", "snapshot destroy t@s --yes", @"vdev attach t D:\a D:\b --yes",
             @"vdev detach t D:\a --yes", @"vdev replace t D:\a --yes", @"vdev add-cache t D:\c --yes",
             @"vdev add-log t --mirror D:\a D:\b --yes", @"vdev remove t D:\c --yes", "version",
+            "pool errors t", "pool clear t", "pool iostat t", "memory stats", "dataset count t", "snapshot rollback t@s --yes",
+            "snapshot mount t@s", "snapshot unmount t@s",
         ];
         var used = lines.Select(l => Parse(l).Operation).ToHashSet();
         foreach (string op in used)

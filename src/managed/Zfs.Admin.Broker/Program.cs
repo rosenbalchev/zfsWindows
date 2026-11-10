@@ -22,6 +22,7 @@ public static class Program
             using var stop = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
             Console.WriteLine($"{ServiceName} {typeof(Program).Assembly.GetName().Version?.ToString(3)}: serving \\\\.\\pipe\\{Protocol.PipeName}; Ctrl+C stops.");
+            _ = RemoveTemporaryMountsAsync(Console.WriteLine, stop.Token);
             CreateServer(entry => Console.WriteLine(Describe(entry))).RunAsync(stop.Token).GetAwaiter().GetResult();
             return 0;
         }
@@ -38,6 +39,34 @@ public static class Program
 
     internal static BrokerServer CreateServer(Action<AuditEntry> audit) =>
         new(new ProcessToolRunner(AppContext.BaseDirectory), new WindowsCallerAuthenticator(), new BrokerOptions(), audit);
+
+    /// <summary>
+    /// Destroys the temporary snapshot mounts (read-only clones) a GUI left
+    /// behind: after a crash, a reboot, or "keep mounted".  Pools may still
+    /// be importing when the broker starts (the user-mode service imports
+    /// its pools at its own start), so it looks again a little later.
+    /// </summary>
+    internal static async Task RemoveTemporaryMountsAsync(Action<string> log, CancellationToken stopping)
+    {
+        var runner = new ProcessToolRunner(AppContext.BaseDirectory);
+        foreach (TimeSpan delay in new[] { TimeSpan.Zero, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(5) })
+        {
+            try
+            {
+                await Task.Delay(delay, stopping).ConfigureAwait(false);
+                foreach (string clone in await Operations.RemoveTemporaryMountsAsync(runner, stopping).ConfigureAwait(false))
+                    log($"Removed the temporary snapshot mount {clone}.");
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (AdminException)
+            {
+                // zfs.exe missing or no pool yet; the next round tries again.
+            }
+        }
+    }
 
     internal static string Describe(AuditEntry e)
     {
@@ -72,6 +101,7 @@ sealed class BrokerService : ServiceBase
     {
         stop = new CancellationTokenSource();
         running = Task.Run(() => Program.CreateServer(Audit).RunAsync(stop.Token));
+        _ = Program.RemoveTemporaryMountsAsync(m => Write(m, EventLogEntryType.Information, 3), stop.Token);
         Write($"{ServiceName} {typeof(Program).Assembly.GetName().Version?.ToString(3)} started (protocol {Protocol.Version}).", EventLogEntryType.Information, 1);
     }
 

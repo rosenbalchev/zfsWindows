@@ -1,0 +1,78 @@
+diff --git a/lib/libspl/include/sys/kstat.h b/lib/libspl/include/sys/kstat.h
+index d535c9dd2..84d637106 100644
+--- a/lib/libspl/include/sys/kstat.h
++++ b/lib/libspl/include/sys/kstat.h
+@@ -78,4 +78,18 @@ extern void kstat_set_raw_ops(kstat_t *ksp,
+     int (*data)(char *buf, size_t size, void *data),
+     void *(*addr)(kstat_t *ksp, off_t index));
+ 
++/*
++ * A process that publishes its kstats itself (the user-mode ZFS service)
++ * installs these before kernel_init(); without them the functions above
++ * are stubs and kstat_create() returns NULL, as before.
++ */
++typedef struct kstat_hooks {
++	kstat_t *(*kh_create)(const char *, int, const char *, const char *,
++	    uchar_t, ulong_t, uchar_t);
++	void (*kh_install)(kstat_t *);
++	void (*kh_delete)(kstat_t *);
++} kstat_hooks_t;
++
++extern const kstat_hooks_t *kstat_hooks;
++
+ #endif	/* _SYS_KSTAT_H */
+diff --git a/lib/libspl/kstat.c b/lib/libspl/kstat.c
+index c0a9984ff..8372b1a6e 100644
+--- a/lib/libspl/kstat.c
++++ b/lib/libspl/kstat.c
+@@ -23,10 +23,15 @@
+  * kstats
+  * =========================================================================
+  */
++const kstat_hooks_t *kstat_hooks = NULL;
++
+ kstat_t *
+ kstat_create(const char *module, int instance, const char *name,
+     const char *class, uchar_t type, ulong_t ndata, uchar_t ks_flag)
+ {
++	if (kstat_hooks != NULL)
++		return (kstat_hooks->kh_create(module, instance, name, class,
++		    type, ndata, ks_flag));
+ 	(void) module, (void) instance, (void) name, (void) class, (void) type,
+ 	    (void) ndata, (void) ks_flag;
+ 	return (NULL);
+@@ -35,13 +40,15 @@ kstat_create(const char *module, int instance, const char *name,
+ void
+ kstat_install(kstat_t *ksp)
+ {
+-	(void) ksp;
++	if (kstat_hooks != NULL && ksp != NULL)
++		kstat_hooks->kh_install(ksp);
+ }
+ 
+ void
+ kstat_delete(kstat_t *ksp)
+ {
+-	(void) ksp;
++	if (kstat_hooks != NULL && ksp != NULL)
++		kstat_hooks->kh_delete(ksp);
+ }
+ 
+ void
+diff --git a/lib/libspl/include/os/windows/sys/zfs_bridge.h b/lib/libspl/include/os/windows/sys/zfs_bridge.h
+index c991e32..5fdc623 100644
+--- a/lib/libspl/include/os/windows/sys/zfs_bridge.h
++++ b/lib/libspl/include/os/windows/sys/zfs_bridge.h
+@@ -42,6 +42,12 @@ extern "C" {
+ #define	ZFS_BRIDGE_OP_IOCTL	1	/* zb_request: ZFS_IOC_* */
+ /* dst: "dataset\tmountpoint\tflags\n"..., flags 1 read-only, 2 noatime */
+ #define	ZFS_BRIDGE_OP_MNTTAB	2
++/*
++ * src: "module:instance:name"; dst: one "module:instance:name:stat\tvalue\n"
++ * line per named statistic, as "kstat -p" prints it.  ENOENT if the
++ * service has no such kstat.
++ */
++#define	ZFS_BRIDGE_OP_KSTAT	3
+ 
+ /* Section indexes. */
+ #define	ZFS_BRIDGE_CMD		0

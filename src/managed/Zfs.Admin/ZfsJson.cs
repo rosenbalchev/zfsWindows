@@ -11,7 +11,7 @@ namespace Zfs.Admin;
 /// </summary>
 public static partial class ZfsJson
 {
-    public const string DatasetColumns = "name,type,used,available,referenced,mountpoint,mounted,driveletter,compression";
+    public const string DatasetColumns = "name,type,used,available,referenced,mountpoint,mounted,driveletter,compression,logicalused,compressratio,copies,checksum";
     public const string SnapshotColumns = "name,used,referenced,creation";
 
     public static JsonNode PoolList(JsonNode zpoolList)
@@ -144,6 +144,10 @@ public static partial class ZfsJson
                 ["mounted"] = Text(Prop(props, "mounted")) == "yes",
                 ["driveLetter"] = letter is null or "-" ? null : letter,
                 ["compression"] = Text(Prop(props, "compression")),
+                ["logicalUsed"] = Number(Prop(props, "logicalused")),
+                ["compressRatio"] = Text(Prop(props, "compressratio")),
+                ["copies"] = Number(Prop(props, "copies")),
+                ["checksum"] = Text(Prop(props, "checksum")),
             });
         }
         return new JsonObject { ["datasets"] = list };

@@ -19,7 +19,11 @@ public sealed record PoolStatusInfo(string Name, string? State, string? Status, 
     IReadOnlyList<VdevInfo> Spares, IReadOnlyList<VdevInfo> Special, IReadOnlyList<VdevInfo> Dedup);
 
 public sealed record DatasetInfo(string Name, long? Used, long? Available, string? Mountpoint, bool Mounted,
-    string? DriveLetter, string? Compression);
+    string? DriveLetter, string? Compression, long? LogicalUsed = null, string? CompressRatio = null, int Copies = 1, string? Checksum = null)
+{
+    /// <summary>What compression saves: logicalused − used, never negative.</summary>
+    public long Saved => LogicalUsed is long l && Used is long u && l > u ? l - u : 0;
+}
 
 public sealed record PropertyInfo(string Name, string? Value, string? Source);
 
@@ -29,9 +33,12 @@ public sealed record PropertyInfo(string Name, string? Value, string? Source);
 /// validates and audits it; destructive operations pass confirm=true only
 /// when the caller says the user confirmed them.
 /// </summary>
-public sealed class AdminClient(BrokerClient broker)
+public sealed partial class AdminClient(BrokerClient broker)
 {
     public AdminClient() : this(new BrokerClient()) { }
+
+    // For the other part of this class (AdminClient.Monitoring.cs).
+    BrokerClient Broker => broker;
 
     // Values the dialogs offer; the broker accepts any valid value.
     public static readonly IReadOnlyList<string> CompressionValues =
@@ -69,7 +76,8 @@ public sealed class AdminClient(BrokerClient broker)
             args["root"] = root;
         JsonNode? r = await broker.CallAsync("dataset.list", args, ct);
         return Array(r?["datasets"]).Select(d => new DatasetInfo(Str(d, "name") ?? "", Num(d, "used"), Num(d, "available"),
-            Str(d, "mountpoint"), d?["mounted"]?.GetValue<bool>() ?? false, Str(d, "driveLetter"), Str(d, "compression"))).ToList();
+            Str(d, "mountpoint"), d?["mounted"]?.GetValue<bool>() ?? false, Str(d, "driveLetter"), Str(d, "compression"),
+            Num(d, "logicalUsed"), Str(d, "compressRatio"), (int)(Num(d, "copies") ?? 1), Str(d, "checksum"))).ToList();
     }
 
     public async Task<IReadOnlyList<PropertyInfo>> DatasetPropertiesAsync(string dataset, IEnumerable<string>? names = null, CancellationToken ct = default)

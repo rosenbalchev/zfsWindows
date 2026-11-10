@@ -34,13 +34,18 @@ public sealed class OperationContext(IToolRunner runner, CancellationToken cance
     }
 }
 
-/// <summary>One broker operation: its privilege, its arguments and how it runs.</summary>
+/// <summary>
+/// One broker operation: its privilege, its arguments and how it runs.
+/// Privileged operations run one at a time unless <paramref name="Exclusive"/>
+/// is false (an administrator-only read such as a long file walk).
+/// </summary>
 public sealed record OperationSpec(
     string Name,
     bool Privileged,
     bool Destructive,
     IReadOnlyCollection<string> Arguments,
-    Func<OperationContext, JsonObject, Task<JsonNode?>> Execute);
+    Func<OperationContext, JsonObject, Task<JsonNode?>> Execute,
+    bool Exclusive = true);
 
 /// <summary>
 /// Every operation the broker accepts.  Each builds a fixed zpool/zfs
@@ -121,6 +126,64 @@ public static class Operations
             JsonNode? entry = status["pools"]?.AsArray().FirstOrDefault();
             return new JsonObject { ["pool"] = pool, ["scan"] = entry?["scan"]?.DeepClone() };
         });
+
+        // Files whose blocks failed their checksum, and every device's counters.
+        yield return Read("pool.errors", ["pool"], async (c, a) =>
+        {
+            string pool = Validation.PoolName(Validation.OptionalString(a, "pool"));
+            return ZfsJson.PoolErrors(await RunJson(c, ZfsTool.Zpool, ["status", "-j", "--json-int", "-p", "-v", pool]), pool);
+        });
+
+        // Cumulative counters; callers take the deltas, so nothing blocks.
+        yield return Read("pool.iostat", ["pool"], async (c, a) =>
+        {
+            string pool = Validation.PoolName(Validation.OptionalString(a, "pool"));
+            JsonNode get = await RunJson(c, ZfsTool.Zpool, ["get", "-j", "--json-int", "-p", ZfsJson.IostatProperties, pool, "all-vdevs"]);
+            return ZfsJson.VdevIostat(get, pool, DateTimeOffset.UtcNow);
+        });
+
+        yield return Read("memory.stats", [], async (c, a) =>
+        {
+            KstatText? arc = await c.Runner.ReadKstatAsync("zfs:0:arcstats", ReadTimeout, c.CancellationToken);
+            JsonArray dedup = ZfsJson.DedupTables(await RunJson(c, ZfsTool.Zpool, ["get", "-j", "--json-int", "-p", "dedup_table_size"], emptyMeansNone: true));
+            long? service = c.Runner.UserModeServicePrivateBytes();
+            return new JsonObject
+            {
+                ["source"] = arc?.Source,
+                ["arc"] = arc is null ? null : ZfsJson.ArcStats(ZfsJson.KstatValues(arc.Text)),
+                ["dedupTables"] = dedup,
+                ["userModeServicePrivateBytes"] = service,
+            };
+        });
+
+        // Files and folders below a mounted dataset: a walk, run as the
+        // broker, so administrators only; it does not hold up mutations.
+        yield return new OperationSpec("dataset.count", Privileged: true, Destructive: false, ["dataset", "objectsOnly"], async (c, a) =>
+        {
+            string name = Validation.DatasetName(Validation.OptionalString(a, "dataset"));
+            var started = DateTimeOffset.UtcNow;
+            ToolResult users = await c.Runner.RunAsync(ZfsTool.Zfs, ["userspace", "-H", "-p", "-o", "objused", name], ReadTimeout, c.CancellationToken);
+            long? objects = users.ExitCode == 0 ? ZfsJson.SumLines(users.StandardOutput) : null;
+            string? mountpoint = ZfsJson.MountList((await c.RunAsync(ZfsTool.Zfs, ["mount"], ReadTimeout)).StandardOutput)["mounts"]!.AsArray()
+                .FirstOrDefault(m => m?["dataset"]?.GetValue<string>() == name)?["mountpoint"]?.GetValue<string>();
+            var result = new JsonObject
+            {
+                ["dataset"] = name, ["mountpoint"] = mountpoint, ["mounted"] = mountpoint is not null, ["objects"] = objects,
+                ["files"] = null, ["folders"] = null, ["bytes"] = null, ["skipped"] = null, ["complete"] = false,
+                ["countedAt"] = started.ToUnixTimeSeconds(),
+            };
+            if (mountpoint is null || Validation.Flag(a, "objectsOnly"))
+                return result;
+            string root = MountRoot(mountpoint);
+            FileCount count = await Task.Run(() => c.Runner.CountFiles(root, WalkLimit, c.CancellationToken), c.CancellationToken);
+            result["files"] = count.Files;
+            result["folders"] = count.Folders;
+            result["bytes"] = count.Bytes;
+            result["skipped"] = count.Skipped;
+            result["complete"] = count.Complete;
+            result["seconds"] = Math.Round((DateTimeOffset.UtcNow - started).TotalSeconds, 1);
+            return result;
+        }, Exclusive: false);
 
         // --- privileged: device discovery reads raw disks ------------------
         yield return Mutation("pool.discover", ["dirs"], destructive: false, async (c, a) =>
@@ -277,11 +340,105 @@ public static class Operations
         yield return Mutation("snapshot.destroy", ["snapshot", "recursive"], destructive: true, async (c, a) =>
         {
             string name = Validation.SnapshotName(Validation.OptionalString(a, "snapshot"));
+            if (await TemporaryCloneOf(c, name) is string clone)
+                throw new AdminException(ErrorCode.Busy, $"{name} is mounted temporarily (as {clone}); unmount it first.");
             var args = new List<string> { "destroy" };
             if (Validation.Flag(a, "recursive")) args.Add("-r");
             args.Add(name);
             await c.RunAsync(ZfsTool.Zfs, args, MutationTimeout);
             return new JsonObject { ["snapshot"] = name, ["destroyed"] = true };
+        });
+
+        // Restores the whole dataset.  zfs rollback -r destroys every newer
+        // snapshot, so the caller must say so (destroyNewer) when there are
+        // any; the dataset is unmounted around it and mounted again where
+        // its properties say (the user-mode engine cannot roll back a mounted
+        // file system).
+        yield return Mutation("snapshot.rollback", ["snapshot", "destroyNewer"], destructive: true, async (c, a) =>
+        {
+            string name = Validation.SnapshotName(Validation.OptionalString(a, "snapshot"));
+            string dataset = name[..name.IndexOf('@')];
+            ToolResult list = await c.RunAsync(ZfsTool.Zfs, ["list", "-H", "-p", "-o", "name,createtxg", "-t", "snapshot", "-d", "1", dataset], ReadTimeout);
+            var snapshots = ZfsJson.NameNumberLines(list.StandardOutput);
+            if (!snapshots.Any(s => s.Name == name))
+                throw new AdminException(ErrorCode.NotFound, $"The snapshot {name} does not exist.");
+            long txg = snapshots.First(s => s.Name == name).Number;
+            var newer = snapshots.Where(s => s.Number > txg).OrderBy(s => s.Number).Select(s => s.Name).ToList();
+            if (newer.Count > 0 && !Validation.Flag(a, "destroyNewer"))
+                throw new AdminException(ErrorCode.ConfirmationRequired,
+                    $"Rolling {dataset} back to {name} destroys {newer.Count} newer snapshot(s): {string.Join(", ", newer)}.  Confirm with destroyNewer.");
+            foreach (string s in newer)
+                if (await TemporaryCloneOf(c, s) is string clone)
+                    throw new AdminException(ErrorCode.Busy, $"{s} is mounted temporarily (as {clone}); unmount it first.");
+            bool mounted = (await c.RunAsync(ZfsTool.Zfs, ["get", "-H", "-o", "value", "mounted", dataset], ReadTimeout)).StandardOutput.Trim() == "yes";
+            if (mounted)
+                await c.RunAsync(ZfsTool.Zfs, ["unmount", dataset], MutationTimeout);
+            try
+            {
+                var args = new List<string> { "rollback" };
+                if (newer.Count > 0) args.Add("-r");
+                args.Add(name);
+                await c.RunAsync(ZfsTool.Zfs, args, MutationTimeout);
+            }
+            finally
+            {
+                if (mounted)
+                    await c.Runner.RunAsync(ZfsTool.Zfs, ["mount", dataset], MutationTimeout, CancellationToken.None);
+            }
+            return new JsonObject
+            {
+                ["snapshot"] = name, ["dataset"] = dataset, ["rolledBack"] = true, ["remounted"] = mounted,
+                ["destroyed"] = new JsonArray(newer.Select(n => (JsonNode?)n).ToArray()),
+            };
+        });
+
+        // A snapshot, read-only, at a drive letter or an empty folder: a
+        // read-only clone that shares every block, marked temporary so the
+        // broker removes it at its next start if nobody unmounts it.
+        yield return Mutation("snapshot.mount", ["snapshot", "mountPoint"], destructive: false, async (c, a) =>
+        {
+            string name = Validation.SnapshotName(Validation.OptionalString(a, "snapshot"));
+            string clone = TemporaryCloneName(name);
+            string parent = clone[..clone.LastIndexOf('/')];
+            string target = Validation.OptionalString(a, "mountPoint") is string mp ? TemporaryMountPoint(mp) : FreeDriveLetter();
+            if ((await c.Runner.RunAsync(ZfsTool.Zfs, ["list", "-H", "-o", "name", clone], ReadTimeout, c.CancellationToken)).ExitCode == 0)
+                throw new AdminException(ErrorCode.Busy, $"{name} is already mounted temporarily (as {clone}).");
+            if ((await c.Runner.RunAsync(ZfsTool.Zfs, ["list", "-H", "-o", "name", parent], ReadTimeout, c.CancellationToken)).ExitCode != 0)
+                await c.RunAsync(ZfsTool.Zfs, ["create", "-o", "canmount=off", "-o", "driveletter=off", "-o", $"{TemporaryProperty}=on", parent], MutationTimeout);
+            var args = new List<string> { "clone", "-o", "readonly=on", "-o", "canmount=noauto", "-o", $"{TemporaryProperty}=on" };
+            if (target.Length == 2)
+                args.AddRange(["-o", $"driveletter={target[0]}"]);
+            else
+                args.AddRange(["-o", "driveletter=off", "-o", $"mountpoint={target}"]);
+            args.AddRange([name, clone]);
+            await c.RunAsync(ZfsTool.Zfs, args, MutationTimeout);
+            try
+            {
+                await c.RunAsync(ZfsTool.Zfs, ["mount", clone], MutationTimeout);
+            }
+            catch
+            {
+                await c.Runner.RunAsync(ZfsTool.Zfs, ["destroy", clone], MutationTimeout, CancellationToken.None);
+                throw;
+            }
+            string? at = ZfsJson.MountList((await c.Runner.RunAsync(ZfsTool.Zfs, ["mount"], ReadTimeout, c.CancellationToken)).StandardOutput)["mounts"]!.AsArray()
+                .FirstOrDefault(m => m?["dataset"]?.GetValue<string>() == clone)?["mountpoint"]?.GetValue<string>();
+            return new JsonObject { ["snapshot"] = name, ["clone"] = clone, ["mountPoint"] = at is null ? target : MountRoot(at), ["readOnly"] = true };
+        });
+
+        yield return Mutation("snapshot.unmount", ["snapshot"], destructive: false, async (c, a) =>
+        {
+            string name = Validation.SnapshotName(Validation.OptionalString(a, "snapshot"));
+            string clone = TemporaryCloneName(name);
+            await DestroyTemporaryAsync(c, clone);
+            return new JsonObject { ["snapshot"] = name, ["clone"] = clone, ["unmounted"] = true };
+        });
+
+        yield return Mutation("pool.clear", ["pool"], destructive: false, async (c, a) =>
+        {
+            string pool = Validation.PoolName(Validation.OptionalString(a, "pool"));
+            await c.RunAsync(ZfsTool.Zpool, ["clear", pool], MutationTimeout);
+            return new JsonObject { ["pool"] = pool, ["cleared"] = true };
         });
 
         yield return Mutation("vdev.attach", ["pool", "device", "newDevice"], destructive: true, async (c, a) =>
@@ -404,6 +561,108 @@ public static class Operations
             if (s.StartsWith(prefix, StringComparison.Ordinal))
                 s = s[prefix.Length..];
         return s.TrimEnd('\\').ToUpperInvariant();
+    }
+
+    // --- temporary snapshot mounts --------------------------------------------
+
+    public const string TemporaryProperty = "org.openzfs.windows:temporary";
+    public const string TemporaryParent = ".zfswin-tmp";
+    static readonly TimeSpan WalkLimit = TimeSpan.FromMinutes(30);
+
+    /// <summary>"tank/a/b@s1" → "tank/.zfswin-tmp/a_b-s1" ("tank@s1" → "tank/.zfswin-tmp/tank-s1").</summary>
+    public static string TemporaryCloneName(string snapshot)
+    {
+        int at = snapshot.IndexOf('@');
+        string dataset = snapshot[..at], snap = snapshot[(at + 1)..];
+        int slash = dataset.IndexOf('/');
+        string pool = slash < 0 ? dataset : dataset[..slash];
+        string flat = slash < 0 ? dataset : dataset[(slash + 1)..].Replace('/', '_');
+        return Validation.DatasetName($"{pool}/{TemporaryParent}/{flat}-{snap}", "snapshot");
+    }
+
+    static async Task<string?> TemporaryCloneOf(OperationContext c, string snapshot)
+    {
+        ToolResult r = await c.Runner.RunAsync(ZfsTool.Zfs, ["get", "-H", "-o", "value", "clones", snapshot], ReadTimeout, c.CancellationToken);
+        if (r.ExitCode != 0)
+            return null;
+        return r.StandardOutput.Split([',', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(n => n.Contains($"/{TemporaryParent}/", StringComparison.Ordinal));
+    }
+
+    /// <summary>Destroys a temporary clone, after checking it is one.</summary>
+    static async Task DestroyTemporaryAsync(OperationContext c, string clone)
+    {
+        ToolResult r = await c.Runner.RunAsync(ZfsTool.Zfs, ["get", "-H", "-o", "value", TemporaryProperty, clone], ReadTimeout, c.CancellationToken);
+        if (r.ExitCode != 0)
+            throw new AdminException(ErrorCode.NotFound, $"{clone} does not exist; the snapshot is not mounted temporarily.");
+        if (r.StandardOutput.Trim() != "on")
+            throw new AdminException(ErrorCode.InvalidArgument, $"{clone} is not a temporary mount; it is left alone.");
+        await c.RunAsync(ZfsTool.Zfs, ["destroy", "-f", clone], MutationTimeout);
+    }
+
+    /// <summary>
+    /// Removes the temporary mounts left by a GUI that did not unmount them
+    /// (closed with "keep mounted", crashed, or a reboot).  The broker runs
+    /// this when it starts; returns the clones destroyed.
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> RemoveTemporaryMountsAsync(IToolRunner runner, CancellationToken cancellationToken)
+    {
+        var c = new OperationContext(runner, cancellationToken);
+        ToolResult r = await runner.RunAsync(ZfsTool.Zfs, ["list", "-H", "-o", $"name,{TemporaryProperty}", "-t", "filesystem"], ReadTimeout, cancellationToken);
+        if (r.ExitCode != 0)
+            return [];
+        var removed = new List<string>();
+        foreach (string line in r.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string[] f = line.Split('\t');
+            // Clones only: the .zfswin-tmp parent itself holds nothing.
+            if (f.Length == 2 && f[1] == "on" && f[0].Contains($"/{TemporaryParent}/", StringComparison.Ordinal))
+            {
+                try
+                {
+                    await DestroyTemporaryAsync(c, f[0]);
+                    removed.Add(f[0]);
+                }
+                catch (AdminException)
+                {
+                }
+            }
+        }
+        return removed;
+    }
+
+    static string TemporaryMountPoint(string value)
+    {
+        if (value.Length is 2 or 3 && char.IsAsciiLetter(value[0]) && value[1] == ':' && (value.Length == 2 || value[2] == '\\'))
+        {
+            string letter = char.ToUpperInvariant(value[0]) + ":";
+            if (Environment.GetLogicalDrives().Any(d => d.StartsWith(letter, StringComparison.OrdinalIgnoreCase)))
+                throw Validation.Invalid("mountPoint", $"{letter} is in use.");
+            return letter;
+        }
+        string folder = value.TrimEnd('\\');
+        // A fully qualified local path whose parent exists.
+        Validation.SearchDirectory(Path.GetDirectoryName(folder) ?? throw Validation.Invalid("mountPoint", "must be a free drive letter or a folder path."), "mountPoint");
+        Validation.PropertyValue(folder, "mountPoint");
+        if (Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any())
+            throw Validation.Invalid("mountPoint", $"{folder} is not empty.");
+        return folder;
+    }
+
+    static string FreeDriveLetter()
+    {
+        var used = Environment.GetLogicalDrives().Select(d => char.ToUpperInvariant(d[0])).ToHashSet();
+        for (char l = 'Z'; l >= 'G'; l--)
+            if (!used.Contains(l))
+                return l + ":";
+        throw new AdminException(ErrorCode.Busy, "No drive letter between G: and Z: is free; give an empty folder instead.");
+    }
+
+    /// <summary>`zfs mount` prints "D:/docs/"; Windows wants "D:\docs\".</summary>
+    internal static string MountRoot(string mountpoint)
+    {
+        string p = mountpoint.Replace('/', '\\');
+        return p.Length == 2 && p[1] == ':' ? p + "\\" : p;
     }
 
     static OperationSpec Read(string name, string[] arguments, Func<OperationContext, JsonObject, Task<JsonNode?>> execute) =>

@@ -1668,7 +1668,12 @@ bridge_mount(const char *dataset, const char *where, int readonly)
         return (EBUSY);
     }
     error = mount_one(NULL, pool, dataset, mp, readonly != 0, FALSE);
-    if (error == 0 && (m = find_mount(dataset)) != NULL)
+    /*
+     * A temporary snapshot mount (the broker's read-only clone under
+     * <pool>/.zfswin-tmp) is not recorded: it must not come back at boot.
+     */
+    if (error == 0 && (m = find_mount(dataset)) != NULL &&
+        strstr(dataset, "/.zfswin-tmp/") == NULL)
         record_mount(pool, dataset, m->mountpoint, readonly != 0);
     ReleaseSRWLockExclusive(&table_lock);
     if (error == 0) {
@@ -1929,6 +1934,14 @@ serve_one(HANDLE pipe, ULONG pid)
         resp.zb_len[ZFS_BRIDGE_DST] = sect[ZFS_BRIDGE_DST] == NULL ? 0 :
             mnttab_text(sect[ZFS_BRIDGE_DST],
             (size_t)hdr.zb_cap[ZFS_BRIDGE_DST]);
+    } else if (hdr.zb_op == ZFS_BRIDGE_OP_KSTAT) {
+        size_t used = 0;
+
+        resp.zb_error = sect[ZFS_BRIDGE_SRC] == NULL ||
+            sect[ZFS_BRIDGE_DST] == NULL ? EINVAL :
+            zum_kstat_text(sect[ZFS_BRIDGE_SRC], sect[ZFS_BRIDGE_DST],
+            (size_t)hdr.zb_cap[ZFS_BRIDGE_DST], &used);
+        resp.zb_len[ZFS_BRIDGE_DST] = resp.zb_error == 0 ? used : 0;
     } else if (hdr.zb_op == ZFS_BRIDGE_OP_IOCTL &&
         hdr.zb_len[ZFS_BRIDGE_CMD] == zum_ioctl_cmd_size()) {
         io.cmd = sect[ZFS_BRIDGE_CMD];
