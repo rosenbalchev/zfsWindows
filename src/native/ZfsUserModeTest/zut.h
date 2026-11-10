@@ -50,8 +50,14 @@ void zut_arc_stats(zut_arc_stats_t *stats);
  */
 int zut_pool_create(const char *pool, const char *layout, const char *vdevs,
     const char *pool_props, const char *fs_props);
-/* zum_pool_import(): by name from ';'-separated directories or images. */
-int zut_pool_import(const char *pool, const char *search_path);
+/*
+ * zum_pool_import(): by name from ';'-separated directories or images, with
+ * that cachefile property (NULL: none).
+ */
+int zut_pool_import(const char *pool, const char *search_path,
+    const char *cachefile);
+/* zum_pool_cachefile(). */
+void zut_pool_cachefile(const char *pool, char *out, int size);
 int zut_pool_export(const char *pool, int force);
 int zut_pool_destroy(const char *pool);
 /* Start a scrub and wait for it to finish (zpool scrub -w). */

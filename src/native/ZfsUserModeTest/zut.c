@@ -311,9 +311,16 @@ zut_pool_create(const char *pool, const char *layout, const char *vdevs,
 }
 
 int
-zut_pool_import(const char *pool, const char *search_path)
+zut_pool_import(const char *pool, const char *search_path,
+    const char *cachefile)
 {
-    return (zum_pool_import(pool, search_path));
+    return (zum_pool_import(pool, search_path, cachefile));
+}
+
+void
+zut_pool_cachefile(const char *pool, char *out, int size)
+{
+    zum_pool_cachefile(pool, out, (size_t)size);
 }
 
 int

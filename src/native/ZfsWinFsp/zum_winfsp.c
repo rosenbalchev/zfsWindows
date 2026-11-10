@@ -1332,8 +1332,9 @@ read_value(HKEY key, PCWSTR name, PWSTR out, DWORD chars)
         &bytes) == ERROR_SUCCESS);
 }
 
+/* A value of a pool's record: Sources, or CacheFile (if it has one). */
 static void
-pool_sources(PCWSTR pool, PWSTR out, DWORD chars)
+pool_value(PCWSTR pool, PCWSTR name, PWSTR out, DWORD chars)
 {
     WCHAR key[400];
     HKEY h;
@@ -1342,7 +1343,7 @@ pool_sources(PCWSTR pool, PWSTR out, DWORD chars)
     swprintf_s(key, 400, L"%s\\%s", POOLS_KEY, pool);
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &h) ==
         ERROR_SUCCESS) {
-        (void) read_value(h, L"Sources", out, chars);
+        (void) read_value(h, name, out, chars);
         RegCloseKey(h);
     }
 }
@@ -1501,9 +1502,10 @@ static int
 restore_configured(BOOLEAN quiet)
 {
     WCHAR name[256], source[2048], pool[256], dataset[256], mp[MAX_PATH];
+    WCHAR cache[MAX_PATH];
     HKEY root, key;
     DWORD i, chars, readonly, size;
-    char *upool, *uds, *usrc;
+    char *upool, *uds, *usrc, *ucache;
     int failed = 0;
 
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, POOLS_KEY, 0, KEY_READ, &root) ==
@@ -1512,10 +1514,13 @@ restore_configured(BOOLEAN quiet)
             &chars, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; i++) {
             int error;
 
-            pool_sources(name, source, ARRAYSIZE(source));
+            pool_value(name, L"Sources", source, ARRAYSIZE(source));
+            pool_value(name, L"CacheFile", cache, ARRAYSIZE(cache));
             upool = utf8_of(name);
             usrc = utf8_of(source);
-            error = upool && usrc ? zum_pool_import(upool, usrc) : ENOMEM;
+            ucache = utf8_of(cache);
+            error = upool && usrc && ucache ?
+                zum_pool_import(upool, usrc, ucache) : ENOMEM;
             if (error != 0) {
                 failed++;
                 if (!quiet)
@@ -1532,6 +1537,7 @@ restore_configured(BOOLEAN quiet)
             }
             free(upool);
             free(usrc);
+            free(ucache);
         }
         RegCloseKey(root);
     }
@@ -1553,7 +1559,7 @@ restore_configured(BOOLEAN quiet)
             read_value(key, L"MountPoint", mp, MAX_PATH)) {
             if (!read_value(key, L"Source", source, ARRAYSIZE(source)) ||
                 source[0] == L'\0')
-                pool_sources(pool, source, ARRAYSIZE(source));
+                pool_value(pool, L"Sources", source, ARRAYSIZE(source));
             int error = ENOMEM;
 
             upool = utf8_of(pool);
@@ -1795,6 +1801,30 @@ bridge_pool_imported(const char *pool, const char *sources)
     }
 }
 
+/*
+ * Only a recorded pool's: a pool a configured mount imported has no record
+ * and is not imported by name at start.
+ */
+static void
+bridge_pool_cachefile(const char *pool, const char *cachefile)
+{
+    WCHAR key[400], wpool[256], wcache[MAX_PATH];
+    HKEY h;
+
+    wide_of(pool, wpool, 256);
+    wide_of(cachefile, wcache, MAX_PATH);
+    swprintf_s(key, 400, L"%s\\%s", POOLS_KEY, wpool);
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_WRITE, &h) !=
+        ERROR_SUCCESS)
+        return;
+    if (wcache[0] != L'\0')
+        RegSetValueExW(h, L"CacheFile", 0, REG_SZ, (BYTE *)wcache,
+            (DWORD)((wcslen(wcache) + 1) * sizeof (WCHAR)));
+    else
+        RegDeleteValueW(h, L"CacheFile");
+    RegCloseKey(h);
+}
+
 static void
 bridge_pool_exported(const char *pool)
 {
@@ -1814,6 +1844,7 @@ static const zum_bridge_ops_t bridge_ops = {
     .snapshot_unmount = bridge_snapshot_unmount,
     .pool_imported = bridge_pool_imported,
     .pool_exported = bridge_pool_exported,
+    .pool_cachefile = bridge_pool_cachefile,
 };
 
 /* ---- the bridge pipe server (sys/zfs_bridge.h) ----------------------------- */

@@ -52,6 +52,49 @@ public sealed class PoolLifecycleTests : IDisposable
         Assert.NotEqual(0, ZfsUserModeEngine.TryImportPool(pool, _scratch.Directory));
     }
 
+    // A cache file the user gave the pool, at a drive-letter path (issue
+    // #15), is written; the service imports a recorded pool with it, which
+    // writes it again; an import without one writes none.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CachefileAtDriveLetterPathIsWrittenAndRestored(bool forwardSlashes)
+    {
+        var pool = Scratch.PoolName("zut_cache");
+        var cache = Path.Combine(_scratch.Directory, "pool.cache");
+        if (forwardSlashes)
+            cache = cache.Replace('\\', '/');
+        ZfsUserModeEngine.CreatePool(pool, "", [_scratch.Image("a.img")], $"cachefile={cache}");
+        Assert.Equal(cache, ZfsUserModeEngine.PoolCachefile(pool));
+        Assert.True(new FileInfo(cache).Length > 0);
+        ZfsUserModeEngine.ExportPool(pool);
+        Assert.False(File.Exists(cache));   // its only pool left it
+
+        ZfsUserModeEngine.ImportPool(pool, _scratch.Directory, cache);
+        Assert.Equal(cache, ZfsUserModeEngine.PoolCachefile(pool));
+        Assert.True(new FileInfo(cache).Length > 0);
+        ZfsUserModeEngine.ExportPool(pool);
+
+        ZfsUserModeEngine.ImportPool(pool, _scratch.Directory);
+        Assert.Equal("", ZfsUserModeEngine.PoolCachefile(pool));
+        Assert.False(File.Exists(cache));
+        ZfsUserModeEngine.DestroyPool(pool);
+    }
+
+    [Theory]
+    [InlineData("relative.cache")]
+    [InlineData("C:\\")]
+    [InlineData("C:/")]
+    [InlineData("C:\\dir\\..")]
+    [InlineData("C:pool.cache")]
+    public void CachefileMustBeAnAbsoluteFilePath(string cachefile)
+    {
+        var pool = Scratch.PoolName("zut_badcache");
+        var e = Assert.Throws<ZfsUmException>(() =>
+            ZfsUserModeEngine.CreatePool(pool, "", [_scratch.Image("a.img")], $"cachefile={cachefile}"));
+        Assert.Equal(ZfsUmErrno.EINVAL, e.Errno);
+    }
+
     [Fact]
     public void PoolNameIsUnique()
     {

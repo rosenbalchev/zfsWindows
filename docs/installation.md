@@ -88,6 +88,12 @@ zfswin mount list
   under `...\UserMode\Mounts\auto-<dataset>`. The service imports and mounts
   them again when it starts, including at boot. `zfswin pool export` removes
   both records.
+- **Cache files:** the service restores pools from these records, not from
+  a `zpool.cache`. A pool's own `cachefile` (`zpool import -o
+  cachefile=C:\zfs\pool.cache`, `zpool create -o cachefile=…` or `zpool set
+  cachefile=…`) is recorded as `CacheFile` and written again each time the
+  service imports the pool. Stopping the service exports the pool, which
+  takes it out of that file until the next start.
 - **Stopping:** `Stop-Service ZfsWinUserMode` unmounts and exports every
   pool, so the disks import anywhere. Starting the service brings them back.
 - **Mounting by configuration:** you can also mount a dataset of a pool the

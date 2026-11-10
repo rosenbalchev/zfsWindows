@@ -83,10 +83,19 @@ int zum_engine_start(void);
 int zum_engine_stop(void);
 /* The cache file created pools write (never read back; see zum_pool_um.c). */
 void zum_engine_set_cachefile(const char *path);
-/* Import one pool by name from search_path (see zum_fs_open()). */
-int zum_pool_import(const char *pool, const char *search_path);
+/*
+ * Import one pool by name from search_path (see zum_fs_open()); cachefile:
+ * its cachefile property, NULL or "" for "none".
+ */
+int zum_pool_import(const char *pool, const char *search_path,
+    const char *cachefile);
 /* An imported pool's leaf vdev paths, ';'-separated ("" if not imported). */
 void zum_pool_sources(const char *pool, char *out, size_t size);
+/*
+ * An imported pool's cachefile property when it names a file of the user's
+ * ("" for the engine's own cache file, "none", or not imported).
+ */
+void zum_pool_cachefile(const char *pool, char *out, size_t size);
 
 /*
  * The ZFS ioctl bridge (user mode): requests arrive from zpool.exe/zfs.exe
@@ -108,6 +117,11 @@ typedef struct zum_bridge_ops {
     /* Pool created or imported (sources: its leaf vdev paths), exported. */
     void (*pool_imported)(const char *pool, const char *sources);
     void (*pool_exported)(const char *pool);
+    /*
+     * After pool_imported and after `zpool set`: the pool's cachefile, as
+     * zum_pool_cachefile() gives it, to import it with next time.
+     */
+    void (*pool_cachefile)(const char *pool, const char *cachefile);
 } zum_bridge_ops_t;
 
 int zum_bridge_init(const zum_bridge_ops_t *ops);

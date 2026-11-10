@@ -1084,6 +1084,23 @@ Start-Sleep -Seconds 600
         $r.hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)) -replace '-', ''
         if ($root) { [IO.File]::WriteAllBytes((Join-Path $root "kept.bin"), $bytes) }
         Check $r "written" ([bool]($root -and (Test-Path -LiteralPath (Join-Path $root "kept.bin")))) $true
+        # Issue #15: an image-file pool imported with zpool and a cache file
+        # at a drive-letter path (before zrb's new letter is chosen, which
+        # must not be the one zrc takes).
+        $zpool = Join-Path $installDir "bin\zpool.exe"
+        $rcDir = "$images\zrc"; $rcCache = "$images\zrc\zrc.cache"
+        if ((Zfswin @('pool', 'list')).result.pools | Where-Object name -eq "zrc") { Zfswin @('pool', 'export', 'zrc') | Out-Null }
+        Remove-Item -Recurse -Force $rcDir -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force $rcDir | Out-Null
+        & fsutil.exe file createnew "$rcDir\zrc.img" (256MB) | Out-Null
+        & $zpool create zrc "\\?\$rcDir\zrc.img" 2>$null | Out-Null
+        & $zpool export zrc 2>$null | Out-Null
+        & $zpool import -d $rcDir -o "cachefile=$rcCache" zrc 2>$null | Out-Null
+        Check $r "cachefile-import" $LASTEXITCODE 0
+        $rcRoot = MountPath "zrc"
+        if ($rcRoot) { [IO.File]::WriteAllBytes((Join-Path $rcRoot "kept.bin"), $bytes) }
+        Check $r "cachefile-written" ([bool]($rcRoot -and (Test-Path -LiteralPath (Join-Path $rcRoot "kept.bin")))) $true
+        Check $r "cachefile-recorded" (Get-ItemProperty -LiteralPath "$base\Pools\zrc" -ErrorAction SilentlyContinue).CacheFile $rcCache
         $free = @([char[]](77..89) | Where-Object { -not (Test-Path "$($_):\") -and "$($_):\" -ne $root }) | Select-Object -Last 1
         $r.letter = "$($free):"
         $key = "$base\Mounts\auto-$rbPool"
@@ -1111,6 +1128,15 @@ Start-Sleep -Seconds 600
         Check $r "recorded-as-partition" ("$($r.recorded)" -like "#*#*#*PhysicalDrive*") $true
         $r.events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime } -ErrorAction SilentlyContinue |
             Where-Object { $_.ProviderName -like '*ZfsWin*' } | Select-Object -First 10 | ForEach-Object { "$($_.LevelDisplayName): $($_.Message)" })
+        # Issue #15: the image-file pool comes back with its cache file.
+        $zpool = Join-Path $installDir "bin\zpool.exe"
+        $rcCache = "$images\zrc\zrc.cache"
+        $rcRoot = MountPath "zrc"
+        Check $r "cachefile-pool-mounted" ([bool]$rcRoot) $true
+        Check $r "cachefile-pool-file" $(if ($rcRoot) { (Get-FileHash -LiteralPath (Join-Path $rcRoot "kept.bin") -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash }) "$($decoded.Hash)"
+        Check $r "cachefile-property" ((& $zpool get -H -o value cachefile zrc 2>$null) -join '') $rcCache
+        Check $r "cachefile-file" ((Get-Item -LiteralPath $rcCache -ErrorAction SilentlyContinue).Length -gt 0) $true
+        Check $r "cachefile-export" (Zfswin @('pool', 'export', 'zrc')).exit 0
         Check $r "export" (Zfswin @('pool', 'export', $rbPool)).exit 0
         $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
         $r | ConvertTo-Json -Depth 6 -Compress
