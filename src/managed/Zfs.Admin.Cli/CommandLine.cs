@@ -23,6 +23,9 @@ internal static class CommandLine
           pool import <pool|guid> [--dir <directory>]... [--new-name <name>]
                       [--no-mount] [--readonly] [--force]              (admin)
           pool export <pool> [--force]                                 (admin)
+          pool errors <pool>                     damaged files, device error counters
+          pool clear <pool>                                            (admin; reset error counters)
+          pool iostat <pool>                     cumulative I/O counters per device
           pool create <pool> [--mirror] <device>... [-o <prop>=<value>]...
                       [-O <prop>=<value>]... [--mountpoint <path>] --yes  (admin)
         Scrub
@@ -36,11 +39,15 @@ internal static class CommandLine
           dataset destroy <dataset> [-r] --yes                         (admin)
           dataset mount <dataset>                                      (admin)
           dataset unmount <dataset> [--force]                          (admin)
+          dataset count <dataset> [--objects-only]                     (admin; files and folders)
           mount list
         Snapshots
           snapshot list [<dataset>] [-r]
           snapshot create <dataset>@<name> [-r]                        (admin)
           snapshot destroy <dataset>@<name> [-r] --yes                 (admin)
+          snapshot rollback <dataset>@<name> [--destroy-newer] --yes   (admin; restores the dataset)
+          snapshot mount <dataset>@<name> [--at <X:|folder>]           (admin; read-only, temporary)
+          snapshot unmount <dataset>@<name>                            (admin)
         Mirror devices
           vdev attach <pool> <device> <new-device> --yes               (admin)
           vdev detach <pool> <device> --yes                            (admin)
@@ -51,6 +58,8 @@ internal static class CommandLine
         Files
           clone <source> <target> [--force]        copy by sharing blocks (block cloning);
                                                    runs as you, on one ZFS dataset
+        Memory
+          memory stats                           ARC, L2ARC and dedup table sizes
         Other
           version
           help
@@ -129,6 +138,9 @@ internal static class CommandLine
                     case "-r": case "--recursive": a["recursive"] = true; break;
                     case "-p": case "--parents": a["parents"] = true; break;
                     case "-d": case "--depth": a["depth"] = (int)Seconds(Next(args, token), max: 1000); break;
+                    case "--objects-only": a["objectsOnly"] = true; break;
+                    case "--destroy-newer": a["destroyNewer"] = true; break;
+                    case "--at": a["mountPoint"] = Next(args, token); break;
                 }
             }
         }
@@ -145,6 +157,11 @@ internal static class CommandLine
                 Options("--dir", "--new-name", "--no-mount", "--readonly", "--force"); Exactly(1);
                 a["pool"] = positional[0]; if (dirs.Count > 0) a["dirs"] = dirs; operation = "pool.import"; break;
             case "pool export": Options("--force"); Exactly(1); a["pool"] = positional[0]; operation = "pool.export"; break;
+            case "pool errors": case "pool clear": case "pool iostat":
+                Options(); Exactly(1); a["pool"] = positional[0]; operation = $"pool.{verb}"; break;
+            case "memory stats": Options(); Exactly(0); operation = "memory.stats"; break;
+            case "dataset count":
+                Options("--objects-only"); Exactly(1); a["dataset"] = positional[0]; operation = "dataset.count"; break;
             case "pool create":
                 Options("--mirror", "-o", "-O", "--mountpoint", "--yes"); AtLeast(2);
                 a["pool"] = positional[0];
@@ -178,6 +195,13 @@ internal static class CommandLine
             case "snapshot destroy":
                 Options("-r", "--recursive", "--yes"); Exactly(1); a["snapshot"] = positional[0];
                 operation = "snapshot.destroy"; destructive = true; break;
+            case "snapshot rollback":
+                Options("--destroy-newer", "--yes"); Exactly(1); a["snapshot"] = positional[0];
+                operation = "snapshot.rollback"; destructive = true; break;
+            case "snapshot mount":
+                Options("--at"); Exactly(1); a["snapshot"] = positional[0]; operation = "snapshot.mount"; break;
+            case "snapshot unmount":
+                Options(); Exactly(1); a["snapshot"] = positional[0]; operation = "snapshot.unmount"; break;
             case "vdev attach":
                 Options("--yes"); Exactly(3); a["pool"] = positional[0]; a["device"] = positional[1]; a["newDevice"] = positional[2];
                 operation = "vdev.attach"; destructive = true; break;

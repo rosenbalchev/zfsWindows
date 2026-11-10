@@ -43,6 +43,19 @@ internal static class HumanOutput
             case "mount.list":
                 Table(output, Items(result, "mounts"), ("DATASET", "dataset", null), ("MOUNTPOINT", "mountpoint", null));
                 break;
+            case "pool.errors":
+                PoolErrors(output, result);
+                break;
+            case "pool.iostat":
+                Table(output, new[] { result?["total"] }.Concat(Items(result, "vdevs")), ("VDEV", "name", null), ("READ OPS", "readOps", null),
+                    ("WRITE OPS", "writeOps", null), ("READ", "readBytes", Size), ("WRITTEN", "writeBytes", Size));
+                break;
+            case "memory.stats":
+                Memory(output, result);
+                break;
+            case "dataset.count":
+                DatasetCount(output, result);
+                break;
             case "pool.discover":
                 var pools = Items(result, "pools").ToList();
                 if (pools.Count == 0)
@@ -77,6 +90,11 @@ internal static class HumanOutput
         "vdev.add" => $"Added {(r?["role"]?.GetValue<string>() == "cache" ? "read cache (L2ARC)" : (r?["mirror"]?.GetValue<bool>() == true ? "mirrored write log (SLOG)" : "write log (SLOG)"))} " +
             $"{string.Join(", ", r?["devices"]?.AsArray().Select(d => d?.GetValue<string>()) ?? [])} to {r?["pool"]}.",
         "vdev.remove" => $"Removed {r?["removed"]} from {r?["pool"]}.",
+        "pool.clear" => $"Cleared the error counters of {r?["pool"]}.",
+        "snapshot.rollback" => $"Rolled {r?["dataset"]} back to {r?["snapshot"]}" +
+            (r?["destroyed"] is JsonArray { Count: > 0 } gone ? $"; destroyed {string.Join(", ", gone.Select(g => g?.ToString()))}." : "."),
+        "snapshot.mount" => $"Mounted {r?["snapshot"]} read-only at {r?["mountPoint"]} (temporary clone {r?["clone"]}).",
+        "snapshot.unmount" => $"Unmounted {r?["snapshot"]}; removed {r?["clone"]}.",
         _ => r?.ToJsonString() ?? "Done.",
     };
 
@@ -113,6 +131,61 @@ internal static class HumanOutput
         WriteRows(output, rows, indent: "\t");
         output.WriteLine($"errors: {(pool?["errorCount"]?.GetValue<long>() is long n && n > 0 ? $"{n} data errors" : "No known data errors")}");
         output.WriteLine();
+    }
+
+    static void PoolErrors(TextWriter output, JsonNode? r)
+    {
+        output.WriteLine($"  pool: {r?["pool"]}");
+        output.WriteLine($" state: {r?["state"]}");
+        output.WriteLine($"  scan: {Scan(r?["scan"])}");
+        Table(output, Items(r, "devices"), ("DEVICE", "name", null), ("STATE", "state", null), ("READ", "readErrors", null),
+            ("WRITE", "writeErrors", null), ("CKSUM", "checksumErrors", null));
+        var files = Items(r, "files").ToList();
+        if (files.Count == 0)
+        {
+            output.WriteLine(r?["errorCount"]?.GetValue<long>() is long n && n > 0
+                ? $"errors: {n} data errors; run 'zfswin scrub start {r?["pool"]}' to list them."
+                : "errors: No known data errors");
+            return;
+        }
+        output.WriteLine($"errors: Permanent errors in {files.Count} file(s) or object(s):");
+        foreach (JsonNode? f in files)
+            output.WriteLine($"        {f?["text"]}");
+    }
+
+    static void Memory(TextWriter output, JsonNode? r)
+    {
+        JsonNode? a = r?["arc"];
+        if (a is null)
+        {
+            output.WriteLine("ARC statistics are not available (no kernel driver and no user-mode service answered).");
+            return;
+        }
+        output.WriteLine($"source: {r?["source"]}");
+        output.WriteLine($"ARC: {Size(a["size"])} (target {Size(a["target"])}, min {Size(a["min"])}, max {Size(a["max"])})");
+        output.WriteLine($"     MRU {Size(a["mruSize"])}, MFU {Size(a["mfuSize"])}, hit ratio {Ratio(a["hitRatio"])}");
+        output.WriteLine($"L2ARC: {Size(a["l2Size"])}, hit ratio {Ratio(a["l2HitRatio"])}");
+        foreach (JsonNode? t in Items(r, "dedupTables"))
+            output.WriteLine($"dedup table {t?["pool"]}: {Size(t?["bytes"])}");
+        if (r?["userModeServicePrivateBytes"] is JsonNode svc)
+            output.WriteLine($"ZfsWinUserMode process: {Size(svc)} private");
+
+        static string Ratio(JsonNode? n) =>
+            n is JsonValue v && v.TryGetValue(out double d) ? (d * 100).ToString("0.0", CultureInfo.InvariantCulture) + "%" : "-";
+    }
+
+    static void DatasetCount(TextWriter output, JsonNode? r)
+    {
+        bool mounted = r?["mounted"]?.GetValue<bool>() == true;
+        output.WriteLine($"{r?["dataset"]}: {(mounted ? $"mounted at {r?["mountpoint"]}" : "not mounted")}");
+        if (r?["files"] is JsonNode files)
+        {
+            string incomplete = r["complete"]?.GetValue<bool>() == false ? " (incomplete: time limit reached)" : "";
+            string skipped = r["skipped"]?.GetValue<long>() is long sk && sk > 0 ? $", {sk} skipped" : "";
+            output.WriteLine($"  {files} files, {r["folders"]} folders, {Size(r["bytes"])}{skipped}{incomplete}");
+        }
+        if (r?["objects"] is JsonNode objects)
+            output.WriteLine($"  {objects} objects (files + folders + internal)");
     }
 
     static string Scan(JsonNode? scan)

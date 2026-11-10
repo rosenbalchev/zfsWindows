@@ -1,6 +1,6 @@
 # Step 20 — GUI dashboard, integrity and live rates (issue #17)
 
-Status: `planned`
+Status: `implemented — VM/manual verification pending`
 
 Prerequisites:
 - Step 16: `ZfsWinGui.exe`, the broker operations it uses.

@@ -99,6 +99,8 @@ internal static unsafe partial class ZfsUmNative
     internal static partial void ArcSetMax(ulong bytes);
     [LibraryImport(Library, EntryPoint = "zut_arc_stats")]
     internal static partial void ArcStats(out ZfsUmArcStats stats);
+    [LibraryImport(Library, EntryPoint = "zum_kstat_text", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int KstatText(string spec, [Out] byte[] buffer, nuint size, out nuint used);
     [LibraryImport(Library, EntryPoint = "zum_engine_version")]
     internal static partial nint EngineVersion();
 
@@ -236,6 +238,14 @@ public static class ZfsUserModeEngine
         ZfsUmNative.Check($"import {pool}", TryImportPool(pool, searchPath, cachefile));
 
     // An imported pool's cachefile when it names a file of the user's ("" otherwise).
+    /// <summary>A kstat as the bridge serves it (ZFS_BRIDGE_OP_KSTAT): "kstat -p" lines.</summary>
+    public static string KstatText(string spec)
+    {
+        var buffer = new byte[1 << 20];
+        ZfsUmNative.Check($"kstat {spec}", ZfsUmNative.KstatText(spec, buffer, (nuint)buffer.Length, out nuint used));
+        return System.Text.Encoding.UTF8.GetString(buffer, 0, (int)used);
+    }
+
     public static string PoolCachefile(string pool)
     {
         var buffer = new byte[1024];

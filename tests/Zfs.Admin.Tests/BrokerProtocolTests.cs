@@ -19,6 +19,18 @@ sealed class FakeRunner : IToolRunner
         Calls.Enqueue((tool, arguments.ToArray()));
         return Respond(tool, arguments.ToArray(), cancellationToken);
     }
+
+    public KstatText? Kstat { get; set; }
+    public Func<string, FileCount> Count { get; set; } = _ => new FileCount(0, 0, 0, 0, true);
+    public List<string> Walked { get; } = [];
+
+    public Task<KstatText?> ReadKstatAsync(string kstat, TimeSpan timeout, CancellationToken cancellationToken) => Task.FromResult(Kstat);
+
+    public FileCount CountFiles(string root, TimeSpan limit, CancellationToken cancellationToken)
+    {
+        lock (Walked) Walked.Add(root);
+        return Count(root);
+    }
 }
 
 sealed class FakeAuthenticator(bool admin) : ICallerAuthenticator

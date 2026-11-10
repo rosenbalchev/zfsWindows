@@ -19,6 +19,7 @@ EXPORTS
     zut_rollback
     zut_fs_open
     zum_engine_version
+    zum_kstat_text
     zum_fs_close
     zum_fs_statfs
     zum_fs_sync

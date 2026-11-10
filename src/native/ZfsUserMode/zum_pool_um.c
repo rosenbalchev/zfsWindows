@@ -97,6 +97,8 @@ engine_hold(void)
          */
         spa_config_path = (char *)"";
         dmu_objset_register_type(DMU_OST_ZFS, zfs_write_get_file_info);
+        /* arc_init() publishes arcstats into it (memory.stats). */
+        zum_kstat_init();
         /* Global mode; a read-only pool is guarded by its import property. */
         kernel_init(SPA_MODE_READ | SPA_MODE_WRITE);
         mutex_init(&zum_import_lock, NULL, MUTEX_DEFAULT, NULL);

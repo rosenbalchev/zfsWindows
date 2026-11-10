@@ -6,13 +6,24 @@ namespace Zfs.Admin.Gui;
 /// OpenZFS for Windows administration.  Every pool and dataset change goes
 /// through ZfsWinBroker (validated and written to the event log); the
 /// user-mode tab edits the ZfsWinUserMode mount configuration and controls
-/// that service.
+/// that service.  Both editions show the same tabs: where an edition gets a
+/// value differently, the broker hides it.
 /// </summary>
-sealed class MainForm : Form
+sealed partial class MainForm : Form
 {
     readonly AdminClient client = new();
     readonly ToolStripStatusLabel statusText = new() { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
+    readonly ToolStripStatusLabel editionStatus = new() { TextAlign = ContentAlignment.MiddleRight };
+    readonly ToolStripLabel editionBadge = new() { Alignment = ToolStripItemAlignment.Right, Font = new Font(SystemFonts.MessageBoxFont!, FontStyle.Bold) };
     readonly TabControl tabs = new() { Dock = DockStyle.Fill };
+    readonly System.Windows.Forms.Timer autoRefresh = new() { Interval = 5000 };
+    TabPage userModePage = null!;
+    string edition = "";
+    bool refreshing;
+
+    /// <summary>--screenshots: render every tab to a PNG in this folder, then close.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public string? ScreenshotDirectory { get; init; }
 
     // Pools
     readonly ListView pools = NewList(("Pool", 140), ("Health", 80), ("Size", 90), ("Allocated", 90), ("Free", 90), ("Capacity", 70), ("Fragmentation", 90), ("Dedup", 70));
@@ -47,18 +58,73 @@ sealed class MainForm : Form
         var tools = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
         var refresh = new ToolStripButton("Refresh") { DisplayStyle = ToolStripItemDisplayStyle.Text };
         refresh.Click += async (_, _) => await RefreshAllAsync();
-        tools.Items.Add(refresh);
+        var save = new ToolStripButton("Save report…") { DisplayStyle = ToolStripItemDisplayStyle.Text };
+        save.Click += async (_, _) => await SaveReportAsync();
+        tools.Items.AddRange([refresh, save, editionBadge]);
         var status = new StatusStrip();
-        status.Items.Add(statusText);
+        status.Items.AddRange([statusText, editionStatus]);
 
+        tabs.TabPages.Add(OverviewPage());
         tabs.TabPages.Add(PoolsPage());
         tabs.TabPages.Add(DatasetsPage());
+        tabs.TabPages.Add(SnapshotsPage());
         tabs.TabPages.Add(DevicesPage());
-        tabs.TabPages.Add(UserModePage());
+        tabs.TabPages.Add(IntegrityPage());
+        tabs.TabPages.Add(RatesPage());
+        tabs.TabPages.Add(userModePage = UserModePage());
         Controls.Add(tabs);
         Controls.Add(tools);
         Controls.Add(status);
-        Shown += async (_, _) => await RefreshAllAsync();
+        Shown += async (_, _) =>
+        {
+            edition = Edition.Detect();
+            editionBadge.Text = edition;
+            editionStatus.Text = edition;
+            await RefreshAllAsync();
+            if (ScreenshotDirectory is not null)
+                await TakeScreenshotsAsync(ScreenshotDirectory);
+            else
+                autoRefresh.Start();
+        };
+        // Every 5 s: the tab in view, never while minimized or busy.
+        autoRefresh.Tick += async (_, _) => await RefreshVisibleAsync();
+        tabs.SelectedIndexChanged += async (_, _) => await RefreshVisibleAsync();
+        FormClosing += OnClosing;
+    }
+
+    async Task RefreshVisibleAsync()
+    {
+        if (refreshing || WindowState == FormWindowState.Minimized || !brokerAvailable || !tabs.Enabled)
+            return;
+        refreshing = true;
+        TabPage page = tabs.SelectedTab!;
+        try
+        {
+            await (page.Text switch
+            {
+                "Overview" => ShowOverviewAsync(),
+                "Integrity" => ShowIntegrityAsync(),
+                "Redundancy" => ShowDevicesAsync(),
+                "Pools" => ShowPoolAsync(),
+                _ => Task.CompletedTask,
+            });
+        }
+        catch (AdminException e)
+        {
+            BackgroundError(page.Text, e);
+        }
+        finally
+        {
+            refreshing = false;
+        }
+    }
+
+    /// <summary>A refresh that failed on its own: the status bar says which operation, no dialog.</summary>
+    void BackgroundError(string what, AdminException e)
+    {
+        statusText.Text = $"{what}: {e.Message}";
+        if (e.Code == ErrorCode.BrokerUnavailable)
+            brokerAvailable = false;
     }
 
     // --- pages --------------------------------------------------------------
@@ -134,7 +200,7 @@ sealed class MainForm : Form
 
     TabPage DevicesPage()
     {
-        var page = new TabPage("Mirrors and caches");
+        var page = new TabPage("Redundancy");
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(4) };
         top.Controls.Add(new Label { Text = "Pool:", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(devicePool);
@@ -142,7 +208,8 @@ sealed class MainForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, Width = 320, Padding = new Padding(8) };
         void Action(string text, Func<Task> handler)
         {
-            var b = new Button { Text = text, Width = 290, Height = 34 };
+            // Two lines' height: the longer captions wrap instead of being cut.
+            var b = new Button { Text = text, Width = 290, Height = 44 };
             b.Click += async (_, _) => await handler();
             actions.Controls.Add(b);
         }
@@ -155,7 +222,12 @@ sealed class MainForm : Form
                           "A read cache (L2ARC) is a fast device that holds data evicted from RAM.  " +
                           "A write log (SLOG) speeds up synchronous writes; mirror it, because it holds writes not yet on the pool.";
         actions.Controls.Add(deviceHelp);
-        page.Controls.Add(deviceTree);
+        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
+        // The vdev tree above, copies and drive health below (more rows).
+        Shown += (_, _) => split.SplitterDistance = Math.Max(split.Panel1MinSize, split.Height * 2 / 5);
+        split.Panel1.Controls.Add(deviceTree);
+        split.Panel2.Controls.Add(RedundancyPanel());
+        page.Controls.Add(split);
         page.Controls.Add(actions);
         page.Controls.Add(top);
         return page;
@@ -216,19 +288,22 @@ sealed class MainForm : Form
                 statusText.Text = UserModeService.State() == "NotInstalled" ? "ZfsWinBroker is not running (net start ZfsWinBroker)." : "ZfsWinBroker is not running (net start ZfsWinBroker).  The User mode tab manages the ZfsWinUserMode service, which pool administration also needs.";
             }
             foreach (TabPage p in tabs.TabPages)
-                p.Enabled = brokerAvailable || p.Text == "User mode";
+                p.Enabled = brokerAvailable || p == userModePage;
             if (!brokerAvailable && UserModeService.State() != "NotInstalled")
-                tabs.SelectedIndex = 3;
+                tabs.SelectedTab = userModePage;
             if (brokerAvailable)
             {
                 await ShowPoolsAsync();
                 await ShowDatasetsAsync();
+                await ShowSnapshotDatasetsAsync();
+                await ShowOverviewAsync();
+                await ShowIntegrityAsync();
             }
             ShowUserMode();
         }
         catch (AdminException e)
         {
-            Error("Refresh", e);
+            BackgroundError("Refresh", e);
         }
         finally
         {
@@ -254,10 +329,14 @@ sealed class MainForm : Form
         if (pools.SelectedItems.Count == 0 && pools.Items.Count > 0)
             pools.Items[0].Selected = true;
         pools.EndUpdate();
-        devicePool.Items.Clear();
-        devicePool.Items.AddRange(list.Select(p => (object)p.Name).ToArray());
-        if (devicePool.Items.Count > 0)
-            devicePool.SelectedItem = selected is not null && devicePool.Items.Contains(selected) ? selected : devicePool.Items[0];
+        foreach (ComboBox box in new[] { devicePool, integrityPool, ratesPool })
+        {
+            object? keep = box.SelectedItem;
+            box.Items.Clear();
+            box.Items.AddRange(list.Select(p => (object)p.Name).ToArray());
+            if (box.Items.Count > 0)
+                box.SelectedItem = keep is not null && box.Items.Contains(keep) ? keep : selected is not null && box.Items.Contains(selected) ? selected : box.Items[0];
+        }
         await ShowPoolAsync();
     }
 
@@ -276,8 +355,11 @@ sealed class MainForm : Form
 
     async Task ShowDevicesAsync()
     {
-        if (devicePool.SelectedItem is string pool)
-            FillTree(deviceTree, await client.StatusAsync(pool));
+        if (devicePool.SelectedItem is not string pool)
+            return;
+        PoolStatusInfo? status = await client.StatusAsync(pool);
+        FillTree(deviceTree, status);
+        await ShowRedundancyAsync(pool, status);
     }
 
     static void FillTree(TreeView tree, PoolStatusInfo? s)
@@ -321,7 +403,7 @@ sealed class MainForm : Form
     async Task ShowDatasetsAsync()
     {
         string? selected = SelectedDataset();
-        var list = await client.DatasetsAsync();
+        var list = (await client.DatasetsAsync()).Where(d => !IsTemporary(d.Name)).ToList();
         datasets.BeginUpdate();
         datasets.Items.Clear();
         foreach (DatasetInfo d in list)

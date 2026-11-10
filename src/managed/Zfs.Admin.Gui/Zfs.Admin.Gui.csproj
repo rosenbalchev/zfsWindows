@@ -18,13 +18,26 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <SelfContained>false</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
+    <!-- WebView2Loader.dll travels inside ZfsWinGui.exe; the installers ship that one file. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <!-- The rid-specific apphost; the runtime itself is shared. -->
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Zfs.Admin\Zfs.Admin.csproj" />
     <PackageReference Include="System.Management" Version="10.0.0" />
+    <!-- The Overview tab (step 20).  Only the loader (about 0.2 MB); the
+         WebView2 runtime is the system's, absent on LTSC and Server, where
+         the tab offers "Open in browser" instead. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0" />
   </ItemGroup>
+  <!-- The package references its WPF control too; a WinForms app needs
+       neither it nor the WindowsBase version conflict it brings. -->
+  <Target Name="DropWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
   <Import Project="..\..\..\build\ZfsWinVersion.props" />
 </Project>

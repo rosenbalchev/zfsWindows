@@ -141,4 +141,7 @@ int zum_vdev_leaves(vdev_t *vd, vdev_t **leaves, int max, int count);
 int zum_inject_write_errors(zum_context_t *context, const char *match);
 void zum_clear_injections(zum_context_t *context);
 
+/* The engine's kstat registry (zum_kstat_um.c); before kernel_init(). */
+void zum_kstat_init(void);
+
 #endif

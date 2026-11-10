@@ -58,7 +58,35 @@ tool in the Start menu (`ZfsWinGui.exe`, needs the .NET 10 Desktop Runtime).
   - adding and removing mirror disks, read caches (L2ARC) and write logs
     (SLOG). In the user-mode edition a write log is not used and a read
     cache is dropped at the next import, see below.
+  - **Overview**, **Integrity**, **Redundancy**, **Rates**, and **Snapshots**
+    tabs: pool health and capacity, damaged files and scrub errors, copies
+    and drive health, live I/O and ARC statistics, and snapshot create,
+    rollback, temporary mount, and restore-by-Explorer workflows.
 - **User-mode edition, in addition:** its service and mounts.
+
+### GUI dashboard preview
+
+The dashboard is generated locally as self-contained HTML with inline SVG;
+it does not load scripts or assets from the network. WebView2 hosts the
+Overview tab when the runtime is installed, and the same page is written to
+`%LOCALAPPDATA%\OpenZFS\dashboard.html` for the **Open in browser** fallback.
+All monitoring tabs refresh without blocking the window, and the GUI has a
+headless `--self-check` path plus `--screenshots <directory>` evidence mode.
+
+The images below are the issue-17 UI previews used to exercise the layout and
+content before disposable-pool VM captures are attached:
+
+| Overview | Integrity |
+| --- | --- |
+| ![Overview dashboard preview](docs/mockups/issue-17/overview.png) | ![Integrity preview](docs/mockups/issue-17/integrity.png) |
+
+| Redundancy | Rates |
+| --- | --- |
+| ![Redundancy preview](docs/mockups/issue-17/redundancy.png) | ![Rates preview](docs/mockups/issue-17/rates.png) |
+
+| Snapshots | Rollback confirmation |
+| --- | --- |
+| ![Snapshots preview](docs/mockups/issue-17/snapshots.png) | ![Rollback preview](docs/mockups/issue-17/rollback.png) |
 
 What has been tested:
 - **x64 Debug:** verified in disposable Windows 11 24H2 x64 VMs and against

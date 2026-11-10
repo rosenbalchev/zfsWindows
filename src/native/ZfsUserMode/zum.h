@@ -126,6 +126,13 @@ typedef struct zum_bridge_ops {
 
 int zum_bridge_init(const zum_bridge_ops_t *ops);
 
+/*
+ * ZFS_BRIDGE_OP_KSTAT: the named kstat spec ("zfs:0:arcstats") as "kstat
+ * -p" lines in out (*used bytes).  0, ENOENT (no such kstat), EINVAL or
+ * ENOMEM (out too small).
+ */
+int zum_kstat_text(const char *spec, char *out, size_t size, size_t *used);
+
 /* One ioctl's buffers, already in this process. */
 typedef struct zum_ioctl_buffers {
     void *cmd;			/* zfs_cmd_t, zum_ioctl_cmd_size() bytes */

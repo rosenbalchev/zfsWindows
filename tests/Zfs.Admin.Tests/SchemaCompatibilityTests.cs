@@ -86,6 +86,30 @@ public class SchemaCompatibilityTests
     }
 
     [Fact]
+    public void Step20ResultsMatchTheSchema()
+    {
+        // The real zpool status sample has no errlist; it must still convert.
+        AssertValid(CliProgram.Success("pool.errors", ZfsJson.PoolErrors(JsonNode.Parse(Sample("zpool-status.json"))!, "zwin")));
+        var errors = ZfsJson.PoolErrors(JsonNode.Parse("""
+            { "pools": { "t": { "name": "t", "error_count": 2, "errlist": [ "<metadata>:<0x1b>", "t/a@s:/f" ] } } }
+            """)!, "t");
+        AssertValid(CliProgram.Success("pool.errors", errors));
+        var iostat = ZfsJson.VdevIostat(JsonNode.Parse("""
+            { "vdevs": { "t": { "name": "t", "vdev_type": "root", "properties": { "read_ops": { "value": 1 } } } } }
+            """)!, "t", DateTimeOffset.UtcNow);
+        AssertValid(CliProgram.Success("pool.iostat", iostat));
+        var memory = new JsonObject
+        {
+            ["source"] = "kernel", ["arc"] = ZfsJson.ArcStats(ZfsJson.KstatValues("zfs:0:arcstats:size\t5\n")),
+            ["dedupTables"] = new JsonArray(), ["userModeServicePrivateBytes"] = null,
+        };
+        AssertValid(CliProgram.Success("memory.stats", memory));
+        var bad = memory.DeepClone();
+        bad["arc"]!["size"] = "5 MiB";
+        Assert.False(Schema.Evaluate(CliProgram.Success("memory.stats", bad)).IsValid);
+    }
+
+    [Fact]
     public void EveryErrorCodeIsInTheSchema()
     {
         foreach (ErrorCode code in Enum.GetValues<ErrorCode>())

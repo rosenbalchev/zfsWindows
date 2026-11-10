@@ -202,7 +202,7 @@ public sealed class BrokerServer(IToolRunner runner, ICallerAuthenticator authen
 
             var context = new OperationContext(runner, cancellationToken);
             JsonNode? result;
-            if (spec.Privileged)
+            if (spec.Privileged && spec.Exclusive)
             {
                 if (!await mutationLock.WaitAsync(TimeSpan.FromMinutes(5), cancellationToken).ConfigureAwait(false))
                     throw new AdminException(ErrorCode.Busy, "Another administrative operation is still running.");
