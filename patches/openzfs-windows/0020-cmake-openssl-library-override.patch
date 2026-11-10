@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index cbcb2144b..5bbfa9dd0 100644
+index 401179aa1..ab597e9a8 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -10,7 +10,10 @@ find_package(WDK REQUIRED)

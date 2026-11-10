@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/zfs_vfsops.c b/module/os/windows/zfs/zfs_vfsops.c
-index 28f843d83..972876b33 100644
+index 5ddc6c5f9..bb99cb7a9 100644
 --- a/module/os/windows/zfs/zfs_vfsops.c
 +++ b/module/os/windows/zfs/zfs_vfsops.c
-@@ -1611,6 +1611,25 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
+@@ -1632,6 +1632,25 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
  		mutex_exit(&zfsvfs->z_znodes_lock);
  	}
  

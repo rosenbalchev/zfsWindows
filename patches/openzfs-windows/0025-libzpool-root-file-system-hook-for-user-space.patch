@@ -1,8 +1,8 @@
 diff --git a/include/sys/dsl_pool.h b/include/sys/dsl_pool.h
-index d7a950812..a969c6c0b 100644
+index 7409b4fb9..b5d76165a 100644
 --- a/include/sys/dsl_pool.h
 +++ b/include/sys/dsl_pool.h
-@@ -158,6 +158,11 @@ int dsl_pool_open(dsl_pool_t *dp);
+@@ -155,6 +155,11 @@ int dsl_pool_open(dsl_pool_t *dp);
  void dsl_pool_close(dsl_pool_t *dp);
  dsl_pool_t *dsl_pool_create(spa_t *spa, nvlist_t *zplprops,
      struct dsl_crypto_params *dcp, uint64_t txg);
@@ -15,10 +15,10 @@ index d7a950812..a969c6c0b 100644
  void dsl_pool_sync_done(dsl_pool_t *dp, uint64_t txg);
  int dsl_pool_sync_context(dsl_pool_t *dp);
 diff --git a/module/zfs/dsl_pool.c b/module/zfs/dsl_pool.c
-index f47822df8..8d976f351 100644
+index 256bf2edd..58ec8c5f4 100644
 --- a/module/zfs/dsl_pool.c
 +++ b/module/zfs/dsl_pool.c
-@@ -473,6 +473,16 @@ dsl_pool_destroy_obsolete_bpobj(dsl_pool_t *dp, dmu_tx_t *tx)
+@@ -471,6 +471,16 @@ dsl_pool_destroy_obsolete_bpobj(dsl_pool_t *dp, dmu_tx_t *tx)
  	bpobj_close(&dp->dp_obsolete_bpobj);
  }
  
@@ -35,7 +35,7 @@ index f47822df8..8d976f351 100644
  dsl_pool_t *
  dsl_pool_create(spa_t *spa, nvlist_t *zplprops __attribute__((unused)),
      dsl_crypto_params_t *dcp, uint64_t txg)
-@@ -554,6 +564,9 @@ dsl_pool_create(spa_t *spa, nvlist_t *zplprops __attribute__((unused)),
+@@ -552,6 +562,9 @@ dsl_pool_create(spa_t *spa, nvlist_t *zplprops __attribute__((unused)),
  	rrw_exit(&ds->ds_bp_rwlock, FTAG);
  #ifdef _KERNEL
  	zfs_create_fs(os, kcred, zplprops, tx);

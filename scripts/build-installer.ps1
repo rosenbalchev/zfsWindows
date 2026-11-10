@@ -143,7 +143,7 @@ $components = foreach ($f in Get-ChildItem $payload -Recurse -File | Where-Objec
         licenses = @(@{ license = @{ id = $license } })
     }
 }
-$components += [ordered]@{ type = "library"; name = "OpenZFS on Windows"; version = "zfswin-2.4.1rc17+patches"; purl = "pkg:github/openzfsonwindows/openzfs@$openzfsCommit"; licenses = @(@{ license = @{ id = "CDDL-1.0" } }) }
+$components += [ordered]@{ type = "library"; name = "OpenZFS on Windows"; version = "zfswin-2.4.4rc9+patches"; purl = "pkg:github/openzfsonwindows/openzfs@$openzfsCommit"; licenses = @(@{ license = @{ id = "CDDL-1.0" } }) }
 $components += [ordered]@{ type = "library"; name = "OpenSSL libcrypto (static, in zpool/zfs/zdb)"; licenses = @(@{ license = @{ id = "Apache-2.0" } }) }
 $components += [ordered]@{ type = "framework"; name = ".NET NativeAOT runtime (in zfswin/ZfsWinBroker)"; version = "10.0"; licenses = @(@{ license = @{ id = "MIT" } }) }
 [ordered]@{

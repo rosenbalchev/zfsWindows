@@ -1,8 +1,8 @@
 diff --git a/cmd/CMakeLists.txt b/cmd/CMakeLists.txt
-index 0792ae8e7..35311e346 100644
+index 6133ab684..aa4a62692 100644
 --- a/cmd/CMakeLists.txt
 +++ b/cmd/CMakeLists.txt
-@@ -4,6 +4,9 @@ include_directories(PRIVATE "${CMAKE_SOURCE_DIR}/lib/libspl/include/os/windows/"
+@@ -4,6 +4,9 @@ include_directories("${CMAKE_SOURCE_DIR}/lib/libspl/include/os/windows/" "${CMAK
  	"${CMAKE_SOURCE_DIR}/lib/os/windows/libpthread" "${OPENSSL_INCLUDE_DIR}")
  
  add_definitions(-D_CRT_SECURE_NO_WARNINGS)
@@ -13,10 +13,10 @@ index 0792ae8e7..35311e346 100644
  add_subdirectory(zpool)
  add_subdirectory(zfs)
 diff --git a/lib/CMakeLists.txt b/lib/CMakeLists.txt
-index aaa992bdc..d8dd85e3a 100644
+index fade665b9..926de28ef 100644
 --- a/lib/CMakeLists.txt
 +++ b/lib/CMakeLists.txt
-@@ -5,6 +5,11 @@ include_directories(PRIVATE "${CMAKE_SOURCE_DIR}/lib/libspl/include/os/windows"
+@@ -5,6 +5,11 @@ include_directories("${CMAKE_SOURCE_DIR}/lib/libspl/include/os/windows" "${CMAKE
  
  add_definitions(-D_CRT_SECURE_NO_WARNINGS)
  add_definitions(-D_CRT_LOADCFG_DISABLE_CET)

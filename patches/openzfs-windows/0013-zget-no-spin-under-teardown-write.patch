@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/zfs_znode_os.c b/module/os/windows/zfs/zfs_znode_os.c
-index 96a64c666..e68efd01a 100644
+index 0328d9cf2..9120a0b32 100644
 --- a/module/os/windows/zfs/zfs_znode_os.c
 +++ b/module/os/windows/zfs/zfs_znode_os.c
-@@ -1143,6 +1143,18 @@ again:
+@@ -1148,6 +1148,18 @@ again:
  		 * ZGET_FLAG_ASYNC, which left every plain zget() racing a
  		 * synchronous attach to busy-spin here instead of blocking.
  		 */
@@ -21,7 +21,7 @@ index 96a64c666..e68efd01a 100644
  		if (!vp) {
  			if (zfs_znode_asyncwait(zfsvfs, zp) == 0) {
  				dprintf("%s: waited on z_vnode OK\n", __func__);
-@@ -1168,6 +1180,9 @@ again:
+@@ -1173,6 +1185,9 @@ again:
  
  		if (err != 0) {
  			dprintf("ZFS: vnode_get() returned %d\n", err);

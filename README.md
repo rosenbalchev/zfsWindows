@@ -5,7 +5,7 @@ upstream OpenZFS source in `OpenZFS/`. That directory is a git submodule
 pinned to upstream tag `zfs-2.4.4` (branch `zfs-2.4-release`, commit
 [`71a9f957`](https://github.com/openzfs/zfs/tree/71a9f9578616a90c3c14bb59629fb4d31bfd68d1)). It is kept unchanged and is treated as the on-disk format
 and algorithm reference. `third_party/openzfs-windows` is the pinned
-OpenZFS-on-Windows port (`zfswin-2.4.1rc17`) used for the write core and the
+OpenZFS-on-Windows port (`zfswin-2.4.4rc9`) used for the write core and the
 kernel driver. Clone with `git clone --recurse-submodules`, or run
 `git submodule update --init` in an existing clone; the submodules' own
 nested submodules are not needed.
@@ -355,7 +355,7 @@ snapshot discovery and historical-read test.
 
 `zfs-write-core.exe` is a user-mode adapter that writes to disposable,
 file-backed pool images. It is built against the pinned openzfs-windows
-libzpool (`third_party/openzfs-windows`, tag `zfswin-2.4.1rc17`) and calls the
+libzpool (`third_party/openzfs-windows`, tag `zfswin-2.4.4rc9`) and calls the
 upstream DMU/ZAP/SA code directly, so allocation, copy-on-write, transaction
 groups, checksums, and space maps are the genuine OpenZFS implementation. The
 namespace operations are ports of the upstream Linux ZPL code paths

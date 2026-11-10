@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/zfs_vnops_windows.c b/module/os/windows/zfs/zfs_vnops_windows.c
-index 6010a13a9..4566f2a37 100644
+index 170e00cea..9ffee40dd 100644
 --- a/module/os/windows/zfs/zfs_vnops_windows.c
 +++ b/module/os/windows/zfs/zfs_vnops_windows.c
-@@ -6431,7 +6431,13 @@ query_directory_FileFullDirectoryInformation(PDEVICE_OBJECT DeviceObject,
+@@ -6474,7 +6474,13 @@ query_directory_FileFullDirectoryInformation(PDEVICE_OBJECT DeviceObject,
  		    kmem_alloc(zccb->searchname.MaximumLength,
  		    KM_SLEEP);
  

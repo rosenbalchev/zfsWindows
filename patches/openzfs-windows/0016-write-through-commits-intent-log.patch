@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/zfs_vnops_windows.c b/module/os/windows/zfs/zfs_vnops_windows.c
-index 6010a13a9..38e150b9a 100644
+index 9ffee40dd..4a7c4c215 100644
 --- a/module/os/windows/zfs/zfs_vnops_windows.c
 +++ b/module/os/windows/zfs/zfs_vnops_windows.c
-@@ -7954,6 +7960,22 @@ end:
+@@ -8038,6 +8038,22 @@ end:
  	if (acquired_vp_lock)
  		ExReleaseResourceLite(vp->FileHeader.Resource);
  

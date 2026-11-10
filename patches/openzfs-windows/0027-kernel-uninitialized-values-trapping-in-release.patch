@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/zfs_ioctl_os.c b/module/os/windows/zfs/zfs_ioctl_os.c
-index 616deaea9..32a762ff7 100644
+index 4d67fc247..cb502210f 100644
 --- a/module/os/windows/zfs/zfs_ioctl_os.c
 +++ b/module/os/windows/zfs/zfs_ioctl_os.c
-@@ -1107,7 +1107,7 @@ zfs_send_system_boot(void)
+@@ -1098,7 +1098,7 @@ zfs_send_system_boot(void)
  {
  	nvlist_t *ereport, *detector;
  	// char class[64];
@@ -12,10 +12,10 @@ index 616deaea9..32a762ff7 100644
  	ereport = fm_nvlist_create(NULL);
  	detector = fm_nvlist_create(NULL);
 diff --git a/module/os/windows/zfs/zfs_vnops_windows_lib.c b/module/os/windows/zfs/zfs_vnops_windows_lib.c
-index b846c3643..a00317bfc 100644
+index fcb0b4f16..8f5ea2b36 100644
 --- a/module/os/windows/zfs/zfs_vnops_windows_lib.c
 +++ b/module/os/windows/zfs/zfs_vnops_windows_lib.c
-@@ -1367,7 +1367,7 @@ zfs_readdir_emitdir(zfsvfs_t *zfsvfs, const char *name, emitdir_ptr_t *ctx,
+@@ -1359,7 +1359,7 @@ zfs_readdir_emitdir(zfsvfs_t *zfsvfs, const char *name, emitdir_ptr_t *ctx,
  		FILE_ID_ALL_EXTD_BOTH_DIR_INFORMATION *fiaebdi =
  		    (FILE_ID_ALL_EXTD_BOTH_DIR_INFORMATION *)
  		    ctx->bufptr;
@@ -24,7 +24,7 @@ index b846c3643..a00317bfc 100644
  
  		fiaebdi->FileIndex = ctx->offset;
  		fiaebdi->AllocationSize.QuadPart =
-@@ -6325,7 +6325,7 @@ QueryDeviceRelations(PDEVICE_OBJECT DeviceObject, PIRP *PIrp,
+@@ -6428,7 +6428,7 @@ QueryDeviceRelations(PDEVICE_OBJECT DeviceObject, PIRP *PIrp,
  		if (!DeviceRelations) {
  			dprintf("enomem DeviceRelations\n");
  			Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -33,25 +33,3 @@ index b846c3643..a00317bfc 100644
  		}
  
  		mount_t *zmo_dcb = (mount_t *)zmo->parent_device;
-diff --git a/module/os/windows/zfs/zvol_os.c b/module/os/windows/zfs/zvol_os.c
-index 68b846892..8387fd65d 100644
---- a/module/os/windows/zfs/zvol_os.c
-+++ b/module/os/windows/zfs/zvol_os.c
-@@ -363,10 +363,14 @@ zvol_os_deregister_module(void)
- 	mutex_destroy(&zvol_os_wait_openzvol_thread_lock);
- 
- 	if (g_zvolHandle) {
--		IO_STATUS_BLOCK iosb;
--		(void) ZwDeviceIoControlFile(g_zvolHandle,
-+		/*
-+		 * status was tested below without ever being set: undefined
-+		 * behaviour, which clang compiles to int3 in Release, so
-+		 * unloading the driver bugchecked (0x7E, 0x80000003).
-+		 */
-+		status = ZwDeviceIoControlFile(g_zvolHandle,
- 		    NULL, NULL, NULL,
--		    &iosb,
-+		    &ioStatus,
- 		    OPENZVOL_DEREGISTER,
- 		    NULL, 0, NULL, 0);
- 		if (status == STATUS_PENDING) {

@@ -1,8 +1,8 @@
 diff --git a/include/sys/zfs_file.h b/include/sys/zfs_file.h
-index 8737ee0eb..98532455b 100644
+index bb97aa638..ca96114bd 100644
 --- a/include/sys/zfs_file.h
 +++ b/include/sys/zfs_file.h
-@@ -44,6 +44,23 @@ typedef struct zfs_file {
+@@ -34,6 +34,23 @@ typedef struct zfs_file {
  	loff_t f_win_offset;
  #endif
  } zfs_file_t;
@@ -26,11 +26,11 @@ index 8737ee0eb..98532455b 100644
  #elif defined(__linux__) || defined(__FreeBSD__)
  typedef struct file zfs_file_t;
  #elif defined(_WIN32)
-diff --git a/lib/libzpool/kernel.c b/lib/libzpool/kernel.c
-index 5a5f3c0c7..4c1dc7796 100644
---- a/lib/libzpool/kernel.c
-+++ b/lib/libzpool/kernel.c
-@@ -648,16 +648,36 @@ zfs_file_write(zfs_file_t *fp, const void *buf, size_t count, ssize_t *resid)
+diff --git a/lib/libzpool/zfs_file_os.c b/lib/libzpool/zfs_file_os.c
+index 67efd42dc..cd6df2378 100644
+--- a/lib/libzpool/zfs_file_os.c
++++ b/lib/libzpool/zfs_file_os.c
+@@ -138,9 +138,29 @@ zfs_file_write(zfs_file_t *fp, const void *buf, size_t count, ssize_t *resid)
   *
   * Returns 0 on success errno on failure.
   */
@@ -42,15 +42,10 @@ index 5a5f3c0c7..4c1dc7796 100644
  int
  zfs_file_pwrite(zfs_file_t *fp, const void *buf,
      size_t count, loff_t pos, uint8_t ashift, ssize_t *resid)
- {
--	ssize_t rc, split, done;
--	int sectors;
++{
 +	zfs_file_observer_t observer = zfs_file_observer;
 +	int error;
- 
- #ifdef _WIN32
- 	pos += fp->f_win_offset;
- #endif
++
 +	if (observer != NULL)
 +		observer(ZFS_FILE_WRITE_BEGIN, fp, buf, count, pos, 0);
 +	error = zfs_file_pwrite_impl(fp, buf, count, pos, ashift, resid);
@@ -62,14 +57,10 @@ index 5a5f3c0c7..4c1dc7796 100644
 +static int
 +zfs_file_pwrite_impl(zfs_file_t *fp, const void *buf,
 +    size_t count, loff_t pos, uint8_t ashift, ssize_t *resid)
-+{
-+	ssize_t rc, split, done;
-+	int sectors;
-+
- 	/*
- 	 * To simulate partial disk writes, we split writes into two
- 	 * system calls so that the process can be killed in between.
-@@ -834,12 +854,18 @@ zfs_file_getattr(zfs_file_t *fp, zfs_file_attr_t *zfattr)
+ {
+ 	ssize_t rc, split, done;
+ 	int sectors;
+@@ -317,12 +337,18 @@ zfs_file_getattr(zfs_file_t *fp, zfs_file_attr_t *zfattr)
  int
  zfs_file_fsync(zfs_file_t *fp, int flags)
  {

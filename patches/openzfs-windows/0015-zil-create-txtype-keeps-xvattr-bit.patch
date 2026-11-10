@@ -1,8 +1,8 @@
 diff --git a/module/zfs/zfs_log.c b/module/zfs/zfs_log.c
-index e2944749e..afb9301d6 100644
+index d31dd08c8..a32d9a24c 100644
 --- a/module/zfs/zfs_log.c
 +++ b/module/zfs/zfs_log.c
-@@ -70,7 +70,12 @@
+@@ -60,7 +60,12 @@
  int
  zfs_log_create_txtype(zil_create_t type, vsecattr_t *vsecp, vattr_t *vap)
  {

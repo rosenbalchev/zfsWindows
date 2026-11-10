@@ -1,8 +1,8 @@
 diff --git a/lib/libspl/os/windows/posix.c b/lib/libspl/os/windows/posix.c
-index 8602bc637..003f28d75 100644
+index 0cf742a95..b5b15198e 100644
 --- a/lib/libspl/os/windows/posix.c
 +++ b/lib/libspl/os/windows/posix.c
-@@ -1123,8 +1123,11 @@ getline(char **linep, size_t *linecapp, FILE *stream)
+@@ -1145,8 +1145,11 @@ getline(char **linep, size_t *linecapp, FILE *stream)
  int
  wosix_fsync(int fd)
  {

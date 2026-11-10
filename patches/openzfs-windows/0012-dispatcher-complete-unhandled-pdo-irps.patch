@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/zfs_vnops_windows.c b/module/os/windows/zfs/zfs_vnops_windows.c
-index 6010a13a9..4566f2a37 100644
+index 125cae215..170e00cea 100644
 --- a/module/os/windows/zfs/zfs_vnops_windows.c
 +++ b/module/os/windows/zfs/zfs_vnops_windows.c
-@@ -11442,6 +11448,25 @@ _Function_class_(DRIVER_DISPATCH)
+@@ -11626,6 +11626,25 @@ _Function_class_(DRIVER_DISPATCH)
  #endif
  
  	if ((Status == STATUS_INVALID_DEVICE_REQUEST) && Irp &&

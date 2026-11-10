@@ -1,8 +1,8 @@
 diff --git a/lib/libzutil/zutil_import.c b/lib/libzutil/zutil_import.c
-index 56ac11e20..f6b6fb2c0 100644
+index cdc230940..2b9932df2 100644
 --- a/lib/libzutil/zutil_import.c
 +++ b/lib/libzutil/zutil_import.c
-@@ -1396,6 +1396,32 @@ zpool_find_import_scan(libpc_handle_t *hdl, pthread_mutex_t *lock,
+@@ -1470,6 +1470,32 @@ zpool_find_import_scan(libpc_handle_t *hdl, pthread_mutex_t *lock,
  	for (i = 0; i < dirs; i++) {
  		struct stat sbuf;
  

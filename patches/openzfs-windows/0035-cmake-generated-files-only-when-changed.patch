@@ -1,8 +1,8 @@
 diff --git a/contrib/windows/cmake/FindWdk.cmake b/contrib/windows/cmake/FindWdk.cmake
-index a870fd773..a434f10a7 100644
+index e4033cba8..7368d60f4 100644
 --- a/contrib/windows/cmake/FindWdk.cmake
 +++ b/contrib/windows/cmake/FindWdk.cmake
-@@ -86,7 +86,10 @@ set(WDK_WINVER "0x0601" CACHE STRING "Default WINVER for WDK targets")
+@@ -87,7 +87,10 @@ set(WDK_WINVER "0x0601" CACHE STRING "Default WINVER for WDK targets")
  set(WDK_NTDDI_VERSION "" CACHE STRING "Specified NTDDI_VERSION for WDK targets if needed")
  
  set(WDK_ADDITIONAL_FLAGS_FILE "${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/wdkflags.h")
