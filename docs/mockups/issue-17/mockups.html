@@ -1,0 +1,263 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ZfsWinGui mockups</title>
+<style>
+:root{--win:#f3f3f3;--pane:#ffffff;--line:#e0e0e0;--fg:#1b1b1b;--mut:#5f6368;--acc:#0067c0;--ok:#0f7b0f;--warn:#9d5d00;--bad:#c42b1c;--okbg:#dff6dd;--warnbg:#fff4ce;--badbg:#fde7e9;--soft:#f7f9fc}
+*{box-sizing:border-box}
+body{margin:0;background:#cfd8e3;font:12px "Segoe UI",system-ui,sans-serif;color:var(--fg);padding:20px}
+.win{width:1100px;height:720px;background:var(--win);border:1px solid #9aa4ae;border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.25);display:flex;flex-direction:column;overflow:hidden;position:relative}
+.title{height:32px;display:flex;align-items:center;padding-left:12px;gap:8px;background:#eef1f5}
+.title .ico{width:16px;height:16px;border-radius:3px;background:linear-gradient(135deg,#2b6cb0,#38a169)}
+.title .caps{margin-left:auto;display:flex}.title .caps span{width:46px;text-align:center;font-size:13px;color:#333}
+.tool{height:30px;display:flex;align-items:center;gap:4px;padding:0 6px;border-bottom:1px solid var(--line)}
+.tbtn{padding:3px 10px;border-radius:4px}.tbtn:first-child{background:#e5e5e5}
+.edition{margin-left:auto;padding:2px 10px;border-radius:10px;font-weight:600;font-size:11px}
+.ed-k{background:#e3eefb;color:#0b4f9c}.ed-u{background:#efe6fb;color:#5b2a9c}
+.tabs{display:flex;gap:2px;padding:6px 6px 0}
+.tab{padding:5px 12px;border:1px solid transparent;border-bottom:none;border-radius:4px 4px 0 0;color:#333}
+.tab.on{background:var(--pane);border-color:var(--line);font-weight:600}
+.tab.new::after{content:"new";margin-left:5px;font-size:9px;background:#0067c0;color:#fff;border-radius:6px;padding:0 4px;vertical-align:1px}
+.body{flex:1;background:var(--pane);margin:0 6px;border:1px solid var(--line);overflow:hidden;display:flex;flex-direction:column}
+.status{height:24px;display:flex;align-items:center;padding:0 10px;gap:18px;color:#333;border-top:1px solid var(--line)}
+button,.btn{font:inherit;padding:4px 12px;border:1px solid #c8c8c8;border-radius:4px;background:#fdfdfd;color:var(--fg)}
+.btn.pri{background:var(--acc);color:#fff;border-color:var(--acc)}
+.btn.dan{background:var(--bad);color:#fff;border-color:var(--bad)}
+.bar{display:flex;gap:6px;align-items:center;padding:8px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+select{font:inherit;padding:3px 6px}
+table{border-collapse:collapse;width:100%}
+th{font-weight:600;text-align:left;background:#fafafa;border-bottom:1px solid var(--line);padding:4px 8px;color:#333}
+td{padding:4px 8px;border-bottom:1px solid #f0f0f0;font-variant-numeric:tabular-nums}
+tr.sel td{background:#cce4f7}
+.num{text-align:right}
+.pill{display:inline-block;padding:1px 8px;border-radius:9px;font-weight:600;font-size:11px}
+.p-ok{background:var(--okbg);color:var(--ok)}.p-warn{background:var(--warnbg);color:var(--warn)}.p-bad{background:var(--badbg);color:var(--bad)}
+.mut{color:var(--mut)}
+/* html dashboard look */
+.dash{flex:1;background:#f6f8fb;padding:14px;display:grid;gap:12px;overflow:hidden}
+.card{background:#fff;border:1px solid #e4e8ee;border-radius:10px;padding:12px 14px}
+.card h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#5f6b7a;font-weight:600}
+.big{font-size:26px;font-weight:600;letter-spacing:-.01em}
+.webnote{font-size:10px;color:#8a94a3;padding:2px 14px 6px;background:#f6f8fb}
+.hb{height:12px;border-radius:6px;background:#e8edf3;overflow:hidden;display:flex}
+.hb i{display:block;height:100%}
+.legend{display:flex;gap:12px;color:#5f6b7a;font-size:11px;margin-top:6px}
+.legend b{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.modal-back{position:absolute;inset:32px 0 0 0;background:rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center}
+.dlg{width:520px;background:#fff;border-radius:8px;box-shadow:0 16px 48px rgba(0,0,0,.35);border:1px solid #aaa}
+.dlg .dt{padding:10px 14px;background:#eef1f5;border-radius:8px 8px 0 0;font-weight:600}
+.dlg .dc{padding:14px;display:grid;gap:10px;line-height:1.45}
+.dlg .df{padding:10px 14px;display:flex;justify-content:flex-end;gap:8px;background:#f7f7f7;border-radius:0 0 8px 8px}
+.grp{border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+.grp>.gl{font-weight:600;margin-bottom:6px}
+.screen{display:none}.screen:target{display:block}
+code{font-family:Consolas,monospace;font-size:11px}
+</style></head><body>
+
+<!-- ============ 1 OVERVIEW (kernel) ============ -->
+<div class="screen" id="overview"><div class="win">
+<div class="title"><span class="ico"></span>OpenZFS for Windows<div class="caps"><span>─</span><span>☐</span><span>✕</span></div></div>
+<div class="tool"><span class="tbtn">Refresh</span><span class="tbtn">Save report…</span><span class="edition ed-k">Kernel edition</span></div>
+<div class="tabs"><span class="tab on new">Overview</span><span class="tab">Pools</span><span class="tab">Datasets</span><span class="tab new">Snapshots</span><span class="tab">Redundancy</span><span class="tab new">Integrity</span><span class="tab new">Rates</span><span class="tab">User mode</span></div>
+<div class="body">
+<div class="dash" style="grid-template-columns:1.05fr 1fr 1fr;grid-template-rows:auto auto 1fr">
+  <div class="card" style="grid-column:1/4;display:flex;gap:28px;align-items:center">
+    <div><h3>Pool</h3><div class="big">zwin</div></div>
+    <div><h3>Health</h3><span class="pill p-ok" style="font-size:14px;padding:3px 12px">ONLINE</span></div>
+    <div><h3>Layout</h3><div style="font-size:14px">2-way mirror · log mirror · 1 cache</div></div>
+    <div><h3>Last scrub</h3><div style="font-size:14px">8 Nov 2026 03:00 · 0 B repaired · <b style="color:var(--ok)">0 errors</b></div></div>
+    <div><h3>Damaged files</h3><div class="big" style="color:var(--ok)">0</div></div>
+    <div style="margin-left:auto"><h3>Pool</h3><select><option>zwin</option></select></div>
+  </div>
+  <div class="card">
+    <h3>Capacity</h3>
+    <div style="display:flex;gap:16px;align-items:center">
+      <svg width="130" height="130" viewBox="0 0 130 130"><circle cx="65" cy="65" r="50" fill="none" stroke="#e8edf3" stroke-width="16"/>
+      <circle cx="65" cy="65" r="50" fill="none" stroke="#2f6fd0" stroke-width="16" stroke-dasharray="194.8 314.2" transform="rotate(-90 65 65)" stroke-linecap="butt"/>
+      <text x="65" y="62" text-anchor="middle" font-size="22" font-weight="600" fill="#1b1b1b">62%</text><text x="65" y="80" text-anchor="middle" font-size="11" fill="#5f6b7a">used</text></svg>
+      <div style="display:grid;gap:6px"><div><span class="mut">Used</span><br><b style="font-size:15px">571 GiB</b></div><div><span class="mut">Free</span><br><b style="font-size:15px">349 GiB</b></div><div><span class="mut">Fragmentation</span><br><b style="font-size:15px">7%</b></div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Space saved</h3>
+    <div class="big">212 GiB <span style="font-size:13px;color:#5f6b7a;font-weight:400">saved in total</span></div>
+    <div style="display:grid;gap:7px;margin-top:10px">
+      <div><div style="display:flex;justify-content:space-between"><span>Compression (zstd)</span><b>168 GiB · 1.41×</b></div><div class="hb"><i style="width:71%;background:#2f9e6f"></i></div></div>
+      <div><div style="display:flex;justify-content:space-between"><span>Deduplication</span><b>31 GiB · 1.06×</b></div><div class="hb"><i style="width:14%;background:#7b5fd0"></i></div></div>
+      <div><div style="display:flex;justify-content:space-between"><span>Block cloning</span><b>13 GiB</b></div><div class="hb"><i style="width:6%;background:#d08a2f"></i></div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Files and folders</h3>
+    <div style="display:flex;gap:22px"><div><div class="big">1,284,907</div><span class="mut">files</span></div><div><div class="big">96,412</div><span class="mut">folders</span></div></div>
+    <div class="mut" style="margin-top:8px">Counted 12 min ago · <u style="color:var(--acc)">Count now</u></div>
+    <div class="mut">1,381,644 objects reported by ZFS (instant)</div>
+  </div>
+  <div class="card" style="grid-column:1/4">
+    <h3>Per dataset: stored vs. on disk</h3>
+    <table style="font-size:12px"><tr><th>Dataset</th><th>Compression</th><th class="num">Logical</th><th class="num">On disk</th><th style="width:38%">Saved</th><th class="num">Ratio</th><th class="num">Files</th><th class="num">Folders</th></tr>
+    <tr><td>zwin/docs</td><td>zstd</td><td class="num">198 GiB</td><td class="num">96 GiB</td><td><div class="hb"><i style="width:52%;background:#2f9e6f"></i></div></td><td class="num">2.06×</td><td class="num">841,220</td><td class="num">61,003</td></tr>
+    <tr><td>zwin/vm</td><td>lz4</td><td class="num">402 GiB</td><td class="num">351 GiB</td><td><div class="hb"><i style="width:13%;background:#2f9e6f"></i></div></td><td class="num">1.15×</td><td class="num">214</td><td class="num">38</td></tr>
+    <tr><td>zwin/photos</td><td>off</td><td class="num">121 GiB</td><td class="num">121 GiB</td><td><div class="hb"><i style="width:0%"></i></div></td><td class="num">1.00×</td><td class="num">443,473</td><td class="num">35,371</td></tr>
+    </table>
+  </div>
+</div>
+<div class="webnote">Static HTML generated by ZfsWinGui (inline SVG, no network). Shown in WebView2; without it: “Open in browser”.</div>
+</div>
+<div class="status"><span>ZfsWinBroker 1.0.9 · OpenZFS 2.4.4</span><span>Refreshed 14:32:05</span></div>
+</div></div>
+
+<!-- ============ 2 INTEGRITY ============ -->
+<div class="screen" id="integrity"><div class="win">
+<div class="title"><span class="ico"></span>OpenZFS for Windows<div class="caps"><span>─</span><span>☐</span><span>✕</span></div></div>
+<div class="tool"><span class="tbtn">Refresh</span><span class="tbtn">Save report…</span><span class="edition ed-u">User-mode edition</span></div>
+<div class="tabs"><span class="tab">Overview</span><span class="tab">Pools</span><span class="tab">Datasets</span><span class="tab">Snapshots</span><span class="tab">Redundancy</span><span class="tab on">Integrity</span><span class="tab">Rates</span><span class="tab">User mode</span></div>
+<div class="body">
+<div class="bar"><span>Pool:</span><select><option>archive</option></select><span class="pill p-bad">ONLINE · 2 damaged files</span>
+<span style="margin-left:auto" class="mut">Checksum: fletcher4 (every block is verified on read)</span></div>
+<div style="padding:10px;display:grid;gap:10px">
+ <div style="background:var(--badbg);border:1px solid #f1b8bf;border-radius:6px;padding:10px 12px;line-height:1.5">
+  <b style="color:var(--bad)">2 files have blocks that failed their checksum and could not be repaired.</b>
+  This pool has a single disk, so ZFS has no second copy to repair from. Restore these files from a snapshot or a backup.
+  The list covers only blocks read since the last clear; a scrub reads every block.
+ </div>
+ <div class="grp"><div class="gl">Damaged files</div>
+ <table><tr><th>Path</th><th>Dataset</th><th>Where</th><th>Detected</th></tr>
+ <tr class="sel"><td><code>E:\Projects\2024\render-final.mov</code></td><td>archive/media</td><td>live file</td><td>10 Nov 2026 13:58 (read)</td></tr>
+ <tr><td><code>E:\.zfs\snapshot\weekly-45\Mail\inbox.pst</code></td><td>archive/media</td><td>snapshot @weekly-45 only</td><td>10 Nov 2026 14:10 (scrub)</td></tr>
+ <tr><td class="mut"><code>&lt;metadata&gt;:&lt;0x0&gt;</code></td><td class="mut">—</td><td class="mut">none, 0 entries</td><td></td></tr>
+ </table>
+ <div style="display:flex;gap:6px;margin-top:8px"><span class="btn">Open containing folder</span><span class="btn">Copy list</span><span class="btn">Restore from snapshot…</span><span class="btn" style="margin-left:auto">Clear error counters…</span></div>
+ </div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+ <div class="grp"><div class="gl">Error counters per device</div>
+ <table><tr><th>Device</th><th>State</th><th class="num">Read</th><th class="num">Write</th><th class="num">Checksum</th></tr>
+ <tr><td>archive</td><td><span class="pill p-ok">ONLINE</span></td><td class="num">0</td><td class="num">0</td><td class="num" style="color:var(--bad);font-weight:600">4</td></tr>
+ <tr><td>&nbsp;&nbsp;D:\zfs\archive.img</td><td><span class="pill p-ok">ONLINE</span></td><td class="num">0</td><td class="num">0</td><td class="num" style="color:var(--bad);font-weight:600">4</td></tr></table></div>
+ <div class="grp"><div class="gl">Scrub</div>
+ <div style="display:flex;justify-content:space-between"><span>In progress · 61% · 182 MB/s</span><span class="mut">about 9 min left</span></div>
+ <div class="hb" style="margin:6px 0"><i style="width:61%;background:#2f6fd0"></i></div>
+ <div class="mut">Scanned 284 GiB of 466 GiB · 0 B repaired · 1 new damaged file</div>
+ <div style="display:flex;gap:6px;margin-top:8px"><span class="btn">Pause scrub</span><span class="btn">Stop scrub</span></div></div>
+ </div>
+</div></div>
+<div class="status"><span>ZfsWinBroker 1.0.9 · OpenZFS 2.4.4 · via user-mode bridge</span><span>ZfsWinUserMode: Running</span></div>
+</div></div>
+
+<!-- ============ 3 REDUNDANCY ============ -->
+<div class="screen" id="redundancy"><style>#redundancy td{padding:3px 8px}#redundancy .grp{padding:6px 10px}</style><div class="win">
+<div class="title"><span class="ico"></span>OpenZFS for Windows<div class="caps"><span>─</span><span>☐</span><span>✕</span></div></div>
+<div class="tool"><span class="tbtn">Refresh</span><span class="tbtn">Save report…</span><span class="edition ed-k">Kernel edition</span></div>
+<div class="tabs"><span class="tab">Overview</span><span class="tab">Pools</span><span class="tab">Datasets</span><span class="tab">Snapshots</span><span class="tab on">Redundancy</span><span class="tab">Integrity</span><span class="tab">Rates</span><span class="tab">User mode</span></div>
+<div class="body" style="flex-direction:row">
+<div style="flex:1;display:flex;flex-direction:column;min-width:0">
+<div class="bar"><span>Pool:</span><select><option>zwin</option></select>
+<span class="pill p-ok" style="font-size:12px">2 copies of your data · survives 1 disk failure</span></div>
+<div style="padding:10px;display:grid;gap:10px">
+<div class="grp"><div class="gl">Devices and drive health</div>
+<table><tr><th>Device</th><th>Role</th><th>ZFS</th><th class="num">R/W/Ck</th><th>Windows health</th><th class="num">Temp</th><th class="num">Wear</th><th class="num">Hours</th><th class="num">Uncorr.</th></tr>
+<tr><td><b>mirror-0</b></td><td>data · 2-way</td><td><span class="pill p-ok">ONLINE</span></td><td class="num">0/0/0</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr class="sel"><td>&nbsp;&nbsp;Disk 1 · Samsung 990 PRO</td><td></td><td><span class="pill p-ok">ONLINE</span></td><td class="num">0/0/0</td><td><span class="pill p-ok">Healthy</span></td><td class="num">41 °C</td><td class="num">3%</td><td class="num">8,112 h</td><td class="num">0</td></tr>
+<tr><td>&nbsp;&nbsp;Disk 2 · WD Red SN700</td><td></td><td><span class="pill p-ok">ONLINE</span></td><td class="num">0/0/2</td><td><span class="pill p-warn">Warning</span></td><td class="num">58 °C</td><td class="num">71%</td><td class="num">31,904 h</td><td class="num">12</td></tr>
+<tr><td><b>logs · mirror-1</b></td><td>write log (SLOG)</td><td><span class="pill p-ok">ONLINE</span></td><td class="num">0/0/0</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>&nbsp;&nbsp;Disk 3 · Optane P1600X</td><td></td><td><span class="pill p-ok">ONLINE</span></td><td class="num">0/0/0</td><td><span class="pill p-ok">Healthy</span></td><td class="num">36 °C</td><td class="num">0%</td><td class="num">2,040 h</td><td class="num">0</td></tr>
+<tr><td>&nbsp;&nbsp;Disk 4 · Optane P1600X</td><td></td><td><span class="pill p-ok">ONLINE</span></td><td class="num">0/0/0</td><td><span class="pill p-ok">Healthy</span></td><td class="num">37 °C</td><td class="num">0%</td><td class="num">2,040 h</td><td class="num">0</td></tr>
+<tr><td><b>cache</b></td><td>read cache</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>&nbsp;&nbsp;D:\zfs\l2arc.img</td><td></td><td><span class="pill p-ok">ONLINE</span></td><td class="num">0/0/0</td><td class="mut">image on D: (212 GiB free)</td><td></td><td></td><td></td><td></td></tr>
+</table>
+<div style="background:var(--warnbg);border-radius:6px;padding:7px 10px;margin-top:8px"><b style="color:var(--warn)">Disk 2 reports a warning:</b> 71% wear and 12 uncorrected read errors (Windows reliability counters). ZFS repaired 2 checksum errors from Disk 1. Plan to replace it: “Replace selected disk…”.</div>
+</div>
+<div class="grp"><div class="gl">Copies of your data, per dataset</div>
+<table><tr><th>Dataset</th><th>Data vdevs</th><th>× copies</th><th>= Copies</th><th>After 1 disk failure</th></tr>
+<tr><td>zwin/docs</td><td>2-way mirror</td><td>copies=2</td><td><b>4</b></td><td>2</td></tr>
+<tr><td>zwin/vm</td><td>2-way mirror</td><td>copies=1</td><td><b>2</b></td><td>1 (no redundancy left)</td></tr>
+<tr><td>zwin/photos</td><td>2-way mirror</td><td>copies=1</td><td><b>2</b></td><td>1 (no redundancy left)</td></tr></table></div>
+</div></div>
+<div style="width:270px;border-left:1px solid var(--line);padding:10px;display:flex;flex-direction:column;gap:6px">
+<span class="btn">Add mirror device to selected disk…</span><span class="btn">Remove selected disk from its mirror</span><span class="btn">Replace selected disk…</span><span class="btn">Add read cache (L2ARC)…</span><span class="btn">Add write log (SLOG)…</span><span class="btn">Remove selected cache or log device</span>
+<p class="mut" style="line-height:1.45">Copies = healthy members of the smallest data vdev × the dataset’s <code>copies</code> property. Drive health comes from Windows (MSFT_PhysicalDisk and its reliability counters) where the disk reports it.</p>
+</div></div>
+<div class="status"><span>ZfsWinBroker 1.0.9 · OpenZFS 2.4.4</span><span>Refreshed 14:33:40</span></div>
+</div></div>
+
+<!-- ============ 4 RATES (user mode) ============ -->
+<div class="screen" id="rates"><div class="win">
+<div class="title"><span class="ico"></span>OpenZFS for Windows<div class="caps"><span>─</span><span>☐</span><span>✕</span></div></div>
+<div class="tool"><span class="tbtn">Refresh</span><span class="tbtn">Save report…</span><span class="edition ed-u">User-mode edition</span></div>
+<div class="tabs"><span class="tab">Overview</span><span class="tab">Pools</span><span class="tab">Datasets</span><span class="tab">Snapshots</span><span class="tab">Redundancy</span><span class="tab">Integrity</span><span class="tab on">Rates</span><span class="tab">User mode</span></div>
+<div class="body">
+<div class="bar"><span>Pool:</span><select><option>zwin</option></select><span>Every</span><select><option>5 s</option></select><span class="btn">Pause</span>
+<span class="mut" style="margin-left:auto">● live · last sample 14:35:10 · 10-minute window</span></div>
+<div class="dash" style="grid-template-columns:repeat(4,1fr);grid-template-rows:auto 1fr auto;background:#f6f8fb">
+ <div class="card"><h3>Read</h3><div class="big">1,240 <span style="font-size:13px;font-weight:400" class="mut">IOPS</span></div><div style="font-size:15px">154.8 MB/s</div></div>
+ <div class="card"><h3>Write</h3><div class="big">3,910 <span style="font-size:13px;font-weight:400" class="mut">IOPS</span></div><div style="font-size:15px">412.3 MB/s</div></div>
+ <div class="card"><h3>ARC (ZFS RAM cache)</h3><div class="big">6.1 <span style="font-size:13px;font-weight:400" class="mut">of 8.0 GiB max</span></div><div class="hb" style="margin-top:4px"><i style="width:46%;background:#2f6fd0"></i><i style="width:30%;background:#7fa8e6"></i></div><div class="legend"><span><b style="background:#2f6fd0"></b>MFU 3.7</span><span><b style="background:#7fa8e6"></b>MRU 2.4</span></div></div>
+ <div class="card"><h3>Hit ratio</h3><div class="big">94.2%</div><div class="mut">L2ARC 38.0 GiB · 61% hits · DDT 410 MiB</div><div class="mut">Service private memory: 7.3 GiB</div></div>
+ <div class="card" style="grid-column:1/5">
+  <h3>MB/s, last 10 minutes</h3>
+  <svg id="chart" width="1036" height="150" viewBox="0 0 1036 150"></svg>
+  <div class="legend"><span><b style="background:#2f6fd0"></b>Read MB/s</span><span><b style="background:#d06a2f"></b>Write MB/s</span><span>Samples every 5 s (deltas of the vdev counters read_bytes / write_bytes)</span></div>
+ </div>
+ <div class="card" style="grid-column:1/5;padding:6px 10px">
+ <table><tr><th>Device</th><th class="num">Read IOPS</th><th class="num">Write IOPS</th><th class="num">Read MB/s</th><th class="num">Write MB/s</th></tr>
+ <tr><td>mirror-0</td><td class="num">1,240</td><td class="num">3,610</td><td class="num">154.8</td><td class="num">398.0</td></tr>
+ <tr><td>&nbsp;&nbsp;D:\zfs\zwin-a.img</td><td class="num">652</td><td class="num">1,805</td><td class="num">81.2</td><td class="num">199.0</td></tr>
+ <tr><td>&nbsp;&nbsp;D:\zfs\zwin-b.img</td><td class="num">588</td><td class="num">1,805</td><td class="num">73.6</td><td class="num">199.0</td></tr>
+ <tr><td>logs · D:\zfs\slog.img</td><td class="num">0</td><td class="num">300</td><td class="num">0.0</td><td class="num">14.3</td></tr></table></div>
+</div></div>
+<div class="status"><span>ZfsWinBroker 1.0.9 · OpenZFS 2.4.4 · via user-mode bridge</span><span>ZfsWinUserMode: Running · ARC stats via kstat bridge</span></div>
+</div></div>
+
+<!-- ============ 5 SNAPSHOTS ============ -->
+<div class="screen" id="snapshots"><div class="win">
+<div class="title"><span class="ico"></span>OpenZFS for Windows<div class="caps"><span>─</span><span>☐</span><span>✕</span></div></div>
+<div class="tool"><span class="tbtn">Refresh</span><span class="tbtn">Save report…</span><span class="edition ed-k">Kernel edition</span></div>
+<div class="tabs"><span class="tab">Overview</span><span class="tab">Pools</span><span class="tab">Datasets</span><span class="tab on">Snapshots</span><span class="tab">Redundancy</span><span class="tab">Integrity</span><span class="tab">Rates</span><span class="tab">User mode</span></div>
+<div class="body" style="flex-direction:row">
+<div style="flex:1;display:flex;flex-direction:column;min-width:0">
+<div class="bar"><span>Dataset:</span><select><option>zwin/docs  (Z:)</option></select><span class="mut">4 snapshots · 6.2 GiB held only by snapshots</span></div>
+<table><tr><th>Snapshot</th><th>Created</th><th class="num">Used</th><th class="num">Referenced</th><th>Mounted</th></tr>
+<tr><td>@gui-20261110-140212</td><td>10 Nov 2026 14:02</td><td class="num">12 MiB</td><td class="num">96.1 GiB</td><td></td></tr>
+<tr class="sel"><td>@before-cleanup</td><td>9 Nov 2026 18:40</td><td class="num">4.8 GiB</td><td class="num">99.7 GiB</td><td><span class="pill p-ok">R: (temporary, read-only)</span></td></tr>
+<tr><td>@weekly-45</td><td>8 Nov 2026 03:00</td><td class="num">1.1 GiB</td><td class="num">98.9 GiB</td><td></td></tr>
+<tr><td>@weekly-44</td><td>1 Nov 2026 03:00</td><td class="num">310 MiB</td><td class="num">97.2 GiB</td><td></td></tr></table>
+<div style="padding:10px;margin-top:auto" class="mut">Temporary mounts are read-only clones that share every block with the snapshot (no copy). They are removed on Unmount, when the GUI closes, or at the next broker start after a reboot.</div>
+</div>
+<div style="width:280px;border-left:1px solid var(--line);padding:10px;display:flex;flex-direction:column;gap:6px">
+<div class="grp"><div class="gl">Create</div><div style="display:grid;gap:6px"><input value="gui-20261110-143602" style="font:inherit;padding:3px 6px"><label><input type="checkbox"> Include child datasets</label><span class="btn pri" style="text-align:center">Create snapshot</span></div></div>
+<div class="grp"><div class="gl">Selected: @before-cleanup</div><div style="display:grid;gap:6px">
+<span class="btn">Unmount R:</span><span class="btn">Open in Explorer</span><span class="btn">Mount temporarily…</span><span class="btn">Restore dataset to this snapshot…</span><span class="btn">Destroy snapshot…</span></div></div>
+<p class="mut" style="line-height:1.45">To restore single files, mount the snapshot and copy them back. Restoring the whole dataset rolls it back and destroys newer snapshots.</p>
+</div></div>
+<div class="status"><span>ZfsWinBroker 1.0.9 · OpenZFS 2.4.4</span><span>Mounted zwin/docs@before-cleanup at R: (read-only)</span></div>
+</div></div>
+
+<!-- ============ 6 ROLLBACK CONFIRMATION ============ -->
+<div class="screen" id="rollback"><div class="win">
+<div class="title"><span class="ico"></span>OpenZFS for Windows<div class="caps"><span>─</span><span>☐</span><span>✕</span></div></div>
+<div class="tool"><span class="tbtn">Refresh</span><span class="tbtn">Save report…</span><span class="edition ed-u">User-mode edition</span></div>
+<div class="tabs"><span class="tab">Overview</span><span class="tab">Pools</span><span class="tab">Datasets</span><span class="tab on">Snapshots</span><span class="tab">Redundancy</span><span class="tab">Integrity</span><span class="tab">Rates</span><span class="tab">User mode</span></div>
+<div class="body"><div class="bar"><span>Dataset:</span><select><option>zwin/docs  (Z:)</option></select></div>
+<table><tr><th>Snapshot</th><th>Created</th><th class="num">Used</th><th class="num">Referenced</th><th>Mounted</th></tr>
+<tr><td>@gui-20261110-140212</td><td>10 Nov 2026 14:02</td><td class="num">12 MiB</td><td class="num">96.1 GiB</td><td></td></tr>
+<tr><td>@before-cleanup</td><td>9 Nov 2026 18:40</td><td class="num">4.8 GiB</td><td class="num">99.7 GiB</td><td></td></tr>
+<tr class="sel"><td>@weekly-45</td><td>8 Nov 2026 03:00</td><td class="num">1.1 GiB</td><td class="num">98.9 GiB</td><td></td></tr></table></div>
+<div class="status"><span>ZfsWinBroker 1.0.9 · OpenZFS 2.4.4 · via user-mode bridge</span></div>
+<div class="modal-back"><div class="dlg"><div class="dt">Restore zwin/docs to @weekly-45?</div>
+<div class="dc"><div>Every change made to <b>zwin/docs</b> (Z:) after 8 Nov 2026 03:00 is lost. These newer snapshots are destroyed:</div>
+<div style="background:var(--badbg);border-radius:6px;padding:6px 10px"><code>zwin/docs@before-cleanup</code> (4.8 GiB)<br><code>zwin/docs@gui-20261110-140212</code> (12 MiB)</div>
+<div>Z: is unmounted during the restore and comes back at the same drive letter. Close open files on Z: first.</div>
+<label><input type="checkbox" checked> I understand that newer data and these 2 snapshots are destroyed</label></div>
+<div class="df"><span class="btn">Mount @weekly-45 temporarily instead</span><span class="btn">Cancel</span><span class="btn dan">Restore</span></div></div></div>
+</div></div>
+
+<script>
+const s=document.getElementById('chart');if(s){const W=1036,H=150,L=44,B=20,T=8;let r=[],w=[];let x=7;function rnd(){x=(x*9301+49297)%233280;return x/233280}
+for(let i=0;i<120;i++){r.push(120+60*Math.sin(i/9)+rnd()*40);w.push(i<70?150+rnd()*60:360+rnd()*90)}
+const max=500,sx=i=>L+i*(W-L-8)/119,sy=v=>T+(H-T-B)*(1-v/max);let g='';
+for(const v of[0,100,200,300,400,500]){g+=`<line x1="${L}" x2="${W-8}" y1="${sy(v)}" y2="${sy(v)}" stroke="#e8edf3"/><text x="${L-6}" y="${sy(v)+4}" text-anchor="end" font-size="10" fill="#6b7685">${v}</text>`}
+for(const [m,i] of [['-10 min',0],['-7.5',30],['-5',60],['-2.5',90],['now',119]])g+=`<text x="${sx(i)}" y="${H-4}" text-anchor="${i==119?"end":i==0?"start":"middle"}" font-size="10" fill="#6b7685">${m}</text>`;
+const p=a=>a.map((v,i)=>(i?'L':'M')+sx(i).toFixed(1)+' '+sy(v).toFixed(1)).join('');
+g+=`<path d="${p(w)}L${sx(119)} ${sy(0)}L${sx(0)} ${sy(0)}Z" fill="#d06a2f" fill-opacity=".10"/><path d="${p(w)}" fill="none" stroke="#d06a2f" stroke-width="1.8"/>`;
+g+=`<path d="${p(r)}L${sx(119)} ${sy(0)}L${sx(0)} ${sy(0)}Z" fill="#2f6fd0" fill-opacity=".10"/><path d="${p(r)}" fill="none" stroke="#2f6fd0" stroke-width="1.8"/>`;
+g+=`<circle cx="${sx(119)}" cy="${sy(w[119])}" r="3.5" fill="#d06a2f"/><circle cx="${sx(119)}" cy="${sy(r[119])}" r="3.5" fill="#2f6fd0"/>`;s.innerHTML=g}
+</script>
+</body></html>
