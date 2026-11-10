@@ -215,7 +215,7 @@ int zfs_get_temporary_prop(struct dsl_dataset *ds, zfs_prop_t zfs_prop,
 void zfsvfs_update_fromname(const char *, const char *);
 void zfs_vss_snapshot_remove_by_name(const char *snapname);
 void zfs_vss_pool_add(struct spa *spa);
-int zfsctl_snapshot_unmount(const char *, int flags);
+int zfsctl_snapshot_unmount(const char *);
 
 typedef struct zvol_state zvol_state_handle_t;
 void zvol_create_minors(const char *);

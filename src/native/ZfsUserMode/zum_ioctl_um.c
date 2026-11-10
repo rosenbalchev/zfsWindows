@@ -75,9 +75,8 @@ zfs_max_nvlist_src_size_os(void)
 
 /* The .zfs\snapshot\<name> view of a snapshot being destroyed or renamed. */
 int
-zfsctl_snapshot_unmount(const char *snapname, int flags)
+zfsctl_snapshot_unmount(const char *snapname)
 {
-    (void) flags;
     if (bridge_ops != NULL && bridge_ops->snapshot_unmount != NULL)
         bridge_ops->snapshot_unmount(snapname);
     return (0);
