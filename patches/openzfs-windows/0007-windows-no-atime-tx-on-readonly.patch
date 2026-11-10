@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/zfs_vnops_os.c b/module/os/windows/zfs/zfs_vnops_os.c
-index 1eb1551cc..bf2e11d62 100644
+index 6540d730d..834911932 100644
 --- a/module/os/windows/zfs/zfs_vnops_os.c
 +++ b/module/os/windows/zfs/zfs_vnops_os.c
-@@ -3429,6 +3429,15 @@ zfs_inactive(struct vnode *vp)
+@@ -3416,6 +3416,15 @@ zfs_inactive(struct vnode *vp)
  		return;
  	}
  

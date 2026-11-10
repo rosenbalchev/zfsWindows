@@ -188,7 +188,7 @@ foreach ($a in $artifacts) {
     product = "OpenZFS for Windows"; version = $version; configurations = $Configuration; architectures = $Architecture
     built = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     builtFromCommit = (& git -C $root rev-parse HEAD).Trim(); workingTreeModified = $dirty
-    openzfs = "zfs-2.4.4 (OpenZFS submodule); openzfs-windows zfswin-2.4.1rc17 + patches/openzfs-windows"
+    openzfs = "zfs-2.4.4 (OpenZFS submodule); openzfs-windows zfswin-2.4.4rc9 + patches/openzfs-windows"
     variants = [ordered]@{
         kernel = "OpenZFS-for-Windows-$version-<arch>-testsigned[-debug].msi: kernel driver, test-signed (needs test signing and Secure Boot off)"
         usermode = "OpenZFS-for-Windows-$version-<arch>-usermode[-debug].msi: WinFsp user-mode file system (needs WinFsp 2.1+; no driver signature of ours)"

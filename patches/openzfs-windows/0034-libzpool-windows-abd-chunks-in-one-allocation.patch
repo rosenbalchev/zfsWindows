@@ -1,8 +1,8 @@
 diff --git a/lib/libzpool/abd_os.c b/lib/libzpool/abd_os.c
-index 8bd7a64ab..8ba74371c 100644
+index dc38187f6..697d656cb 100644
 --- a/lib/libzpool/abd_os.c
 +++ b/lib/libzpool/abd_os.c
-@@ -107,15 +107,30 @@ abd_alloc_chunks(abd_t *abd, size_t size)
+@@ -97,15 +97,30 @@ abd_alloc_chunks(abd_t *abd, size_t size)
  	uint_t n = ABD_SCATTER(abd).abd_iovcnt;
  	ASSERT3U(n, ==, abd_iovcnt_for_bytes(size));
  
@@ -34,7 +34,7 @@ index 8bd7a64ab..8ba74371c 100644
  }
  
  void
-@@ -123,8 +138,12 @@ abd_free_chunks(abd_t *abd)
+@@ -113,8 +128,12 @@ abd_free_chunks(abd_t *abd)
  {
  	uint_t n = ABD_SCATTER(abd).abd_iovcnt;
  	struct iovec *iov = ABD_SCATTER(abd).abd_iov;

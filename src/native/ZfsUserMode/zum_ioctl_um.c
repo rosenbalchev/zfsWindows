@@ -30,6 +30,8 @@ static const zum_bridge_ops_t *bridge_ops;
 /* Kernel VFS: nothing is mounted by a kernel zfsvfs in user mode. */
 int zfsvfs_create(const char *name, boolean_t rd, zfsvfs_t **zfvp)
 { (void) name; (void) rd; (void) zfvp; return (SET_ERROR(ENOTSUP)); }
+int zfsvfs_create_hold(const char *name, zfsvfs_t **zfvp)
+{ (void) name; (void) zfvp; return (SET_ERROR(ENOTSUP)); }
 void zfsvfs_free(zfsvfs_t *zfsvfs) { (void) zfsvfs; }
 int zfs_suspend_fs(zfsvfs_t *zfsvfs) { (void) zfsvfs; return (ENOTSUP); }
 int zfs_resume_fs(zfsvfs_t *zfsvfs, struct dsl_dataset *ds)
@@ -73,9 +75,8 @@ zfs_max_nvlist_src_size_os(void)
 
 /* The .zfs\snapshot\<name> view of a snapshot being destroyed or renamed. */
 int
-zfsctl_snapshot_unmount(const char *snapname, int flags)
+zfsctl_snapshot_unmount(const char *snapname)
 {
-    (void) flags;
     if (bridge_ops != NULL && bridge_ops->snapshot_unmount != NULL)
         bridge_ops->snapshot_unmount(snapname);
     return (0);

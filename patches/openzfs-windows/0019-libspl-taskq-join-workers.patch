@@ -1,8 +1,8 @@
 diff --git a/lib/libspl/taskq.c b/lib/libspl/taskq.c
-index 3d1a4f277..9991c5139 100644
+index c2495385d..fe0fef500 100644
 --- a/lib/libspl/taskq.c
 +++ b/lib/libspl/taskq.c
-@@ -317,7 +317,8 @@ taskq_create(const char *name, int nthreads, pri_t pri,
+@@ -307,7 +307,8 @@ taskq_create(const char *name, int nthreads, pri_t pri,
  
  	for (t = 0; t < nthreads; t++)
  		VERIFY((tq->tq_threadlist[t] = thread_create_named(tq->tq_name,
@@ -12,7 +12,7 @@ index 3d1a4f277..9991c5139 100644
  
  	return (tq);
  }
-@@ -347,6 +348,16 @@ taskq_destroy(taskq_t *tq)
+@@ -337,6 +338,16 @@ taskq_destroy(taskq_t *tq)
  
  	mutex_exit(&tq->tq_lock);
  

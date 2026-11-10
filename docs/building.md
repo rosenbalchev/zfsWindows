@@ -142,12 +142,14 @@ powershell -File scripts\build-driver.ps1 -Architecture arm64            # out\d
 powershell -File scripts\build-release.ps1                               # x64 and arm64 by default
 ```
 
-Patches 0020–0023 make upstream's build cross-compile from x64:
+Patches 0020–0022 make upstream's build cross-compile from x64:
 - OpenSSL paths can be overridden;
 - `tracewpp`, `signtool` and `stampinf` are chosen by the *host*
   architecture;
-- the ARM64 Lua `setjmp` buffer type is fixed;
-- the ARM64 exception-context registers are used.
+- the ARM64 Lua `setjmp` buffer type is fixed.
+
+The ARM64 exception-context registers (our former 0023) are in the fork
+since `zfswin-2.4.4rc9`.
 
 The ARM64 packages are checked statically: machine type and signature of
 every binary, and the MSI contents. They are also run in a Windows 11

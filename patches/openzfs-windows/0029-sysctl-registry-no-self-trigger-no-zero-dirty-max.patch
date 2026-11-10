@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/sysctl_os.c b/module/os/windows/zfs/sysctl_os.c
-index 0f756a73a..2bb1fe8c8 100644
+index 4627d5918..058e69000 100644
 --- a/module/os/windows/zfs/sysctl_os.c
 +++ b/module/os/windows/zfs/sysctl_os.c
-@@ -130,6 +130,39 @@ sysctl_os_write_registry(HANDLE regfd, ztunable_t *zt, UNICODE_STRING *entry)
+@@ -121,6 +121,39 @@ sysctl_os_write_registry(HANDLE regfd, ztunable_t *zt, UNICODE_STRING *entry)
  			goto skip;
  	}
  
@@ -42,8 +42,8 @@ index 0f756a73a..2bb1fe8c8 100644
  	Status = ZwSetValueKey(
  	    regfd,
  	    entry,
-@@ -308,6 +341,23 @@ sysctl_os_process(PUNICODE_STRING pRegistryPath, ztunable_t *zt)
- 
+@@ -338,6 +371,23 @@ sysctl_os_process(PUNICODE_STRING pRegistryPath, ztunable_t *zt)
+ 					goto failed;
  				}
  
 +				/*

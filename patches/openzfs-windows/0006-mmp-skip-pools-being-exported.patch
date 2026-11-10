@@ -1,8 +1,8 @@
 diff --git a/module/zfs/mmp.c b/module/zfs/mmp.c
-index b8ba40ecd..0c1b2d4ef 100644
+index b64e7e8ff..69ee58d16 100644
 --- a/module/zfs/mmp.c
 +++ b/module/zfs/mmp.c
-@@ -731,7 +731,14 @@ mmp_signal_all_threads(void)
+@@ -917,7 +917,14 @@ mmp_signal_all_threads(void)
  
  	spa_namespace_enter(FTAG);
  	while ((spa = spa_next(spa))) {

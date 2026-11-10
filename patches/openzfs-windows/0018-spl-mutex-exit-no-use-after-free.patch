@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/spl/spl-mutex.c b/module/os/windows/spl/spl-mutex.c
-index 4811eaa60..a3171b9ff 100644
+index cedee75e6..ef2048b3f 100644
 --- a/module/os/windows/spl/spl-mutex.c
 +++ b/module/os/windows/spl/spl-mutex.c
-@@ -163,6 +163,17 @@ spl_mutex_exit(kmutex_t *mp)
+@@ -154,6 +154,17 @@ spl_mutex_exit(kmutex_t *mp)
  
  	VERIFY3P(mp->m_owner, !=, 0xdeadbeefdeadbeef);
  
@@ -20,7 +20,7 @@ index 4811eaa60..a3171b9ff 100644
  	/*
  	 * Release ownership with a full memory barrier so that any thread
  	 * which subsequently reads m_owner == NULL is guaranteed to also see
-@@ -171,19 +182,14 @@ spl_mutex_exit(kmutex_t *mp)
+@@ -162,19 +173,14 @@ spl_mutex_exit(kmutex_t *mp)
  	(void) InterlockedExchangePointer(&mp->m_owner, NULL);
  
  	/*

@@ -6,6 +6,9 @@ if(NOT COMMAND use_clang)
     function(use_clang)
         add_compile_options(
             /FI${CMAKE_SOURCE_DIR}/include/os/windows/zfs/zfs_config.h
+            # HAVE_SIMD(x) (zfs_fletcher.h and others since 2.4.4), as the
+            # fork's own use_clang(), which is defined after our directories.
+            /FI${CMAKE_SOURCE_DIR}/include/sys/simd_config.h
             -Wno-nonportable-include-path
             -Wno-unknown-pragmas
             -Wno-unused-command-line-argument

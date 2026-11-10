@@ -1,5 +1,5 @@
 diff --git a/module/CMakeLists.txt b/module/CMakeLists.txt
-index 528b7b0d7..4a46414b9 100644
+index 528b7b0d7..4b33b82c7 100644
 --- a/module/CMakeLists.txt
 +++ b/module/CMakeLists.txt
 @@ -10,10 +10,12 @@ if (NOT INF2CAT_PROGRAM)

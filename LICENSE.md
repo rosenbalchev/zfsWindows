@@ -35,7 +35,7 @@ their source, and the rest of the repository stays MIT.
 | `src/native/ZfsWriteCore/zfs_write_core.c` | CDDL-1.0 | Ports of the OpenZFS Linux ZPL (`zfs_dir.c`, `zfs_znode.c`, `zfs_vnops_os.c`). The file carries `SPDX-License-Identifier: CDDL-1.0`. |
 | `patches/openzfs-windows/*.patch` | CDDL-1.0 | Modifications to OpenZFS / OpenZFS-on-Windows files, all of which are CDDL-1.0. |
 | `OpenZFS/` (submodule) | CDDL-1.0, with per-file exceptions | Upstream OpenZFS `zfs-2.4.4`, unmodified. |
-| `third_party/openzfs-windows/` (submodule) | CDDL-1.0, with per-file exceptions | OpenZFS on Windows `zfswin-2.4.1rc17`, with the patches above applied at build time. |
+| `third_party/openzfs-windows/` (submodule) | CDDL-1.0, with per-file exceptions | OpenZFS on Windows `zfswin-2.4.4rc9`, with the patches above applied at build time. |
 | `third_party/zlib-1.3.2/` | zlib | Unmodified zlib release. |
 
 The read-only reader's LZJB and ZLE decoders in `src/native/ZfsCore/zfs_core.c`
@@ -52,7 +52,7 @@ this repository builds:
 | Component | Version | License | Used by |
 |---|---|---|---|
 | OpenZFS | 2.4.4 | CDDL-1.0 | Reference tree; LZ4 and Zstandard sources compiled into `ZfsCore` |
-| OpenZFS on Windows | 2.4.1rc17 | CDDL-1.0 | Kernel driver (`OpenZFS.sys`, `OpenZVOL.sys`), `zpool`, `zfs`, `zdb`, `kstat`, `zfsinstaller`, and `libzpool` in `zfs-write-core` |
+| OpenZFS on Windows | 2.4.4rc9 | CDDL-1.0 | Kernel driver (`OpenZFS.sys`, `OpenZVOL.sys`), `zpool`, `zfs`, `zdb`, `kstat`, `zfsinstaller`, and `libzpool` in `zfs-write-core` |
 | LZ4 (in OpenZFS `module/zfs/lz4.c`) | as vendored by OpenZFS | BSD-2-Clause | `ZfsCore` LZ4 decompression |
 | Zstandard (in OpenZFS `module/zstd/lib`) | as vendored by OpenZFS | BSD-3-Clause OR GPL-2.0-only (BSD-3-Clause elected) | `ZfsCore` zstd decompression; driver |
 | zlib | 1.3.2 | zlib | `ZfsCore` gzip decompression |

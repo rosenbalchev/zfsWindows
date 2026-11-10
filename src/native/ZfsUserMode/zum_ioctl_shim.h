@@ -71,8 +71,69 @@ typedef struct zfsvfs {
     struct objset *z_os;
     void *z_sb;
     boolean_t z_unmounted;
+    boolean_t z_use_hold;
     rrmlock_t z_teardown_lock;
 } zfsvfs_t;
+
+/* 2.4.4: zfsvfs_hold() creates one with this when getzfsvfs() fails. */
+int zfsvfs_create_hold(const char *name, zfsvfs_t **zfvp);
+
+/*
+ * 2.4.4: zoned_uid delegation (Linux user namespaces).  The userland
+ * libspl sys/zone.h has none of it; these are the Windows kernel SPL's
+ * (include/os/windows/spl/sys/zone.h): not applicable, so the existing
+ * permission checks decide, and attach/detach fail with ENXIO.
+ */
+typedef enum zone_uid_op {
+    ZONE_OP_CREATE,
+    ZONE_OP_SNAPSHOT,
+    ZONE_OP_CLONE,
+    ZONE_OP_DESTROY,
+    ZONE_OP_RENAME,
+    ZONE_OP_SETPROP
+} zone_uid_op_t;
+
+typedef enum zone_admin_result {
+    ZONE_ADMIN_NOT_APPLICABLE,
+    ZONE_ADMIN_ALLOWED,
+    ZONE_ADMIN_DENIED
+} zone_admin_result_t;
+
+typedef uid_t (*zone_get_zoned_uid_fn_t)(const char *dataset,
+    char *root_out, size_t root_size);
+
+static inline zone_admin_result_t
+zone_dataset_admin_check(const char *dataset, zone_uid_op_t op,
+    const char *aux_dataset)
+{
+    (void) dataset, (void) op, (void) aux_dataset;
+    return (ZONE_ADMIN_NOT_APPLICABLE);
+}
+
+static inline int
+zone_dataset_attach_uid(cred_t *cred, const char *dataset, uid_t uid)
+{
+    (void) cred, (void) dataset, (void) uid;
+    return (ENXIO);
+}
+
+static inline int
+zone_dataset_detach_uid(cred_t *cred, const char *dataset, uid_t uid)
+{
+    (void) cred, (void) dataset, (void) uid;
+    return (ENXIO);
+}
+
+static inline void
+zone_register_zoned_uid_callback(zone_get_zoned_uid_fn_t fn)
+{
+    (void) fn;
+}
+
+static inline void
+zone_unregister_zoned_uid_callback(void)
+{
+}
 
 /*
  * Kernel SPL entry points (zum_ioctl_um.c).  The bridge server has already
@@ -154,7 +215,7 @@ int zfs_get_temporary_prop(struct dsl_dataset *ds, zfs_prop_t zfs_prop,
 void zfsvfs_update_fromname(const char *, const char *);
 void zfs_vss_snapshot_remove_by_name(const char *snapname);
 void zfs_vss_pool_add(struct spa *spa);
-int zfsctl_snapshot_unmount(const char *, int flags);
+int zfsctl_snapshot_unmount(const char *);
 
 typedef struct zvol_state zvol_state_handle_t;
 void zvol_create_minors(const char *);

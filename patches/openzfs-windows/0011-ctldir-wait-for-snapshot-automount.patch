@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/zfs_ctldir.c b/module/os/windows/zfs/zfs_ctldir.c
-index a64ec54a3..803670ccb 100644
+index f3e4d8644..6f3e78616 100644
 --- a/module/os/windows/zfs/zfs_ctldir.c
 +++ b/module/os/windows/zfs/zfs_ctldir.c
-@@ -475,21 +475,37 @@ zfsctl_root_lookup(struct vnode *dvp, char *name, znode_t **zpp,
+@@ -466,21 +466,37 @@ zfsctl_root_lookup(struct vnode *dvp, char *name, znode_t **zpp,
  			dmu_objset_name(zfsvfs->z_os, parent_name);
  
  			zfs_exit(zfsvfs, FTAG);

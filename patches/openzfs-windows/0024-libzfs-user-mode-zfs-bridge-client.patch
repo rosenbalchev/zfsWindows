@@ -84,10 +84,10 @@ index 000000000..c991e32bb
 +
 +#endif /* _SPL_ZFS_BRIDGE_H */
 diff --git a/lib/libspl/os/windows/getmntany.c b/lib/libspl/os/windows/getmntany.c
-index dddbc1cb5..6d7d7ac3d 100644
+index 3113550d8..4f22fc4db 100644
 --- a/lib/libspl/os/windows/getmntany.c
 +++ b/lib/libspl/os/windows/getmntany.c
-@@ -46,6 +46,8 @@
+@@ -36,6 +36,8 @@
  #endif
  
  #include <sys/fs/zfs.h>
@@ -96,7 +96,7 @@ index dddbc1cb5..6d7d7ac3d 100644
  
  #include <windows.h>
  #include <winternl.h>
-@@ -332,6 +334,69 @@ backslash2slash(char *s)
+@@ -322,6 +324,69 @@ backslash2slash(char *s)
  	}
  }
  
@@ -166,7 +166,7 @@ index dddbc1cb5..6d7d7ac3d 100644
  int
  getfsstat(struct statfs *buf, int bufsize, int flags)
  {
-@@ -529,7 +594,7 @@ getfsstat(struct statfs *buf, int bufsize, int flags)
+@@ -519,7 +584,7 @@ getfsstat(struct statfs *buf, int bufsize, int flags)
  
  	FindVolumeClose(vh);
  	vh = INVALID_HANDLE_VALUE;
@@ -176,18 +176,18 @@ index dddbc1cb5..6d7d7ac3d 100644
  
  
 diff --git a/lib/libspl/os/windows/posix.c b/lib/libspl/os/windows/posix.c
-index 003f28d75..8ac223e74 100644
+index b5b15198e..88dff9b70 100644
 --- a/lib/libspl/os/windows/posix.c
 +++ b/lib/libspl/os/windows/posix.c
-@@ -47,6 +47,7 @@
+@@ -39,6 +39,7 @@
  #include <wfunopen.h>
  #include <pwd.h>
  #include <grp.h>
 +#include <sys/zfs_bridge.h>
- 
- /* Magic instruction to compiler to add library */
- #pragma comment(lib, "ws2_32.lib")
-@@ -1131,6 +1132,83 @@ wosix_fsync(int fd)
+ #include <search.h>
+ #include <process.h>
+ #include <stdarg.h>
+@@ -1153,6 +1154,83 @@ wosix_fsync(int fd)
  	return (0);
  }
  
@@ -271,7 +271,7 @@ index 003f28d75..8ac223e74 100644
  int
  wosix_open(const char *inpath, int oflag, ...)
  {
-@@ -1302,6 +1380,22 @@ wosix_open(const char *inpath, int oflag, ...)
+@@ -1324,6 +1402,22 @@ wosix_open(const char *inpath, int oflag, ...)
  		    FILE_ATTRIBUTE_NORMAL, NULL);
  	}
  
@@ -295,10 +295,10 @@ index 003f28d75..8ac223e74 100644
  	if (h == INVALID_HANDLE_VALUE) {
  		errno = EINVAL;
 diff --git a/lib/libzfs/os/windows/libzfs_util_os.c b/lib/libzfs/os/windows/libzfs_util_os.c
-index a39edbcf5..b43dd0ea1 100644
+index 9984948ba..6be7ed2b1 100644
 --- a/lib/libzfs/os/windows/libzfs_util_os.c
 +++ b/lib/libzfs/os/windows/libzfs_util_os.c
-@@ -123,6 +123,11 @@ zfs_version_kernel(void)
+@@ -114,6 +114,11 @@ zfs_version_kernel(void)
  	LSTATUS status = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
  	    "SYSTEM\\ControlSet001\\Services\\OpenZFS", 0, KEY_READ, &hKey);
  
@@ -311,10 +311,10 @@ index a39edbcf5..b43dd0ea1 100644
  		return (NULL);
  
 diff --git a/lib/libzfs_core/os/windows/libzfs_core_ioctl.c b/lib/libzfs_core/os/windows/libzfs_core_ioctl.c
-index 43598e03f..a5bce8155 100644
+index c8166ca21..00a559e00 100644
 --- a/lib/libzfs_core/os/windows/libzfs_core_ioctl.c
 +++ b/lib/libzfs_core/os/windows/libzfs_core_ioctl.c
-@@ -28,6 +28,8 @@
+@@ -19,6 +19,8 @@
  #include <sys/zfs_ioctl.h>
  #include <os/windows/zfs/sys/zfs_ioctl_compat.h>
  #include <libzfs_core.h>
@@ -323,7 +323,7 @@ index 43598e03f..a5bce8155 100644
  
  int
  ioctl_impl(int fd, unsigned long request, zfs_iocparm_t *wrap)
-@@ -117,6 +119,58 @@ zcmd_ioctl_compat(int fd, int request, zfs_cmd_t *zc, const int cflag)
+@@ -122,6 +124,58 @@ zcmd_ioctl_compat(int fd, int request, zfs_cmd_t *zc, const int cflag)
  	return (ret);
  }
  
@@ -382,7 +382,7 @@ index 43598e03f..a5bce8155 100644
  /*
   * This is the Windows version of ioctl(). Because the XNU kernel
   * handles copyin() and copyout(), we must return success from the
-@@ -130,7 +184,10 @@ lzc_ioctl_fd_os(int fd, unsigned long request, zfs_cmd_t *zc)
+@@ -135,7 +189,10 @@ lzc_ioctl_fd_os(int fd, unsigned long request, zfs_cmd_t *zc)
  	int ret, cflag = ZFS_CMD_COMPAT_NONE;
  
  	oldsize = zc->zc_nvlist_dst_size;

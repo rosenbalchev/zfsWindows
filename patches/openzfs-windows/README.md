@@ -1,10 +1,33 @@
 # Patches to `third_party/openzfs-windows`
 
-The submodule stays pinned to the upstream openzfsonwindows release.
+The submodule stays pinned to an upstream openzfsonwindows release, now
+`zfswin-2.4.4rc9` (`b125f492`, branch `zfs-Windows-2.4.4-release`).
 `scripts/apply-openzfs-patches.ps1` (run by `build-write-core.ps1` and
 `build-driver.ps1`) applies these patches idempotently before configuring.
-0001, 0002 and 0004–0018 are bug fixes and candidates for upstream
-submission. 0003 is test instrumentation.
+It checks the whole stack, not each patch alone, because a later patch can
+change lines an earlier one added (0031 inside 0003). Most patches are bug
+fixes and candidates for upstream submission (GitHub issue #13); 0003 is
+test instrumentation.
+
+### Rebase onto `zfswin-2.4.4rc9` (from `e7c0984`, 2.4.1-rc17)
+
+- **Removed, fixed in the fork:** 0010 (`6b746ca07`, same reset of the
+  recycled vnode's `FileHeader`, plus more fields) and 0023 (`2108cd6d4`,
+  the same `Pc`/`Sp` macros). Their numbers are not reused.
+- **Smaller, the fork has part of the fix:** 0009 (teardown-lock check,
+  `eee97707f`; the `VTOZ(vp) == NULL` check remains), 0027 (`zvol_os.c`,
+  `6607aa5f0`; three items remain), 0028 (the `____cacheline_aligned`
+  macro, `b542730f1`; the compiler option remains).
+- **Ported:** 0003 and 0031 now change `lib/libzpool/zfs_file_os.c`; upstream
+  moved the user-space `zfs_file_*` functions there out of `kernel.c`
+  (`52ff325a4`). 0029 now sits after the fork's own Registry value-size
+  checks (`a8a5b7b9d`). 0024 and 0032 needed only context changes.
+- **Regression in the fork, fixed in 0031:** the move to `zfs_file_os.c`
+  dropped the Windows partition offset (`f_win_offset`) from
+  `zfs_file_open()`, `zfs_file_pwrite()` and `zfs_file_pread()`. User-mode
+  I/O to a whole-disk vdev would have started at byte 0 of the disk, over
+  the GPT.
+- 0021 and 0022 had CRLF lines for LF files; they are LF now.
 
 ## 0001 — libspl positional I/O without the shared file pointer
 
@@ -40,6 +63,7 @@ power-loss journal in step 11 (`ZFS_WRITE_CORE_JOURNAL`). It sits at the
 platform-neutral `zfs_file` layer, the boundary ztest already uses to
 simulate torn writes. The only cost when unset is one pointer test per call.
 Unlike 0001 and 0002, it is test instrumentation rather than a fix.
+On 2.4.4 it changes `lib/libzpool/zfs_file_os.c` (see the rebase notes).
 
 ## 0004 — libzfs (Windows) mount when no parent has a drive letter
 
@@ -139,27 +163,15 @@ The teardown check above first moved that use earlier, and a step-13 power
 cut test then hit it: bugcheck 0x3B in `zfs_attach_security`, from a
 create's lookup.
 
-## 0010 — SPL: a recycled vnode starts with zero file sizes
+On 2.4.4 the fork has its own teardown-lock check (`eee97707f`), so the
+patch now adds only the NULL-znode check.
 
-`vnode_create()` takes vnodes from a kmem cache, and the cache constructor
-zeroes a vnode only when the cache first creates it. `vnode_create()` reset
-the section object pointers, but not the `FSRTL_ADVANCED_FCB_HEADER` sizes,
-and `FsRtlSetupAdvancedHeader()` does not reset them either. A recycled
-vnode therefore kept the previous file's `FileSize`, `AllocationSize` and
-`ValidDataLength`. `zfs_couplefileobject()` deliberately only *grows*
-`FileSize` on open, so the stale larger value stayed. Cached reads, which
-are bounded by `FileHeader.FileSize`, then ran past the real end of the new
-file and returned zeros. A later size query refreshed the value, so a
-re-read was correct.
+## 0010 — removed (in the fork since `zfswin-2.4.4rc9`)
 
-This was found in the step-12 extended tests. After export and re-import,
-between 0 and 20 of 15,036 files read wrong the first time in 4 of 5
-mounts. Each bad read was the right content, zero-padded to another file's
-length (11 bytes, 1 MiB, 4 MiB, 120 MiB), while Linux read every file
-correctly from the same image. The fresh-boot read test never recycles
-vnodes, so it could not see this. `vnode_create()` now zeroes the header
-before `FsRtlSetupAdvancedHeader()`. With the patch, the extended run and
-4 more reimport read rounds read every file correctly.
+A recycled vnode kept the previous file's `FileHeader` sizes, so cached
+reads ran past the end of the new file and returned zeros. The fork fixed
+it in `6b746ca07` ("vnode_create: reset FileHeader sizes on a recycled
+vnode"), which also resets other per-use fields.
 
 ## 0011 — ctldir: wait briefly for a snapshot automount
 
@@ -363,12 +375,11 @@ that as an error (`-Wincompatible-pointer-types`). They now pass the
 array `(c)->b.val`, which has room for 64 values, more than the ARM64
 `jmp_buf` needs. Other architectures are unchanged.
 
-## 0023 — ARM64: exception context registers in the write fault filter
+## 0023 — removed (in the fork since `zfswin-2.4.4rc9`)
 
-`zfs_write_fault_filter()` records the faulting instruction and stack
-pointers for diagnosis. It read `ContextRecord->Rip` and `->Rsp`, which
-exist only in the x64 `CONTEXT`. ARM64 uses `Pc` and `Sp` through a
-small macro. The recorded values and their meaning are unchanged.
+`zfs_write_fault_filter()` read the x64-only `Rip`/`Rsp`; the fork uses
+`Pc`/`Sp` on ARM64 with the same macros since `2108cd6d4`.
+
 ## 0024 — libzfs: the user-mode ZFS bridge client
 
 The user-mode edition (plan step 18) runs the ZFS engine (libzpool and
@@ -461,6 +472,9 @@ The remaining `-Wsometimes-uninitialized` warnings (`metaslab.c`,
 `range_tree.c`) are upstream switch defaults that `panic()`, so they are
 harmless.
 
+On 2.4.4 the fork sets `status` in `zvol_os_deregister_module()` itself
+(`6607aa5f0`), so the patch no longer changes `zvol_os.c`.
+
 ## 0028 — kernel: no over-aligned pointer assumptions
 
 Upstream marks several members `____cacheline_aligned` (64 bytes), for
@@ -502,6 +516,9 @@ aligned SSE (`movaps`) through a pointer that is not `rsp`, `rbp` or `rip`:
 User-mode code is unchanged: its malloc returns 16-byte-aligned memory, and
 it never had the attribute.
 
+On 2.4.4 the fork defines the macro as empty itself (`b542730f1`); the
+patch now adds only the compiler option.
+
 ## 0029 — sysctl: no self-triggered Registry loop, no zero dirty limit
 
 On every change under the driver's Registry key,
@@ -523,6 +540,9 @@ The fix has two parts:
 - `sysctl_os_write_registry()` writes only when the type or data differ;
 - 0 in the Registry for those three tunables means "computed", and is
   not applied.
+
+On 2.4.4 the second check sits after the fork's new value-size checks
+(`a8a5b7b9d`), so a 4-byte value has been widened before it is tested.
 ## 0030 — libzfs mounts one dataset at a time on Windows; MountMgr status
 
 `zfs_foreach_mountpoint()` mounts the datasets of an imported pool with up
@@ -585,6 +605,14 @@ both GPT partitions were intact.
 
 The kernel edition had no problem (same test: created, exported,
 imported).
+
+**On 2.4.4** upstream moved the user-space `zfs_file_*` functions to
+`lib/libzpool/zfs_file_os.c`, and the fork's move dropped the Windows
+partition offset entirely: `zfs_file_open()` no longer read it, and
+`zfs_file_pwrite()`/`zfs_file_pread()` no longer added it. The patch now
+changes `zfs_file_os.c` and also restores the offset in both I/O paths.
+`zfs_file_pwrite()` adds it before calling the 0003 observer, so the
+observer still sees absolute file offsets.
 
 ## 0032 — libzpool: the user-mode ARC sized and shrunk as in the kernel
 

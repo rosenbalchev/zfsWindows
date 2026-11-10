@@ -1,8 +1,8 @@
 diff --git a/module/os/windows/zfs/zfs_vnops_windows_lib.c b/module/os/windows/zfs/zfs_vnops_windows_lib.c
-index a7206ce40..b846c3643 100644
+index 18ed3ff00..fcb0b4f16 100644
 --- a/module/os/windows/zfs/zfs_vnops_windows_lib.c
 +++ b/module/os/windows/zfs/zfs_vnops_windows_lib.c
-@@ -3057,9 +3057,26 @@ zfs_attach_security(struct vnode *vp, struct vnode *dvp,
+@@ -3049,7 +3049,13 @@ zfs_attach_security(struct vnode *vp, struct vnode *dvp,
  	if (vp->security_descriptor != NULL)
  		return (Status);
  
@@ -15,17 +15,4 @@ index a7206ce40..b846c3643 100644
 +		return (Status);
  	zfsvfs_t *zfsvfs = zp->z_zfsvfs;
  
-+	/*
-+	 * zfs_zget() can run with the teardown lock write-held by this
-+	 * thread: zfsvfs_teardown() -> zil_close() -> zfs_get_data() during
-+	 * unmount.  Everything below re-enters that lock (zpl_xattr_get()
-+	 * and zfs_enter()), which panics on the recursion in
-+	 * rrw_enter_read_impl().  An intent-log data fetch needs no
-+	 * security descriptor.
-+	 */
-+	if (ZFS_TEARDOWN_WRITE_HELD(zfsvfs))
-+		return (0);
-+
- 	/* First check if we can read in an existing NTSecurity */
- 	zfs_load_ntsecurity(vp);
- 	if (vp->security_descriptor != NULL)
+ 	/*

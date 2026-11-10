@@ -1,8 +1,8 @@
 diff --git a/lib/libzfs/libzfs_mount.c b/lib/libzfs/libzfs_mount.c
-index d0b2e16a4..0494dd4ef 100644
+index 212a02291..05caf4277 100644
 --- a/lib/libzfs/libzfs_mount.c
 +++ b/lib/libzfs/libzfs_mount.c
-@@ -1237,6 +1237,17 @@ zfs_foreach_mountpoint(libzfs_handle_t *hdl, zfs_handle_t **handles,
+@@ -1267,6 +1267,17 @@ zfs_foreach_mountpoint(libzfs_handle_t *hdl, zfs_handle_t **handles,
  	 */
  	boolean_t serial_mount = nthr <= 1 ||
  	    (getenv("ZFS_SERIAL_MOUNT") != NULL);
@@ -21,10 +21,10 @@ index d0b2e16a4..0494dd4ef 100644
  	/*
  	 * Sort the datasets by mountpoint. See mountpoint_cmp for details
 diff --git a/module/os/windows/zfs/zfs_vnops_windows_mount.c b/module/os/windows/zfs/zfs_vnops_windows_mount.c
-index ae71e4379..acec623b3 100644
+index 072b553c6..00ec0dcc1 100644
 --- a/module/os/windows/zfs/zfs_vnops_windows_mount.c
 +++ b/module/os/windows/zfs/zfs_vnops_windows_mount.c
-@@ -167,11 +167,17 @@ SendIoctlToMountManager(__in ULONG IoControlCode, __in PVOID InputBuffer,
+@@ -160,11 +160,17 @@ SendIoctlToMountManager(__in ULONG IoControlCode, __in PVOID InputBuffer,
  	// Deadlock possible here.
  	status = IoCallDriver(mountmgr_deviceobject, irp);
  
