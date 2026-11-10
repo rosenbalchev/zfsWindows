@@ -1,0 +1,123 @@
+diff --git a/lib/libzfs/libzfs_pool.c b/lib/libzfs/libzfs_pool.c
+index db0db3765..0dd0b6082 100644
+--- a/lib/libzfs/libzfs_pool.c
++++ b/lib/libzfs/libzfs_pool.c
+@@ -575,6 +575,28 @@ bootfs_name_valid(const char *pool, const char *bootfs)
+ 	return (B_FALSE);
+ }
+ 
++/*
++ * The last directory separator of an absolute cache file path, or NULL if
++ * the path is not absolute.  On Windows, "C:\dir\file" and "C:/dir/file"
++ * are absolute too, with either separator.
++ */
++static char *
++cachefile_last_slash(const char *path)
++{
++#ifdef _WIN32
++	if (((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') &&
++	    path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
++		const char *slash = strrchr(path, '/');
++		const char *back = strrchr(path, '\\');
++
++		if (back != NULL && (slash == NULL || back > slash))
++			slash = back;
++		return ((char *)slash);
++	}
++#endif
++	return (path[0] == '/' ? strrchr(path, '/') : NULL);
++}
++
+ /*
+  * Given an nvlist of zpool properties to be set, validate that they are
+  * correct, and parse any numeric properties (index, boolean, etc) if they are
+@@ -838,7 +860,7 @@ zpool_valid_proplist(libzfs_handle_t *hdl, const char *poolname,
+ 			if (strcmp(strval, "none") == 0)
+ 				break;
+ 
+-			if (strval[0] != '/') {
++			if (cachefile_last_slash(strval) == NULL) {
+ 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+ 				    "property '%s' must be empty, an "
+ 				    "absolute path, or 'none'"), propname);
+@@ -851,10 +873,10 @@ zpool_valid_proplist(libzfs_handle_t *hdl, const char *poolname,
+ 				(void) zfs_error(hdl, EZFS_NOMEM, errbuf);
+ 				goto error;
+ 			}
+-			slash = strrchr(parent, '/');
++			slash = cachefile_last_slash(parent);
+ 
+-			if (slash[1] == '\0' || strcmp(slash, "/.") == 0 ||
+-			    strcmp(slash, "/..") == 0) {
++			if (slash[1] == '\0' || strcmp(slash + 1, ".") == 0 ||
++			    strcmp(slash + 1, "..") == 0) {
+ 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+ 				    "'%s' is not a valid file"), parent);
+ 				(void) zfs_error(hdl, EZFS_BADPATH, errbuf);
+@@ -862,7 +884,11 @@ zpool_valid_proplist(libzfs_handle_t *hdl, const char *poolname,
+ 				goto error;
+ 			}
+ 
+-			*slash = '\0';
++			/* "C:\file": the directory is "C:\", not "C:". */
++			if (slash == parent + 2 && parent[1] == ':')
++				slash[1] = '\0';
++			else
++				*slash = '\0';
+ 
+ 			if (parent[0] != '\0' &&
+ 			    (stat64(parent, &statbuf) != 0 ||
+diff --git a/module/zfs/spa.c b/module/zfs/spa.c
+index 4cfd0b648..37a80f63d 100644
+--- a/module/zfs/spa.c
++++ b/module/zfs/spa.c
+@@ -722,6 +722,28 @@ out:
+ 	return (0);
+ }
+ 
++/*
++ * The last directory separator of an absolute cache file path, or NULL.
++ * The user-space engine on Windows opens "C:\dir\file" and "C:/dir/file"
++ * as given, so those are absolute there; the kernel opens NT paths only.
++ */
++static const char *
++spa_cachefile_last_slash(const char *path)
++{
++#if defined(_WIN32) && !defined(_KERNEL)
++	if (((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') &&
++	    path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
++		const char *slash = strrchr(path, '/');
++		const char *back = strrchr(path, '\\');
++
++		if (back != NULL && (slash == NULL || back > slash))
++			slash = back;
++		return (slash);
++	}
++#endif
++	return (path[0] == '/' ? strrchr(path, '/') : NULL);
++}
++
+ /*
+  * Validate the given pool properties nvlist and modify the list
+  * for the property values to be set.
+@@ -901,16 +923,14 @@ spa_prop_validate(spa_t *spa, nvlist_t *props)
+ 			if (strcmp(strval, "none") == 0)
+ 				break;
+ 
+-			if (strval[0] != '/') {
++			slash = spa_cachefile_last_slash(strval);
++			if (slash == NULL) {
+ 				error = SET_ERROR(EINVAL);
+ 				break;
+ 			}
+ 
+-			slash = strrchr(strval, '/');
+-			ASSERT(slash != NULL);
+-
+-			if (slash[1] == '\0' || strcmp(slash, "/.") == 0 ||
+-			    strcmp(slash, "/..") == 0)
++			if (slash[1] == '\0' || strcmp(slash + 1, ".") == 0 ||
++			    strcmp(slash + 1, "..") == 0)
+ 				error = SET_ERROR(EINVAL);
+ 			break;
+ 

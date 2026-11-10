@@ -211,7 +211,7 @@ split_sources(const char *search_path, char **paths, int max)
 
 static int
 import_pool(const char *pool, const char *search_path, boolean_t readonly,
-    boolean_t *imported)
+    const char *cachefile, boolean_t *imported)
 {
     importargs_t args = { 0 };
     libpc_handle_t handle = {
@@ -272,7 +272,12 @@ import_pool(const char *pool, const char *search_path, boolean_t readonly,
     }
 
     props = fnvlist_alloc();
-    fnvlist_add_string(props, zpool_prop_to_name(ZPOOL_PROP_CACHEFILE), "none");
+    /*
+     * Not the engine's cache file (never read back), but a file the user
+     * gave the pool is written again, as after their own import.
+     */
+    fnvlist_add_string(props, zpool_prop_to_name(ZPOOL_PROP_CACHEFILE),
+        cachefile != NULL && cachefile[0] != '\0' ? cachefile : "none");
     /* A read-only import writes nothing, not even the import txg. */
     if (readonly)
         fnvlist_add_uint64(props, zpool_prop_to_name(ZPOOL_PROP_READONLY), 1);
@@ -292,11 +297,12 @@ import_pool(const char *pool, const char *search_path, boolean_t readonly,
 }
 
 int
-zum_pool_import(const char *pool, const char *search_path)
+zum_pool_import(const char *pool, const char *search_path,
+    const char *cachefile)
 {
     boolean_t imported;
 
-    return (import_pool(pool, search_path, B_FALSE, &imported));
+    return (import_pool(pool, search_path, B_FALSE, cachefile, &imported));
 }
 
 int
@@ -307,7 +313,7 @@ zum_open(zum_context_t *context)
     engine_hold();
     context->engine_held = B_TRUE;
     error = import_pool(context->pool_name, context->search_path,
-        context->readonly, &context->imported);
+        context->readonly, NULL, &context->imported);
     if (error != 0)
         return (error);
 

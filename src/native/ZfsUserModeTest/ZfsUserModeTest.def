@@ -7,6 +7,7 @@ EXPORTS
     zut_arc_stats
     zut_pool_create
     zut_pool_import
+    zut_pool_cachefile
     zut_pool_export
     zut_pool_destroy
     zut_pool_scrub

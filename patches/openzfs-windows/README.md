@@ -721,3 +721,18 @@ objects per tree, every CI run; GitHub issue #9):
 
 Both now write to the build tree first and copy with `cmake -E
 copy_if_different`. The generated contents are unchanged.
+
+## 0036 — cachefile: Windows drive-letter paths are absolute
+
+`zpool import -o cachefile=C:\zfs\pool.cache`, `zpool create -o cachefile=…`
+and `zpool set cachefile=…` failed with "property 'cachefile' must be empty,
+an absolute path, or 'none'": both `zpool_valid_proplist()` (libzfs) and
+`spa_prop_validate()` took only a path starting with `/` as absolute. Only a
+path like `/zfs/pool.cache` (the current drive's root) got through (GitHub
+issue #15).
+
+libzfs now also accepts `X:\…` and `X:/…`, with either separator, and checks
+that the directory exists as before (`C:\` for a file at a drive's root).
+`spa_prop_validate()` accepts them in the user-space engine only
+(`!_KERNEL`), which opens the path as given. The kernel driver's
+`zfs_file_open()` takes NT paths, so it still refuses them.

@@ -261,6 +261,22 @@ zum_pool_sources(const char *pool, char *out, size_t size)
     spa_close(spa, FTAG);
 }
 
+void
+zum_pool_cachefile(const char *pool, char *out, size_t size)
+{
+    spa_config_dirent_t *dp;
+    spa_t *spa;
+
+    out[0] = '\0';
+    spa_namespace_enter(FTAG);
+    /* The head is the current setting (spa_configfile_set()). */
+    if ((spa = spa_lookup(pool)) != NULL &&
+        (dp = list_head(&spa->spa_config_list)) != NULL &&
+        dp->scd_path != NULL && strcmp(dp->scd_path, spa_config_path) != 0)
+        (void) strlcpy(out, dp->scd_path, size);
+    spa_namespace_exit(FTAG);
+}
+
 /* Ioctls that pass file descriptors cannot cross into this process. */
 static boolean_t
 uses_descriptor(uint64_t request)
@@ -387,6 +403,13 @@ zum_ioctl(uint64_t request, uint32_t client_pid, zum_ioctl_buffers_t *io)
             request == ZFS_IOC_POOL_IMPORT) && bridge_ops->pool_imported) {
             zum_pool_sources(name, sources, sizeof (sources));
             bridge_ops->pool_imported(name, sources);
+        }
+        if ((request == ZFS_IOC_POOL_CREATE ||
+            request == ZFS_IOC_POOL_IMPORT ||
+            request == ZFS_IOC_POOL_SET_PROPS) &&
+            bridge_ops->pool_cachefile) {
+            zum_pool_cachefile(name, sources, sizeof (sources));
+            bridge_ops->pool_cachefile(name, sources);
         }
         if ((request == ZFS_IOC_POOL_EXPORT ||
             request == ZFS_IOC_POOL_DESTROY) && bridge_ops->pool_exported)

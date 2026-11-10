@@ -105,7 +105,9 @@ internal static unsafe partial class ZfsUmNative
     [LibraryImport(Library, EntryPoint = "zut_pool_create", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int PoolCreate(string pool, string layout, string vdevs, string poolProps, string fsProps);
     [LibraryImport(Library, EntryPoint = "zut_pool_import", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int PoolImport(string pool, string searchPath);
+    internal static partial int PoolImport(string pool, string searchPath, string? cachefile);
+    [LibraryImport(Library, EntryPoint = "zut_pool_cachefile", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial void PoolCachefile(string pool, [Out] byte[] buffer, int size);
     [LibraryImport(Library, EntryPoint = "zut_pool_export", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int PoolExport(string pool, int force);
     [LibraryImport(Library, EntryPoint = "zut_pool_destroy", StringMarshalling = StringMarshalling.Utf8)]
@@ -225,11 +227,21 @@ public static class ZfsUserModeEngine
         ZfsUmNative.Check($"create {pool}", ZfsUmNative.PoolCreate(pool, layout,
             string.Join(';', images.Select(VdevPath)), poolProperties, rootProperties));
 
-    public static int TryImportPool(string pool, string searchPath) =>
-        ZfsUmNative.PoolImport(pool, searchPath);
+    // cachefile: the pool's cachefile property (null: none), as the service
+    // imports a recorded pool.
+    public static int TryImportPool(string pool, string searchPath, string? cachefile = null) =>
+        ZfsUmNative.PoolImport(pool, searchPath, cachefile);
 
-    public static void ImportPool(string pool, string searchPath) =>
-        ZfsUmNative.Check($"import {pool}", TryImportPool(pool, searchPath));
+    public static void ImportPool(string pool, string searchPath, string? cachefile = null) =>
+        ZfsUmNative.Check($"import {pool}", TryImportPool(pool, searchPath, cachefile));
+
+    // An imported pool's cachefile when it names a file of the user's ("" otherwise).
+    public static string PoolCachefile(string pool)
+    {
+        var buffer = new byte[1024];
+        ZfsUmNative.PoolCachefile(pool, buffer, buffer.Length);
+        return System.Text.Encoding.UTF8.GetString(buffer, 0, Math.Max(0, Array.IndexOf(buffer, (byte)0)));
+    }
 
     public static void ExportPool(string pool, bool force = false) =>
         ZfsUmNative.Check($"export {pool}", ZfsUmNative.PoolExport(pool, force ? 1 : 0));
