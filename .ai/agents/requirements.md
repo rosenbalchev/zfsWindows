@@ -5,8 +5,12 @@ category: planning
 trigger: workflow.feature
 inputs: [github_issue, execution_plan]
 outputs: [user_outcomes, acceptance_criteria, edge_cases, open_questions]
-permissions: [read_issue, comment_issue]
+permissions: [read_issue, comment_issue, update_issue_status_dashboard]
 ---
+
+## Status dashboard
+
+Follow the dashboard rules in `.ai/README.md`; update the issue's phase and current agent when you accept or hand it off.
 
 # Mission
 

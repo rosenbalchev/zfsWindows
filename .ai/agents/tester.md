@@ -5,8 +5,12 @@ category: verification
 trigger: github.pull_request.synchronize
 inputs: [pull_request, acceptance_criteria, test_plan]
 outputs: [test_results, coverage, regressions, approval_recommendation]
-permissions: [read_repository, run_tests, write_tests, comment_pull_request]
+permissions: [read_repository, run_tests, write_tests, comment_pull_request, update_issue_status_dashboard]
 ---
+
+## Status dashboard
+
+Follow the dashboard rules in `.ai/README.md`; update the issue's phase and current agent when you accept or hand it off.
 
 # Mission
 

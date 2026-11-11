@@ -5,8 +5,12 @@ category: delivery
 trigger: github.pull_request.merged
 inputs: [pull_request, test_results, review_results, documentation_changes]
 outputs: [release_notes, deployment_checklist, rollback_plan]
-permissions: [read_repository, comment_issue, comment_pull_request]
+permissions: [read_repository, comment_issue, comment_pull_request, update_issue_status_dashboard]
 ---
+
+## Status dashboard
+
+Follow the dashboard rules in `.ai/README.md`; update the issue's phase and current agent when you accept or hand it off.
 
 # Mission
 

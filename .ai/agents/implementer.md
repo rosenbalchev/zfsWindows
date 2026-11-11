@@ -5,8 +5,12 @@ category: delivery
 trigger: github.label.added:plan-approved
 inputs: [github_issue, approved_plan, repository_context]
 outputs: [branch, pull_request, changed_files, verification]
-permissions: [read_repository, create_branch, write_code, create_pull_request]
+permissions: [read_repository, create_branch, write_code, create_pull_request, update_issue_status_dashboard]
 ---
+
+## Status dashboard
+
+Follow the dashboard rules in `.ai/README.md`; update the issue's phase and current agent when you accept or hand it off.
 
 # Mission
 

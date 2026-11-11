@@ -5,8 +5,12 @@ category: review
 trigger: conditional.performance-risk
 inputs: [github_issue, pull_request, approved_plan, performance_baseline]
 outputs: [performance_assessment, benchmarks, findings, approval_recommendation]
-permissions: [read_repository, run_benchmarks, review_pull_request]
+permissions: [read_repository, run_benchmarks, review_pull_request, update_issue_status_dashboard]
 ---
+
+## Status dashboard
+
+Follow the dashboard rules in `.ai/README.md`; update the issue's phase and current agent when you accept or hand it off.
 
 # Mission
 

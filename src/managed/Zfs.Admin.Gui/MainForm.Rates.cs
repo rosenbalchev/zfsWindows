@@ -31,7 +31,7 @@ sealed partial class MainForm
         top.Controls.Add(ratesInterval);
         top.Controls.Add(new Label { Text = "s", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(ratesPause);
-        ratesPool.SelectedIndexChanged += (_, _) => ResetRates();
+        ratesPool.SelectedIndexChanged += (_, _) => { if (!applyingWebAction) ResetRates(); };
         ratesInterval.ValueChanged += (_, _) => ratesTimer.Interval = (int)ratesInterval.Value * 1000;
         ratesTimer.Tick += async (_, _) => await SampleRatesAsync();
         tabs.SelectedIndexChanged += (_, _) => UpdateRatesTimer();
@@ -150,6 +150,10 @@ sealed class RateChart : Control
         ResizeRedraw = true;
         BackColor = SystemColors.Window;
     }
+
+    public string Title => title;
+    public IReadOnlyList<(double Read, double Write)> Readings => points;
+    public string FormatValue(double value) => label(value);
 
     public void Add(double read, double write)
     {

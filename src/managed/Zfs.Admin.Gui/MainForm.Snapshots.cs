@@ -25,7 +25,7 @@ sealed partial class MainForm
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(4) };
         top.Controls.Add(new Label { Text = "Dataset:", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(snapshotDataset);
-        snapshotDataset.SelectedIndexChanged += async (_, _) => await ShowSnapshotsAsync();
+        snapshotDataset.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowSnapshotsAsync(); };
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, Width = 320, Padding = new Padding(8) };
         void Action(string text, Func<Task> handler)

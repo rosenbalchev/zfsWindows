@@ -1,5 +1,6 @@
 using System.Management;
 using System.ServiceProcess;
+using System.Text.RegularExpressions;
 using Zfs.Admin;
 
 namespace Zfs.Admin.Gui;
@@ -13,8 +14,22 @@ sealed record DiskInfo(int Number, string Name, long Size, bool IsBoot, bool IsS
         $"Disk {Number}: {Name}, {Format.Bytes(Size)}, {PartitionStyle}{(Protected ? " (Windows disk, not offered)" : "")}";
 }
 
+sealed record DeviceChoice(int DiskNumber, int? PartitionNumber, string Device, string Description, bool WholeDisk)
+{
+    public override string ToString() => Description;
+}
+
+sealed record DiskPartitionInfo(int DiskNumber, int Number, long Offset, long Size, bool IsBoot, bool IsSystem,
+    bool IsHidden, string? DriveLetter, string[] AccessPaths)
+{
+    public bool InUseByWindows => IsBoot || IsSystem || IsHidden || !string.IsNullOrEmpty(DriveLetter) || AccessPaths.Length > 0;
+}
+
 static class Disks
 {
+    const long Alignment = 1L << 20;
+    const long MinimumDeviceSize = 64L << 20;
+
     public static IReadOnlyList<DiskInfo> List()
     {
         var disks = new List<DiskInfo>();
@@ -32,6 +47,140 @@ static class Disks
         }
         return disks.OrderBy(d => d.Number).ToList();
     }
+
+    public static IReadOnlyList<DeviceChoice> AvailableDevices(IReadOnlyCollection<string> inUsePaths)
+    {
+        List<DiskInfo> disks = List().Where(d => !d.Protected).ToList();
+        var partitions = ListPartitions().GroupBy(p => p.DiskNumber).ToDictionary(g => g.Key, g => g.OrderBy(p => p.Offset).ToList());
+        List<UsedDevice> used = inUsePaths.Select(ParseUsedDevice).Where(x => x is not null).Select(x => x!).ToList();
+        var choices = new List<DeviceChoice>();
+
+        foreach (DiskInfo disk in disks)
+        {
+            partitions.TryGetValue(disk.Number, out List<DiskPartitionInfo>? diskPartitions);
+            diskPartitions ??= [];
+            List<UsedDevice> usedOnDisk = used.Where(u => u.DiskNumber == disk.Number).ToList();
+
+            if (usedOnDisk.Count == 0 && !diskPartitions.Any(p => p.InUseByWindows))
+                choices.Add(new DeviceChoice(disk.Number, null, disk.Device,
+                    $"Disk {disk.Number}: entire {disk.Name}, {Format.Bytes(disk.Size)} (overwrites every partition)", WholeDisk: true));
+
+            foreach (DiskPartitionInfo partition in diskPartitions)
+            {
+                if (partition.InUseByWindows || partition.Size < MinimumDeviceSize
+                    || IsUsed(usedOnDisk, partition.Offset, partition.Size, partition.Number))
+                    continue;
+                choices.Add(new DeviceChoice(disk.Number, partition.Number, OffsetDevice(disk, partition.Offset, partition.Size),
+                    $"Disk {disk.Number}, partition {partition.Number}: unused, {Format.Bytes(partition.Size)}", WholeDisk: false));
+            }
+
+            if (!usedOnDisk.Any(u => u.WholeDisk))
+            {
+                foreach ((long offset, long size) in FreeRanges(disk.Size, diskPartitions, usedOnDisk))
+                    choices.Add(new DeviceChoice(disk.Number, null, OffsetDevice(disk, offset, size),
+                        $"Disk {disk.Number}: unallocated space, {Format.Bytes(size)}", WholeDisk: false));
+            }
+        }
+
+        return choices;
+    }
+
+    static IReadOnlyList<DiskPartitionInfo> ListPartitions()
+    {
+        var result = new List<DiskPartitionInfo>();
+        using var searcher = new ManagementObjectSearcher(@"root\Microsoft\Windows\Storage",
+            "SELECT DiskNumber, PartitionNumber, Offset, Size, IsBoot, IsSystem, IsHidden, DriveLetter, AccessPaths FROM MSFT_Partition");
+        foreach (ManagementBaseObject p in searcher.Get())
+        {
+            using (p)
+            {
+                result.Add(new DiskPartitionInfo(
+                    Convert.ToInt32(p["DiskNumber"]),
+                    Convert.ToInt32(p["PartitionNumber"]),
+                    Convert.ToInt64(p["Offset"] ?? 0L),
+                    Convert.ToInt64(p["Size"] ?? 0L),
+                    p["IsBoot"] is true,
+                    p["IsSystem"] is true,
+                    p["IsHidden"] is true,
+                    p["DriveLetter"] as string,
+                    p["AccessPaths"] as string[] ?? []));
+            }
+        }
+        return result;
+    }
+
+    static IEnumerable<(long Offset, long Size)> FreeRanges(long diskSize, IReadOnlyList<DiskPartitionInfo> partitions, IReadOnlyList<UsedDevice> used)
+    {
+        long start = Alignment;
+        long limit = AlignDown(Math.Max(0, diskSize - Alignment));
+        foreach (DiskPartitionInfo partition in partitions)
+        {
+            long partitionStart = AlignDown(Math.Max(0, partition.Offset));
+            long partitionEnd = AlignUp(Math.Min(diskSize, partition.Offset + partition.Size));
+            foreach ((long offset, long size) in Unused(start, Math.Min(partitionStart, limit), used))
+                yield return (offset, size);
+            start = Math.Max(start, partitionEnd);
+        }
+        foreach ((long offset, long size) in Unused(start, limit, used))
+            yield return (offset, size);
+
+        static IEnumerable<(long Offset, long Size)> Unused(long from, long to, IReadOnlyList<UsedDevice> usedRanges)
+        {
+            long cursor = AlignUp(from);
+            foreach (UsedDevice range in usedRanges.Where(u => !u.WholeDisk && u.Offset is not null && u.Size is not null)
+                         .OrderBy(u => u.Offset))
+            {
+                long blockedStart = AlignDown(range.Offset!.Value);
+                long blockedEnd = AlignUp(range.Offset.Value + range.Size!.Value);
+                if (blockedEnd <= cursor || blockedStart >= to)
+                    continue;
+                if (blockedStart > cursor && blockedStart - cursor >= MinimumDeviceSize)
+                    yield return (cursor, blockedStart - cursor);
+                cursor = Math.Max(cursor, blockedEnd);
+                if (cursor >= to)
+                    yield break;
+            }
+            long end = AlignDown(to);
+            if (end > cursor && end - cursor >= MinimumDeviceSize)
+                yield return (cursor, end - cursor);
+        }
+    }
+
+    static bool IsUsed(IReadOnlyList<UsedDevice> used, long offset, long size, int partitionNumber)
+    {
+        long end = offset + size;
+        return used.Any(u => u.WholeDisk
+            || u.PartitionNumber == partitionNumber
+            || u.Offset is long usedOffset && u.Size is long usedSize
+                && offset < usedOffset + usedSize && usedOffset < end);
+    }
+
+    static UsedDevice? ParseUsedDevice(string path)
+    {
+        Match partition = Regex.Match(path, @"Harddisk([0-9]+)Partition([0-9]+)", RegexOptions.IgnoreCase);
+        if (partition.Success && int.TryParse(partition.Groups[1].Value, out int partitionDisk)
+            && int.TryParse(partition.Groups[2].Value, out int partitionNumber))
+            return new UsedDevice(partitionDisk, partitionNumber, null, null, WholeDisk: false);
+
+        Match drive = Regex.Match(path, @"PhysicalDrive([0-9]+)", RegexOptions.IgnoreCase);
+        if (!drive.Success || !int.TryParse(drive.Groups[1].Value, out int diskNumber))
+            return null;
+        Match range = Regex.Match(path, @"^#([0-9]+)#([0-9]+)#", RegexOptions.IgnoreCase);
+        return range.Success && long.TryParse(range.Groups[1].Value, out long offset) && long.TryParse(range.Groups[2].Value, out long size)
+            && size > 0 && offset <= long.MaxValue - size
+            ? new UsedDevice(diskNumber, null, offset, size, WholeDisk: false)
+            : new UsedDevice(diskNumber, null, null, null, WholeDisk: true);
+    }
+
+    static string OffsetDevice(DiskInfo disk, long offset, long size) =>
+        $"#{offset}#{size}#{disk.Device}";
+
+    static long AlignDown(long value) => value / Alignment * Alignment;
+
+    static long AlignUp(long value) =>
+        value <= 0 ? 0 : checked((value + Alignment - 1) / Alignment * Alignment);
+
+    sealed record UsedDevice(int DiskNumber, int? PartitionNumber, long? Offset, long? Size, bool WholeDisk);
 }
 
 /// <summary>

@@ -5,8 +5,12 @@ category: design-review
 trigger: workflow.plan-review
 inputs: [github_issue, execution_plan, repository_context]
 outputs: [architecture_assessment, design_decision, risks]
-permissions: [read_repository, comment_issue]
+permissions: [read_repository, comment_issue, update_issue_status_dashboard]
 ---
+
+## Status dashboard
+
+Follow the dashboard rules in `.ai/README.md`; update the issue's phase and current agent when you accept or hand it off.
 
 # Mission
 

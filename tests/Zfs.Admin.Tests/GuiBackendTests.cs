@@ -19,6 +19,14 @@ public class GuiBackendTests
         Assert.Equal(expected, AdminClient.DeviceArgument(reported));
 
     [Fact]
+    public void NewDeviceArgumentPreservesOffsetLimitedPhysicalDiskRanges()
+    {
+        const string partition = @"#1048576#21464350720#\\?\PhysicalDrive2";
+        Assert.Equal(partition, AdminClient.NewDeviceArgument(partition));
+        Assert.Equal(@"\\?\PhysicalDrive2", AdminClient.NewDeviceArgument(@"\\.\PhysicalDrive2"));
+    }
+
+    [Fact]
     public async Task StatusIncludesEveryDeviceClass()
     {
         await using var broker = new TestBroker();
@@ -54,12 +62,14 @@ public class GuiBackendTests
             var refused = await Assert.ThrowsAsync<AdminException>(() => client.AddCacheDevicesAsync("tank", "cache", [c], mirror: false, confirmed: false));
             Assert.Equal(ErrorCode.ConfirmationRequired, refused.Code);
             await client.AddCacheDevicesAsync("tank", "cache", [@"\\?\" + c], mirror: false, confirmed: true);
+            await client.AddCacheDevicesAsync("tank", "cache", [@"#1048576#1048576#\\?\PhysicalDrive2"], mirror: false, confirmed: true);
             await client.RemoveDeviceAsync("tank", @"\\?\" + c, confirmed: true);
             await client.SetDatasetPropertyAsync("tank/data", "dedup", "on");
             var calls = broker.Runner.Calls.Select(x => x.Args).Where(x => x[0] != "status").ToArray();
             Assert.Equal(["add", "tank", "cache", @"\\?\" + c], calls[0]);
-            Assert.Equal(["remove", "tank", @"\\?\" + c], calls[1]);
-            Assert.Equal(["set", "dedup=on", "tank/data"], calls[2]);
+            Assert.Equal(["add", "tank", "cache", "#1048576#1048576#\\\\?\\PhysicalDrive2"], calls[1]);
+            Assert.Equal(["remove", "tank", @"\\?\" + c], calls[2]);
+            Assert.Equal(["set", "dedup=on", "tank/data"], calls[3]);
         }
         finally
         {

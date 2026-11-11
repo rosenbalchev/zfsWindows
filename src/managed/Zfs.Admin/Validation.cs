@@ -28,6 +28,9 @@ public static partial class Validation
     [GeneratedRegex(@"^\\\\[?.]\\PhysicalDrive[0-9]{1,3}$", RegexOptions.IgnoreCase)]
     private static partial Regex PhysicalDrivePattern();
 
+    [GeneratedRegex(@"^#([0-9]{1,20})#([0-9]{1,20})#(?:\\\\[?.]\\)?PhysicalDrive([0-9]{1,3})$", RegexOptions.IgnoreCase)]
+    private static partial Regex OffsetDevicePattern();
+
     [GeneratedRegex(@"^[0-9]{1,20}$")]
     private static partial Regex GuidPattern();
 
@@ -116,6 +119,16 @@ public static partial class Validation
     public static string DevicePath(string? value, string argument = "device", bool mustExist = true)
     {
         value = Required(value, argument);
+        Match offsetDevice = OffsetDevicePattern().Match(value);
+        if (offsetDevice.Success)
+        {
+            if (!ulong.TryParse(offsetDevice.Groups[1].Value, out ulong offset)
+                || !ulong.TryParse(offsetDevice.Groups[2].Value, out ulong size)
+                || size == 0
+                || offset > ulong.MaxValue - size)
+                throw Invalid(argument, "the physical-disk range has an invalid offset or length.");
+            return $"#{offset}#{size}#\\\\?\\PhysicalDrive{offsetDevice.Groups[3].Value}";
+        }
         if (PhysicalDrivePattern().IsMatch(value))
             return @"\\?\PhysicalDrive" + value[(value.IndexOf("Drive", StringComparison.OrdinalIgnoreCase) + 5)..];
         CheckFilePath(value, argument);
