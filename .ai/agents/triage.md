@@ -5,8 +5,12 @@ category: coordination
 trigger: github.issue.opened
 inputs: [github_issue]
 outputs: [classification, labels, routing, questions]
-permissions: [read_issue, comment_issue, label_issue]
+permissions: [read_issue, comment_issue, label_issue, update_issue_status_dashboard]
 ---
+
+## Status dashboard
+
+Follow the dashboard rules in `.ai/README.md`; add newly triaged open issues and update the current agent when routing them.
 
 # Mission
 

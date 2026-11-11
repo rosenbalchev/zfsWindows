@@ -20,7 +20,7 @@ sealed partial class MainForm
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(4) };
         top.Controls.Add(new Label { Text = "Pool:", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(integrityPool);
-        integrityPool.SelectedIndexChanged += async (_, _) => await ShowIntegrityAsync();
+        integrityPool.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowIntegrityAsync(); };
         var scrub = new Button { Text = "Start scrub", AutoSize = true };
         scrub.Click += async (_, _) =>
         {

@@ -14,6 +14,7 @@
     <AssemblyName>ZfsWinGui</AssemblyName>
     <RootNamespace>Zfs.Admin.Gui</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>openzfs.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SelfContained>false</SelfContained>
@@ -26,9 +27,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Zfs.Admin\Zfs.Admin.csproj" />
     <PackageReference Include="System.Management" Version="10.0.0" />
-    <!-- The Overview tab (step 20).  Only the loader (about 0.2 MB); the
-         WebView2 runtime is the system's, absent on LTSC and Server, where
-         the tab offers "Open in browser" instead. -->
+    <!-- The tab content uses WebView2 when its runtime is installed; only the
+         loader is bundled. Without it, native WinForms controls remain available. -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0" />
   </ItemGroup>

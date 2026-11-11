@@ -103,7 +103,7 @@ public sealed partial class AdminClient(BrokerClient broker)
 
     /// <summary>Mirror <paramref name="device"/> onto <paramref name="newDevice"/> (zpool attach).</summary>
     public Task AttachMirrorAsync(string pool, string device, string newDevice, bool confirmed, CancellationToken ct = default) =>
-        broker.CallAsync("vdev.attach", Confirm(new JsonObject { ["pool"] = pool, ["device"] = DeviceArgument(device), ["newDevice"] = DeviceArgument(newDevice) }, confirmed), ct);
+        broker.CallAsync("vdev.attach", Confirm(new JsonObject { ["pool"] = pool, ["device"] = DeviceArgument(device), ["newDevice"] = NewDeviceArgument(newDevice) }, confirmed), ct);
 
     public Task DetachMirrorAsync(string pool, string device, bool confirmed, CancellationToken ct = default) =>
         broker.CallAsync("vdev.detach", Confirm(new JsonObject { ["pool"] = pool, ["device"] = DeviceArgument(device) }, confirmed), ct);
@@ -113,7 +113,7 @@ public sealed partial class AdminClient(BrokerClient broker)
         broker.CallAsync("vdev.add", Confirm(new JsonObject
         {
             ["pool"] = pool, ["role"] = role, ["mirror"] = mirror,
-            ["devices"] = new JsonArray(devices.Select(d => (JsonNode?)DeviceArgument(d)).ToArray()),
+            ["devices"] = new JsonArray(devices.Select(d => (JsonNode?)NewDeviceArgument(d)).ToArray()),
         }, confirmed), ct);
 
     public Task RemoveDeviceAsync(string pool, string device, bool confirmed, CancellationToken ct = default) =>
@@ -132,6 +132,10 @@ public sealed partial class AdminClient(BrokerClient broker)
             return @"\\?\PhysicalDrive" + drive.Groups[1].Value;
         return path.StartsWith(@"\\?\", StringComparison.Ordinal) && path.Length > 6 && path[5] == ':' ? path[4..] : path;
     }
+
+    /// <summary>Normalizes a new vdev while preserving an offset-limited physical-disk range.</summary>
+    public static string NewDeviceArgument(string path) =>
+        path.StartsWith('#') ? path : DeviceArgument(path);
 
     static JsonObject Confirm(JsonObject args, bool confirmed)
     {

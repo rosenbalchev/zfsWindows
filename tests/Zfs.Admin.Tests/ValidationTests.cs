@@ -85,7 +85,16 @@ public class ValidationTests
     [Theory]
     [InlineData(@"\\?\PhysicalDrive1", @"\\?\PhysicalDrive1")]
     [InlineData(@"\\.\physicaldrive12", @"\\?\PhysicalDrive12")]
+    [InlineData(@"#1048576#2097152#\\?\PhysicalDrive2", @"#1048576#2097152#\\?\PhysicalDrive2")]
+    [InlineData(@"#1048576#2097152#PhysicalDrive2", @"#1048576#2097152#\\?\PhysicalDrive2")]
     public void NormalizesPhysicalDrives(string input, string expected) => Assert.Equal(expected, Validation.DevicePath(input));
+
+    [Theory]
+    [InlineData("#0#0#PhysicalDrive2")]
+    [InlineData("#18446744073709551615#1#PhysicalDrive2")]
+    [InlineData("#1048576#not-a-number#PhysicalDrive2")]
+    public void RejectsInvalidOffsetDeviceRanges(string path) =>
+        Assert.Equal(ErrorCode.InvalidArgument, Assert.Throws<AdminException>(() => Validation.DevicePath(path, mustExist: false)).Code);
 
     [Theory]
     [InlineData(@"relative\disk.img")]

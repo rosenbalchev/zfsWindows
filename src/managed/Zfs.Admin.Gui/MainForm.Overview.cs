@@ -8,9 +8,9 @@ using Zfs.Admin;
 namespace Zfs.Admin.Gui;
 
 /// <summary>
-/// The Overview tab: DashboardHtml in WebView2.  Without the WebView2
-/// runtime (Windows LTSC and Server), "Open in browser" shows the same page
-/// from %LOCALAPPDATA%\OpenZFS\dashboard.html, which reloads itself.
+/// The tabs share WebView2 when available. Without its runtime (Windows LTSC
+/// and Server), Overview opens from %LOCALAPPDATA%\OpenZFS\dashboard.html;
+/// the WinForms tab controls remain usable.
 /// </summary>
 sealed partial class MainForm
 {
@@ -41,13 +41,11 @@ sealed partial class MainForm
         countCancel.Click += (_, _) => counting?.Cancel();
         openInBrowser.Click += (_, _) => OpenDashboardInBrowser();
         bar.Items.AddRange([countNow, countCancel, openInBrowser, countState]);
-        overviewFallback.Text = "The WebView2 runtime is not installed (Windows LTSC and Server editions do not include it), " +
-            "so the dashboard opens in your browser instead: Open in browser.  The page reloads itself every 5 seconds " +
-            "while this window is open.  The other tabs show the same figures.";
+        overviewFallback.Text = "The WebView2 runtime is not installed (Windows LTSC and Server editions do not include it). " +
+            "The Overview dashboard opens in your browser instead: Open in browser. The other tabs retain their native controls.";
         overviewHost.Controls.Add(overviewFallback);
         page.Controls.Add(overviewHost);
         page.Controls.Add(bar);
-        _ = InitializeWebViewAsync();
         return page;
     }
 
@@ -60,25 +58,27 @@ sealed partial class MainForm
             string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenZFS", "WebView2");
             var environment = await CoreWebView2Environment.CreateAsync(null, data);
             web = new WebView2 { Dock = DockStyle.Fill };
-            overviewHost.Controls.Add(web);
             await web.EnsureCoreWebView2Async(environment);
             web.CoreWebView2.Settings.AreDevToolsEnabled = false;
             web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-            web.CoreWebView2.Settings.IsScriptEnabled = false;
+            web.CoreWebView2.Settings.IsScriptEnabled = true;
             web.CoreWebView2.Settings.IsStatusBarEnabled = false;
-            // The page is ours alone: nothing navigates away from it.
+            web.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
+            // Only our local data pages are allowed; Web UI actions use a validated message allowlist.
             web.CoreWebView2.NavigationStarting += (_, e) =>
             {
                 if (!e.Uri.StartsWith("data:", StringComparison.Ordinal) && !e.Uri.StartsWith("about:", StringComparison.Ordinal))
                     e.Cancel = true;
             };
-            if (lastHtml.Length > 0)
-                web.NavigateToString(lastHtml);
+            overviewFallback.Visible = false;
+            MoveWebViewToSelectedTab();
+            RenderSelectedWebPage();
         }
         catch (Exception e) when (e is WebView2RuntimeNotFoundException or COMException or InvalidOperationException or UnauthorizedAccessException)
         {
             web?.Dispose();
             web = null;
+            overviewHost.Visible = true;
             overviewFallback.Visible = true;
             openInBrowser.Visible = true;
         }
@@ -94,10 +94,10 @@ sealed partial class MainForm
         if (comparable == lastHtml)
             return;
         lastHtml = comparable;
-        if (web?.CoreWebView2 is not null)
-            web.NavigateToString(html);
         if (web is null)
             WriteDashboardFile(html);
+        else if (tabs.SelectedTab?.Text == "Overview")
+            RenderSelectedWebPage();
         if (DateTimeOffset.UtcNow - lastWalk > AutoCountInterval && counting is null)
             _ = CountFilesAsync();
     }

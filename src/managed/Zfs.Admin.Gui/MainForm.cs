@@ -72,6 +72,7 @@ sealed partial class MainForm : Form
         tabs.TabPages.Add(IntegrityPage());
         tabs.TabPages.Add(RatesPage());
         tabs.TabPages.Add(userModePage = UserModePage());
+        RegisterWebHosts();
         Controls.Add(tabs);
         Controls.Add(tools);
         Controls.Add(status);
@@ -88,8 +89,13 @@ sealed partial class MainForm : Form
         };
         // Every 5 s: the tab in view, never while minimized or busy.
         autoRefresh.Tick += async (_, _) => await RefreshVisibleAsync();
-        tabs.SelectedIndexChanged += async (_, _) => await RefreshVisibleAsync();
+        tabs.SelectedIndexChanged += async (_, _) =>
+        {
+            MoveWebViewToSelectedTab();
+            await RefreshVisibleAsync();
+        };
         FormClosing += OnClosing;
+        _ = InitializeWebViewAsync();
     }
 
     async Task RefreshVisibleAsync()
@@ -116,6 +122,7 @@ sealed partial class MainForm : Form
         finally
         {
             refreshing = false;
+            RenderSelectedWebPage();
         }
     }
 
@@ -153,7 +160,7 @@ sealed partial class MainForm : Form
         bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         split.Panel2.Controls.Add(bottom);
         page.Controls.Add(split);
-        pools.SelectedIndexChanged += async (_, _) => await ShowPoolAsync();
+        pools.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowPoolAsync(); };
         return page;
     }
 
@@ -181,7 +188,7 @@ sealed partial class MainForm : Form
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         split.Panel2.Controls.Add(right);
         page.Controls.Add(split);
-        datasets.SelectedIndexChanged += async (_, _) => await ShowDatasetAsync();
+        datasets.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowDatasetAsync(); };
         return page;
     }
 
@@ -204,7 +211,7 @@ sealed partial class MainForm : Form
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(4) };
         top.Controls.Add(new Label { Text = "Pool:", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(devicePool);
-        devicePool.SelectedIndexChanged += async (_, _) => await ShowDevicesAsync();
+        devicePool.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowDevicesAsync(); };
         var actions = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, Width = 320, Padding = new Padding(8) };
         void Action(string text, Func<Task> handler)
         {
@@ -308,6 +315,7 @@ sealed partial class MainForm : Form
         finally
         {
             UseWaitCursor = false;
+            RenderSelectedWebPage();
         }
     }
 
@@ -454,11 +462,14 @@ sealed partial class MainForm : Form
             Info("Select a data disk (a leaf under the pool, not a cache or log) to mirror.");
             return;
         }
-        using var dialog = new DeviceDialog("Add mirror device", $"The new device becomes a mirror of {node.Vdev.Path ?? node.Vdev.Name}; it must be at least as large.", 1, offerMirror: false);
+        IReadOnlyList<string> inUse;
+        try { inUse = await PoolDevicePathsAsync(); }
+        catch (AdminException e) { Error("Find devices in use by pools", e); return; }
+        using var dialog = new DeviceDialog("Add mirror device", $"The new device becomes a mirror of {node.Vdev.Path ?? node.Vdev.Name}; it must be at least as large.", 1, offerMirror: false, inUse);
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
         string target = dialog.Devices[0];
-        if (Confirm($"Attach {target} to {node.Vdev.Path ?? node.Vdev.Name} in {pool}?\r\n\r\nEverything on {target} is overwritten.  ZFS then copies the data (resilver)."))
+        if (Confirm($"Attach {dialog.SelectionSummary} to {node.Vdev.Path ?? node.Vdev.Name} in {pool}?\r\n\r\nEverything on the selected target is overwritten. ZFS then copies the data (resilver)."))
             await RunAsync($"Attach {target}", () => client.AttachMirrorAsync(pool, node.Vdev.Path ?? node.Vdev.Name, target, confirmed: true));
     }
 
@@ -479,14 +490,34 @@ sealed partial class MainForm : Form
         if (devicePool.SelectedItem is not string pool)
             return;
         string what = role == "cache" ? "read cache (L2ARC)" : "write log (SLOG)";
+        IReadOnlyList<string> inUse;
+        try { inUse = await PoolDevicePathsAsync(); }
+        catch (AdminException e) { Error("Find devices in use by pools", e); return; }
         using var dialog = new DeviceDialog($"Add {what}", role == "cache"
             ? "Read cache devices extend the RAM cache with fast storage (SSD).  Several are used independently."
-            : "A write log takes synchronous writes until they reach the pool.  Use fast, power-safe storage and mirror it.", 8, offerMirror: role == "log");
+            : "A write log takes synchronous writes until they reach the pool.  Use fast, power-safe storage and mirror it.", 8, offerMirror: role == "log", inUse);
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
-        string list = string.Join("\r\n  ", dialog.Devices);
-        if (Confirm($"Add as {what}{(dialog.Mirror ? " (mirrored)" : "")} to {pool}:\r\n  {list}\r\n\r\nEverything on these devices is overwritten."))
+        if (Confirm($"Add as {what}{(dialog.Mirror ? " (mirrored)" : "")} to {pool}:\r\n  {dialog.SelectionSummary}\r\n\r\nEverything on these devices is overwritten."))
             await RunAsync($"Add {what}", () => client.AddCacheDevicesAsync(pool, role, dialog.Devices, dialog.Mirror, confirmed: true));
+    }
+
+    async Task<IReadOnlyList<string>> PoolDevicePathsAsync()
+    {
+        var paths = new List<string>();
+        foreach (PoolInfo pool in await client.PoolsAsync())
+        {
+            PoolStatusInfo? status = await client.StatusAsync(pool.Name);
+            if (status is null)
+                continue;
+            foreach (VdevInfo vdev in status.Vdevs.Concat(status.Logs).Concat(status.Caches).Concat(status.Spares)
+                         .Concat(status.Special).Concat(status.Dedup).SelectMany(Leaves))
+                paths.Add(vdev.Path ?? vdev.Name);
+        }
+        return paths;
+
+        static IEnumerable<VdevInfo> Leaves(VdevInfo vdev) =>
+            vdev.IsLeaf ? [vdev] : vdev.Children.SelectMany(Leaves);
     }
 
     async Task RemoveCacheAsync()

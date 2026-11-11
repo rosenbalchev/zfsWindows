@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenZFS for Windows | Issue Status</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 16px/1.5 "Segoe UI", system-ui, sans-serif;
+      --bg: #f4f7fb;
+      --card: #fff;
+      --fg: #172033;
+      --muted: #596579;
+      --line: #d7dfeb;
+      --accent: #1769aa;
+      --done: #16834a;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #151a22;
+        --card: #202834;
+        --fg: #eef3fa;
+        --muted: #a9b5c5;
+        --line: #394555;
+        --accent: #78b9f1;
+        --done: #63d394;
+      }
+    }
+    body { margin: 0; padding: 2rem 1rem; background: var(--bg); color: var(--fg); }
+    main { max-width: 1100px; margin: auto; }
+    .card { padding: 1.5rem; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+    h1 { margin: 0; font-size: 1.6rem; }
+    h2 { margin: 1.7rem 0 .6rem; font-size: 1.1rem; }
+    p, ol { color: var(--muted); }
+    a { color: var(--accent); }
+    .status { display: inline-block; margin-top: .8rem; padding: .2rem .7rem; border-radius: 1rem; background: var(--accent); color: #fff; font-size: .85rem; font-weight: 700; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: .85rem; }
+    td.issue-title { min-width: 14rem; }
+    td.phase { min-width: 12rem; }
+    td.details { min-width: 20rem; }
+    .agent { font-family: Consolas, monospace; }
+    .status { margin-top: 0; white-space: nowrap; }
+    .updated { margin-top: 1.4rem; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <article class="card">
+      <h1>OpenZFS for Windows issue status</h1>
+      <p>Open issues, their current workflow phase, and the agent or person currently responsible.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Issue</th><th>Status</th><th>Phase</th><th>Current agent</th><th>Scope / next action</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="issue-title"><a href="https://github.com/rosenbalchev/zfsWindows/issues/21">#21 - GUI Tweak</a></td>
+              <td><span class="status">In progress</span></td>
+              <td class="phase">Implementation</td>
+              <td class="agent">implementer</td>
+              <td class="details">All-tab WebView2 UI, safe selection of unused partitions and unallocated ranges for mirror/cache devices, and executable icon.</td>
+            </tr>
+            <tr>
+              <td class="issue-title"><a href="https://github.com/rosenbalchev/zfsWindows/issues/22">#22 - User-mode write performance</a></td>
+              <td><span class="status">In progress</span></td>
+              <td class="phase">WinFsp-mounted baseline</td>
+              <td class="agent">performance-reviewer</td>
+              <td class="details">Run durable and buffered writes through a local WinFsp mount backed only by temporary image files; compare against the engine-only path.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="updated">Only open, non-confidential issues are listed. “human” means an approval or decision is pending. Last updated: 2026-11-11.</p>
+    </article>
+  </main>
+</body>
+</html>

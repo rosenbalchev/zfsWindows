@@ -21,6 +21,17 @@ Every agent must:
 4. Report assumptions, decisions, changed artifacts, verification, and unresolved risks.
 5. Return a structured handoff matching `contracts/agent-result.schema.json`.
 
+## Issue status dashboard
+
+`docs/issues-status.html` is the static matrix for all open, non-confidential
+issues. It records the issue, status, workflow phase, and current agent (the
+agent's `id` from front matter); use `human` while approval or a product
+decision is pending, and `triage` for issues not yet claimed. Update the
+matrix whenever an agent accepts, hands off, or completes a phase, before
+returning the handoff. Keep the issue link and last-updated date current.
+Never include confidential security reports or their identifying details.
+The `update_issue_status_dashboard` permission is limited to this file.
+
 ## Definitions
 
 - `triage.md` — classify and route new issues.

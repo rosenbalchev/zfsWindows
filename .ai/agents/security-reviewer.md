@@ -5,8 +5,12 @@ category: review
 trigger: conditional.security-risk
 inputs: [github_issue, pull_request, approved_plan, dependency_report]
 outputs: [security_findings, risk_rating, approval_recommendation]
-permissions: [read_repository, review_pull_request]
+permissions: [read_repository, review_pull_request, update_issue_status_dashboard]
 ---
+
+## Status dashboard
+
+Follow the dashboard rules in `.ai/README.md`; update the issue's phase and current agent when you accept or hand it off, without exposing confidential issue details.
 
 # Mission
 

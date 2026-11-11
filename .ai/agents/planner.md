@@ -5,8 +5,12 @@ category: planning
 trigger: github.label.added:needs-planning
 inputs: [github_issue, repository_context, triage_result]
 outputs: [execution_plan, acceptance_criteria, open_questions, risk_level]
-permissions: [read_repository, comment_issue, label_issue]
+permissions: [read_repository, comment_issue, label_issue, update_issue_status_dashboard]
 ---
+
+## Status dashboard
+
+Follow the dashboard rules in `.ai/README.md`; update the issue's phase and current agent when you accept or hand it off.
 
 # Mission
 

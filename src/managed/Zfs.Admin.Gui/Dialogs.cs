@@ -15,9 +15,10 @@ sealed class DeviceDialog : Form
     readonly int maxDevices;
 
     public IReadOnlyList<string> Devices { get; private set; } = [];
+    public string SelectionSummary { get; private set; } = "";
     public bool Mirror => mirror.Checked;
 
-    public DeviceDialog(string title, string explanation, int maxDevices, bool offerMirror)
+    public DeviceDialog(string title, string explanation, int maxDevices, bool offerMirror, IReadOnlyCollection<string> inUsePaths)
     {
         this.maxDevices = maxDevices;
         Text = title;
@@ -27,8 +28,8 @@ sealed class DeviceDialog : Form
         Font = SystemFonts.MessageBoxFont;
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(12) };
-        layout.Controls.Add(new Label { Text = explanation + "\r\nEverything on the selected devices is overwritten.", AutoSize = true, MaximumSize = new Size(600, 0) });
-        layout.Controls.Add(new Label { Text = "Physical disks:", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        layout.Controls.Add(new Label { Text = explanation + "\r\nSelected devices and partitions are overwritten. Unallocated ranges are reserved for ZFS; do not select storage containing data.", AutoSize = true, MaximumSize = new Size(600, 0) });
+        layout.Controls.Add(new Label { Text = "Disks, partitions, and unallocated ranges:", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         layout.Controls.Add(disks);
         layout.Controls.Add(new Label { Text = "Image files:", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         layout.Controls.Add(files);
@@ -58,15 +59,12 @@ sealed class DeviceDialog : Form
 
         try
         {
-            foreach (DiskInfo d in Disks.List())
-            {
-                if (!d.Protected)
-                    disks.Items.Add(d);
-            }
+            foreach (DeviceChoice d in Disks.AvailableDevices(inUsePaths))
+                disks.Items.Add(d);
         }
         catch (Exception e) when (e is System.Management.ManagementException or UnauthorizedAccessException)
         {
-            disks.Items.Add($"(disks unavailable: {e.Message})");
+            disks.Items.Add($"(device inventory unavailable: {e.Message})");
             disks.Enabled = false;
         }
     }
@@ -80,7 +78,13 @@ sealed class DeviceDialog : Form
 
     void Accept()
     {
-        var chosen = disks.CheckedItems.OfType<DiskInfo>().Select(d => d.Device).Concat(files.Items.Cast<string>()).ToList();
+        List<DeviceChoice> selectedDisks = disks.CheckedItems.OfType<DeviceChoice>().ToList();
+        if (selectedDisks.GroupBy(d => d.DiskNumber).Any(g => g.Count() > 1))
+        {
+            MessageBox.Show(this, "Select at most one disk, partition, or unallocated range from each physical disk.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        var chosen = selectedDisks.Select(d => d.Device).Concat(files.Items.Cast<string>()).ToList();
         if (chosen.Count == 0)
         {
             MessageBox.Show(this, "Select at least one disk or image file.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -97,6 +101,7 @@ sealed class DeviceDialog : Form
             return;
         }
         Devices = chosen;
+        SelectionSummary = string.Join("\r\n  ", selectedDisks.Select(d => d.Description).Concat(files.Items.Cast<string>()));
         DialogResult = DialogResult.OK;
     }
 }
