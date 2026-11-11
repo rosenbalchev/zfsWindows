@@ -60,11 +60,25 @@
           </thead>
           <tbody>
             <tr>
+              <td class="issue-title"><a href="https://github.com/rosenbalchev/zfsWindows/issues/27">#27 - Latest build deployed to master fails</a></td>
+              <td><span class="status">Needs runner setup</span></td>
+              <td class="phase">Awaiting ARM64 OpenSSL provisioning</td>
+              <td class="agent">human</td>
+              <td class="details">Master run 42995961302 fails while configuring arm64-release: ARM64 OpenSSL is missing from out\vcpkg-openssl (workspace or %ZFSWIN_CI_DATA%\out\vcpkg-openssl). See docs/ci-runners.md before rerunning.</td>
+            </tr>
+            <tr>
+              <td class="issue-title"><a href="https://github.com/rosenbalchev/zfsWindows/issues/26">#26 - Powershell script fails on mounted ZFS</a></td>
+              <td><span class="status">Awaiting details</span></td>
+              <td class="phase">User diagnostic output</td>
+              <td class="agent">human</td>
+              <td class="details">The issue thread awaits the requested mount mode (kernel or WinFsp user-mode) and installer diagnostic output; no newer report is posted.</td>
+            </tr>
+            <tr>
               <td class="issue-title"><a href="https://github.com/rosenbalchev/zfsWindows/issues/22">#22 - Performance optimization in user mode</a></td>
               <td><span class="status">Needs review</span></td>
               <td class="phase">Mitigation candidate review</td>
               <td class="agent">human</td>
-              <td class="details">Review measured small-write results and request batching: 4 KiB writes with a 1 MiB flush cadence measured 47.7 MiB/s; 64 KiB writes measured 109.7 MiB/s.</td>
+              <td class="details">Compression variants did not consistently improve 4 KiB writes. Caller-side 64 KiB coalescing measured 53.3 to 120.0 MiB/s with the same 1 MiB durable-flush cadence and matching SHA-256; no production filesystem behavior changed.</td>
             </tr>
           </tbody>
         </table>
