@@ -141,6 +141,12 @@ jobs:
       - name: WinFsp SDK
         run: scripts\fetch-winfsp.ps1
 
+      # The ARM64 engine and driver need OpenSSL for both configurations.
+      # Reuse a complete workspace/data-folder install; otherwise provision it
+      # with the pinned Visual Studio vcpkg manifest before any parallel lanes.
+      - name: ARM64 OpenSSL
+        run: scripts\ensure-arm64-openssl.ps1
+
       # No ICE validation in CI.  An array, not "Release,Debug": the step
       # runs the script with -Command, where ValidateSet sees the joined
       # string before the script splits it.  -Parallel: one lane per

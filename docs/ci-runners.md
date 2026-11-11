@@ -49,6 +49,11 @@ by hand with `scripts\build-release.ps1`.
 To keep the build short:
 - `out\` stays in the runner's workspace between runs, so Ninja rebuilds
   only what changed. *Run workflow* with *Clean build* ticked discards it.
+- ARM64 OpenSSL is checked in `out\vcpkg-openssl` and then
+  `%ZFSWIN_CI_DATA%\out\vcpkg-openssl`. If neither has a complete Debug and
+  Release install, CI builds it with the Visual Studio vcpkg using the
+  pinned manifest baseline; an available data-folder install is retained
+  across clean builds.
 - CMake configures a tree only when it is new or its command line, the
   submodule commit or (for the engine) the version changed
   (`zfswin-configure.txt` in the tree); patch 0035 keeps a reconfigure
@@ -83,13 +88,17 @@ and ARM64 C++ tools, the WDK, the .NET SDK, WiX, CMake, Git) and the
    | `out\dotnet-runtime\` | `out\dotnet-runtime\` |
    | `out\driver-tools\` | `out\driver-tools\` |
    | `out\release\1.0.65000\` (the upgrade test package) | `out\release\1.0.65000\` |
-   | `out\vcpkg-openssl\installed\arm64-windows-static\` (ARM64 OpenSSL for the build) | `out\vcpkg-openssl\installed\arm64-windows-static\` |
 
    ```powershell
-   foreach ($p in "TestVolumes", "out\dotnet-runtime", "out\driver-tools", "out\release\1.0.65000", "out\vcpkg-openssl\installed\arm64-windows-static") {
+   foreach ($p in "TestVolumes", "out\dotnet-runtime", "out\driver-tools", "out\release\1.0.65000") {
        robocopy "D:\Projects\zfsWindows\$p" "D:\zfswin-ci\$p" /E
    }
    ```
+
+   ARM64 OpenSSL no longer needs to be copied or preinstalled: the build
+   checks the workspace and this data folder for a complete vcpkg install,
+   then provisions it if absent. A cached install here survives a clean
+   workspace build.
 
 2. **Environment variable** (machine-wide, then restart the runner service
    if it is already installed):

@@ -31,12 +31,10 @@ if (-not $BuildDirectory) {
 }
 $cmakeArch = '-DOPENSSL_ROOT_DIR="C:/Program Files/OpenSSL-Win64"'
 if ($Architecture -eq "arm64") {
-    $ssl = (Join-Path $root "out\vcpkg-openssl\installed\arm64-windows-static") -replace '\\', '/'
-    # A CI checkout has no out\; the runner's data folder mirrors it.
-    if (-not (Test-Path "$ssl/debug/lib/libcrypto.lib") -and $env:ZFSWIN_CI_DATA) {
-        $ssl = (Join-Path $env:ZFSWIN_CI_DATA "out\vcpkg-openssl\installed\arm64-windows-static") -replace '\\', '/'
-    }
-    if (-not (Test-Path "$ssl/debug/lib/libcrypto.lib")) { throw "ARM64 OpenSSL is missing: build it with vcpkg into out\vcpkg-openssl (see docs/building.md)." }
+    . (Join-Path $PSScriptRoot "arm64-openssl.ps1")
+    $sslRoot = Get-Arm64OpenSslRoot -RepositoryRoot $root
+    if (-not $sslRoot) { throw "ARM64 OpenSSL is missing or incomplete in out\vcpkg-openssl and ZFSWIN_CI_DATA (see docs/building.md)." }
+    $ssl = $sslRoot -replace '\\', '/'
     $sslLib = if ($Configuration -eq "Debug") { "$ssl/debug/lib" } else { "$ssl/lib" }
     $cmakeArch = ('-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=ARM64 -DCMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc ' +
         '-DCMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc -DCMAKE_ASM_COMPILER_TARGET=aarch64-pc-windows-msvc ' +
