@@ -1,0 +1,16 @@
+id: feature
+trigger: github.issue.opened
+steps:
+  - triage
+  - planner
+  - requirements
+  - architect
+  - human-plan-approval
+  - implementer
+  - code-reviewer
+  - tester
+  - documentation
+  - human-merge-approval
+conditional:
+  security-reviewer: [security, auth, sensitive-data, permissions]
+  performance-reviewer: [performance, database, scalability, high-volume, latency]

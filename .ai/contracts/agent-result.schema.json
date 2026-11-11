@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Portable Agent Result",
+  "type": "object",
+  "required": ["agent_id", "task_id", "status", "summary", "findings", "verification", "risks"],
+  "properties": {
+    "agent_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "status": { "enum": ["completed", "needs-information", "blocked", "changes-required", "approved", "not-required"] },
+    "summary": { "type": "string" },
+    "findings": { "type": "array", "items": { "type": "string" } },
+    "changed_files": { "type": "array", "items": { "type": "string" } },
+    "verification": { "type": "array", "items": { "type": "string" } },
+    "risks": { "type": "array", "items": { "type": "string" } },
+    "next_agent": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}
