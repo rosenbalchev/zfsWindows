@@ -1,0 +1,16 @@
+id: bug
+trigger: github.issue.opened
+steps:
+  - triage
+  - planner
+  - architect
+  - tester
+  - human-plan-approval
+  - implementer
+  - code-reviewer
+  - tester
+  - documentation
+  - human-merge-approval
+conditional:
+  security-reviewer: [security, auth, sensitive-data, permissions]
+  performance-reviewer: [performance, memory, cpu, latency, timeout, database, scalability]
