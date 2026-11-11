@@ -3,9 +3,9 @@ using Zfs.Admin;
 namespace Zfs.Admin.Gui;
 
 /// <summary>
-/// Picks the devices for a mirror, cache or log: image files (which must
-/// already exist at full size) or whole physical disks.  The Windows boot
-/// and system disks are never offered.
+/// Picks devices for a mirror, cache or log: image files, disks, partitions,
+/// or unallocated ranges. Windows boot and system disks are offered only by
+/// their unallocated ranges.
 /// </summary>
 sealed class DeviceDialog : Form
 {
@@ -61,6 +61,11 @@ sealed class DeviceDialog : Form
         {
             foreach (DeviceChoice d in Disks.AvailableDevices(inUsePaths))
                 disks.Items.Add(d);
+            if (disks.Items.Count == 0)
+            {
+                disks.Items.Add("(no eligible devices or unallocated ranges found)");
+                disks.Enabled = false;
+            }
         }
         catch (Exception e) when (e is System.Management.ManagementException or UnauthorizedAccessException)
         {

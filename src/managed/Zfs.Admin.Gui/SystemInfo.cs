@@ -11,7 +11,7 @@ sealed record DiskInfo(int Number, string Name, long Size, bool IsBoot, bool IsS
     public string Device => $@"\\?\PhysicalDrive{Number}";
     public bool Protected => IsBoot || IsSystem;
     public override string ToString() =>
-        $"Disk {Number}: {Name}, {Format.Bytes(Size)}, {PartitionStyle}{(Protected ? " (Windows disk, not offered)" : "")}";
+        $"Disk {Number}: {Name}, {Format.Bytes(Size)}, {PartitionStyle}{(Protected ? " (Windows disk; whole disk and partitions unavailable)" : "")}";
 }
 
 sealed record DeviceChoice(int DiskNumber, int? PartitionNumber, string Device, string Description, bool WholeDisk)
@@ -50,8 +50,16 @@ static class Disks
 
     public static IReadOnlyList<DeviceChoice> AvailableDevices(IReadOnlyCollection<string> inUsePaths)
     {
-        List<DiskInfo> disks = List().Where(d => !d.Protected).ToList();
-        var partitions = ListPartitions().GroupBy(p => p.DiskNumber).ToDictionary(g => g.Key, g => g.OrderBy(p => p.Offset).ToList());
+        List<DiskInfo> disks = List().ToList();
+        return SelectAvailableDevices(disks, ListPartitions(), inUsePaths);
+    }
+
+    internal static IReadOnlyList<DeviceChoice> SelectAvailableDevices(
+        IReadOnlyList<DiskInfo> disks, IReadOnlyList<DiskPartitionInfo> allPartitions,
+        IReadOnlyCollection<string> inUsePaths)
+    {
+        var partitions = allPartitions.GroupBy(p => p.DiskNumber)
+            .ToDictionary(g => g.Key, g => g.OrderBy(p => p.Offset).ToList());
         List<UsedDevice> used = inUsePaths.Select(ParseUsedDevice).Where(x => x is not null).Select(x => x!).ToList();
         var choices = new List<DeviceChoice>();
 
@@ -61,13 +69,13 @@ static class Disks
             diskPartitions ??= [];
             List<UsedDevice> usedOnDisk = used.Where(u => u.DiskNumber == disk.Number).ToList();
 
-            if (usedOnDisk.Count == 0 && !diskPartitions.Any(p => p.InUseByWindows))
+            if (!disk.Protected && usedOnDisk.Count == 0 && !diskPartitions.Any(p => p.InUseByWindows))
                 choices.Add(new DeviceChoice(disk.Number, null, disk.Device,
                     $"Disk {disk.Number}: entire {disk.Name}, {Format.Bytes(disk.Size)} (overwrites every partition)", WholeDisk: true));
 
             foreach (DiskPartitionInfo partition in diskPartitions)
             {
-                if (partition.InUseByWindows || partition.Size < MinimumDeviceSize
+                if (disk.Protected || partition.InUseByWindows || partition.Size < MinimumDeviceSize
                     || IsUsed(usedOnDisk, partition.Offset, partition.Size, partition.Number))
                     continue;
                 choices.Add(new DeviceChoice(disk.Number, partition.Number, OffsetDevice(disk, partition.Offset, partition.Size),
