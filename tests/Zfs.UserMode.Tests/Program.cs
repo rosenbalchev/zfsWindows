@@ -23,6 +23,12 @@ public static class Program
         {
             "memory" => Memory(dir, int.Parse(args[2]), int.Parse(args[3]), args[4]),
             "cycles" => Cycles(dir, int.Parse(args[2])),
+            "prepare-bench" => PrepareBench(dir, int.Parse(args[2]),
+                args.Length > 3 ? args[3] : "off"),
+            "write-bench" => WriteBench(dir, int.Parse(args[2]), int.Parse(args[3]),
+                args.Length > 4 ? int.Parse(args[4]) : 1024,
+                args.Length > 5 ? args[5] : "off",
+                args.Length > 6 ? args[6] : "random"),
             "import-zeroed" => ImportZeroed(dir),
             "import-garbage" => ImportGarbage(dir),
             "import-labels-wiped" => ImportLabelsWiped(dir),
@@ -46,6 +52,110 @@ public static class Program
     }
 
     private static void Start(string dir) => ZfsUserModeEngine.Start(Path.Combine(dir, "zpool.cache"));
+
+    private static int PrepareBench(string dir, int imageMiB, string compression)
+    {
+        if (imageMiB < 512)
+            throw new ArgumentOutOfRangeException(nameof(imageMiB), "Use an image of at least 512 MiB.");
+        if (!IsBenchCompression(compression))
+            throw new ArgumentOutOfRangeException(nameof(compression));
+
+        var pool = $"zut_mount{Environment.ProcessId % 10000}";
+        var image = NewImage(dir, "disk.img", (long)imageMiB << 20);
+        Start(dir);
+        var rootProperties = compression == "default" ? "" : $"compression={compression}";
+        ZfsUserModeEngine.CreatePool(pool, "", [image], "ashift=12", rootProperties);
+        ZfsUserModeEngine.ExportPool(pool);
+        Put("pool", pool);
+        Put("image", image);
+        Put("configured_compression", compression);
+        Put("stop_errno", ZfsUserModeEngine.Stop());
+        return 0;
+    }
+
+    // Engine-only sequential write baseline; syncIntervalMiB=0 syncs once at EOF.
+    private static int WriteBench(string dir, int writeMiB, int syncIntervalMiB, int chunkKiB,
+        string compression, string dataPattern)
+    {
+        if (writeMiB <= 0)
+            throw new ArgumentOutOfRangeException(nameof(writeMiB));
+        if (syncIntervalMiB < 0)
+            throw new ArgumentOutOfRangeException(nameof(syncIntervalMiB));
+        if (chunkKiB is not (4 or 16 or 64 or 256 or 1024))
+            throw new ArgumentOutOfRangeException(nameof(chunkKiB));
+        if (!IsBenchCompression(compression))
+            throw new ArgumentOutOfRangeException(nameof(compression));
+        if (dataPattern is not ("random" or "compressible"))
+            throw new ArgumentOutOfRangeException(nameof(dataPattern));
+        if (writeMiB * 1024 % chunkKiB != 0
+            || syncIntervalMiB > 0 && syncIntervalMiB * 1024 % chunkKiB != 0)
+            throw new ArgumentException("Chunk size must divide the write and sync intervals.");
+
+        var pool = $"zut_write{Environment.ProcessId % 10000}";
+        var image = NewImage(dir, "write.img", ((long)writeMiB << 20) + (384L << 20));
+        Start(dir);
+        Put("engine_version", ZfsUserModeEngine.Version);
+        var rootProperties = compression == "default" ? "" : $"compression={compression}";
+        ZfsUserModeEngine.CreatePool(pool, "", [image], "ashift=12", rootProperties);
+
+        var data = dataPattern == "random" ? Data.Random(chunkKiB << 10, 22) : Data.Compressible(chunkKiB << 10);
+        var writeCount = writeMiB * 1024 / chunkKiB;
+        var syncWrites = syncIntervalMiB == 0 ? 0 : syncIntervalMiB * 1024 / chunkKiB;
+        long writeTicks = 0, syncTicks = 0;
+        var syncCount = 0;
+        var total = Stopwatch.StartNew();
+        using (var fs = ZfsUserModeEngine.Open(dir, pool))
+        {
+            var file = fs.CreateFile("/bench.bin");
+            for (var i = 0; i < writeCount; i++)
+            {
+                var write = Stopwatch.StartNew();
+                fs.Write(file, (ulong)i * (uint)data.Length, data);
+                writeTicks += write.ElapsedTicks;
+
+                if (syncWrites > 0 && (i + 1) % syncWrites == 0)
+                {
+                    var sync = Stopwatch.StartNew();
+                    fs.Sync();
+                    syncTicks += sync.ElapsedTicks;
+                    syncCount++;
+                }
+            }
+
+            if (syncWrites == 0 || writeCount % syncWrites != 0)
+            {
+                var sync = Stopwatch.StartNew();
+                fs.Sync();
+                syncTicks += sync.ElapsedTicks;
+                syncCount++;
+            }
+        }
+        total.Stop();
+
+        var bytes = (long)writeMiB << 20;
+        var writeMs = writeTicks * 1000d / Stopwatch.Frequency;
+        var syncMs = syncTicks * 1000d / Stopwatch.Frequency;
+        Put("write_mib", writeMiB);
+        Put("chunk_kib", chunkKiB);
+        Put("write_calls", writeCount);
+        Put("compression", compression);
+        Put("data_pattern", dataPattern);
+        Put("sync_interval_mib", syncIntervalMiB);
+        Put("sync_count", syncCount);
+        Put("write_ms", writeMs);
+        Put("sync_ms", syncMs);
+        Put("total_ms", total.ElapsedMilliseconds);
+        Put("write_mib_s", writeMs == 0 ? 0 : bytes / (double)writeMs * 1000 / (1 << 20));
+        Put("total_mib_s", total.ElapsedMilliseconds == 0 ? 0 : bytes / (double)total.ElapsedMilliseconds * 1000 / (1 << 20));
+
+        ZfsUserModeEngine.ExportPool(pool);
+        Put("stop_errno", ZfsUserModeEngine.Stop());
+        return 0;
+    }
+
+    private static bool IsBenchCompression(string compression) =>
+        compression is "default" or "off" or "on" or "lz4" or "lzjb"
+            or "gzip-1" or "gzip-6" or "zstd" or "zstd-fast-1";
 
     private static string NewImage(string dir, string name, long bytes)
     {

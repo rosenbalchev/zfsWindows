@@ -8,8 +8,9 @@
  * kernel.  Paths are UTF-8, '/'-separated and relative to the dataset root
  * ("" or "/" is the root).  Functions return 0 or an errno value;
  * zum_fs_ntstatus() maps one to the NTSTATUS a Windows caller expects.
- * Calls are not internally serialised: the front end holds one lock per
- * filesystem around them.
+ * Calls are not internally serialised. Front ends must serialize conflicting
+ * operations and protect filesystem lifetime; independent object operations
+ * may run concurrently.
  */
 #ifndef ZUM_H
 #define ZUM_H

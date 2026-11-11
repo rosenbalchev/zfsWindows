@@ -4,19 +4,53 @@
 #
 #   guest-bench.ps1 -Root Z:\ [-SequentialMiB 256] [-SmallFiles 2000]
 #
-# The data is random, so lz4 cannot shrink it, and every sequential write
-# ends with FlushFileBuffers, so it is measured to stable storage.
+# Compare random and compressible data, with configurable flush cadence.
 param(
     [Parameter(Mandatory)][string]$Root,
     [int]$SequentialMiB = 256,
-    [int]$SmallFiles = 2000
+    [int]$SmallFiles = 2000,
+    [ValidateSet(4, 16, 64, 256, 1024)][int]$ChunkKiB = 1024,
+    [ValidateSet("Random", "Compressible")][string]$DataPattern = "Random",
+    [ValidateRange(0, 256)][int]$FlushEveryMiB = 0,
+    [ValidateRange(0, 86400)][int]$FlushEverySeconds = 0,
+    [ValidateSet(0, 8, 16, 32, 64, 256, 1024)][int]$CoalesceToKiB = 0,
+    [int]$MeasureProcessId = 0,
+    [switch]$WriteThrough,
+    [switch]$SkipUnbufferedRead,
+    [switch]$KeepBenchData
 )
 
 $ErrorActionPreference = "Stop"
+if ($SequentialMiB -le 0) { throw "-SequentialMiB must be positive." }
+if ($SmallFiles -lt 0) { throw "-SmallFiles must not be negative." }
+if ($CoalesceToKiB -gt 0 -and $WriteThrough) {
+    throw "-CoalesceToKiB cannot be used with -WriteThrough because it delays write-through requests."
+}
+if ($CoalesceToKiB -gt 0 -and ($CoalesceToKiB -lt $ChunkKiB -or $CoalesceToKiB % $ChunkKiB -ne 0)) {
+    throw "-CoalesceToKiB must be at least ChunkKiB and a multiple of ChunkKiB."
+}
+$writeCount = [int](($SequentialMiB * 1024) / $ChunkKiB)
+$streamWriteEstimate = if ($CoalesceToKiB -gt 0) {
+    [int][math]::Ceiling(($SequentialMiB * 1024) / $CoalesceToKiB)
+} else {
+    $writeCount
+}
 $dir = Join-Path $Root "bench"
 if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
 New-Item -ItemType Directory -Path $dir | Out-Null
-$result = [ordered]@{ root = $Root; sequentialMiB = $SequentialMiB; smallFiles = $SmallFiles }
+$result = [ordered]@{
+    root = $Root
+    sequentialMiB = $SequentialMiB
+    chunkKiB = $ChunkKiB
+    writeCalls = $writeCount
+    estimatedFileStreamWriteCalls = $streamWriteEstimate
+    dataPattern = $DataPattern
+    smallFiles = $SmallFiles
+    flushEveryMiB = $FlushEveryMiB
+    flushEverySeconds = $FlushEverySeconds
+    coalesceToKiB = $CoalesceToKiB
+    writeThrough = [bool]$WriteThrough
+}
 
 function Time([scriptblock]$block) {
     $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -24,19 +58,56 @@ function Time([scriptblock]$block) {
     [math]::Round($watch.Elapsed.TotalSeconds, 3)
 }
 
-# Sequential write, 1 MiB at a time, then flushed.
-$chunk = New-Object byte[] (1MB)
-(New-Object Random 15).NextBytes($chunk)
-$big = Join-Path $dir "sequential.bin"
-$seconds = Time {
-    $fs = [IO.FileStream]::new($big, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None, 1MB)
-    try {
-        for ($i = 0; $i -lt $SequentialMiB; $i++) { $chunk[0] = [byte]$i; $fs.Write($chunk, 0, $chunk.Length) }
-        $fs.Flush($true)
-    } finally { $fs.Dispose() }
+# Sequential write at the selected request size and durability cadence.
+$chunk = New-Object byte[] ($ChunkKiB * 1KB)
+if ($DataPattern -eq "Random") {
+    (New-Object Random 15).NextBytes($chunk)
+} else {
+    $pattern = [Text.Encoding]::ASCII.GetBytes("The quick brown fox jumps over the lazy dog 0123456789`n")
+    for ($i = 0; $i -lt $chunk.Length; $i++) { $chunk[$i] = $pattern[$i % $pattern.Length] }
 }
+$big = Join-Path $dir "sequential.bin"
+$options = if ($WriteThrough) { [IO.FileOptions]::WriteThrough } else { [IO.FileOptions]::None }
+$result.durableFlushCalls = 0
+$cpuBefore = if ($MeasureProcessId -gt 0) { (Get-Process -Id $MeasureProcessId).TotalProcessorTime.TotalSeconds } else { 0 }
+$seconds = Time {
+    $fs = [IO.FileStream]::new($big, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None, $chunk.Length, $options)
+    $writer = if ($CoalesceToKiB -gt 0) {
+        [IO.BufferedStream]::new($fs, $CoalesceToKiB * 1KB)
+    } else {
+        $fs
+    }
+    $durableFlushTimer = [Diagnostics.Stopwatch]::StartNew()
+    $bytesSinceDurableFlush = 0L
+    try {
+        for ($i = 0; $i -lt $writeCount; $i++) {
+            $chunk[0] = [byte]($i % 256)
+            $writer.Write($chunk, 0, $chunk.Length)
+            $bytesSinceDurableFlush += $chunk.Length
+            $flushByBytes = $FlushEveryMiB -gt 0 -and $bytesSinceDurableFlush -ge ($FlushEveryMiB * 1MB)
+            $flushByTime = $FlushEverySeconds -gt 0 -and $durableFlushTimer.Elapsed.TotalSeconds -ge $FlushEverySeconds
+            if ($flushByBytes -or $flushByTime) {
+                $writer.Flush()
+                $fs.Flush($true)
+                $result.durableFlushCalls++
+                $bytesSinceDurableFlush = 0
+                $durableFlushTimer.Restart()
+            }
+        }
+        $writer.Flush()
+        $fs.Flush($true)
+        $result.durableFlushCalls++
+    } finally {
+        if ([object]::ReferenceEquals($writer, $fs)) { $fs.Dispose() } else { $writer.Dispose() }
+    }
+}
+$cpuAfter = if ($MeasureProcessId -gt 0) { (Get-Process -Id $MeasureProcessId).TotalProcessorTime.TotalSeconds } else { 0 }
 $result.seqWriteSeconds = $seconds
 $result.seqWriteMBps = [math]::Round($SequentialMiB / [math]::Max($seconds, 0.001), 1)
+if ($MeasureProcessId -gt 0) {
+    $result.seqWriteCpuSeconds = [math]::Round($cpuAfter - $cpuBefore, 3)
+    $result.seqWriteCpuPercentOfOneCore = [math]::Round(100 * ($cpuAfter - $cpuBefore) / [math]::Max($seconds, 0.001), 1)
+}
 
 # Sequential read through the cache (first read after the write).
 $seconds = Time {
@@ -48,9 +119,11 @@ $result.seqReadMBps = [math]::Round($SequentialMiB / [math]::Max($seconds, 0.001
 
 # Non-cached sequential read (FILE_FLAG_NO_BUFFERING): every request reaches
 # the file system, so this shows the per-request path, not the Cache Manager.
-$unbuffered = & C:\zfswin\tools\Zfs.MountVerifier.exe read-unbuffered $big | ConvertFrom-Json
-$result.seqReadUnbufferedSeconds = $unbuffered.result.seconds
-$result.seqReadUnbufferedMBps = [math]::Round($SequentialMiB / [math]::Max($unbuffered.result.seconds, 0.001), 1)
+if (-not $SkipUnbufferedRead) {
+    $unbuffered = & C:\zfswin\tools\Zfs.MountVerifier.exe read-unbuffered $big | ConvertFrom-Json
+    $result.seqReadUnbufferedSeconds = $unbuffered.result.seconds
+    $result.seqReadUnbufferedMBps = [math]::Round($SequentialMiB / [math]::Max($unbuffered.result.seconds, 0.001), 1)
+}
 
 # Small files: create (4 KiB each), enumerate, read, rename, delete.
 $small = Join-Path $dir "small"
@@ -73,6 +146,6 @@ $result.smallDeleteSeconds = Time {
 $result.smallCreatePerSecond = [math]::Round($SmallFiles / [math]::Max($result.smallCreateSeconds, 0.001), 0)
 
 # Tidy up so the pool can be validated without the bench data.
-Remove-Item -Recurse -Force $dir
-$result.remaining = @(Get-ChildItem -LiteralPath $Root -Filter bench -ErrorAction SilentlyContinue).Count
+if (-not $KeepBenchData) { Remove-Item -Recurse -Force $dir }
+$result.remaining = if (Test-Path -LiteralPath $dir) { 1 } else { 0 }
 $result | ConvertTo-Json -Compress

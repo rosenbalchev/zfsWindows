@@ -44,6 +44,7 @@
 #define POOLS_KEY BASE_KEY L"\\Pools"
 #define MAX_MOUNTS 64
 #define MAX_SNAPSHOTS 64
+#define OBJECT_LOCK_COUNT 64
 #define PATH_BYTES (32768 * 3)
 
 /*
@@ -76,7 +77,8 @@ typedef struct mount {
     BOOLEAN suspended;		/* released for a rollback */
     zum_fs_t *fs;
     FSP_FILE_SYSTEM *fsp;
-    SRWLOCK lock;		/* exclusive for mutations, shared for reads */
+    SRWLOCK lock;		/* mount lifetime/barrier for exclusive mutations */
+    SRWLOCK object_locks[OBJECT_LOCK_COUNT]; /* serialize I/O per file */
     uint64_t root;
     int case_sensitive;
     char dataset[256];
@@ -110,6 +112,12 @@ static HANDLE service_token;
 #define SHARED(m) AcquireSRWLockShared(&(m)->lock)
 #define UNLOCK_EXCLUSIVE(m) ReleaseSRWLockExclusive(&(m)->lock)
 #define UNLOCK_SHARED(m) ReleaseSRWLockShared(&(m)->lock)
+
+static SRWLOCK *
+object_lock(mount_t *m, uint64_t object)
+{
+    return (&m->object_locks[object % OBJECT_LOCK_COUNT]);
+}
 
 static NTSTATUS
 status_of(int error)
@@ -429,7 +437,8 @@ ctl_info(mount_t *m, uint64_t index, uint64_t creation,
 }
 
 static NTSTATUS
-context_info(mount_t *m, file_context_t *c, FSP_FSCTL_FILE_INFO *info)
+context_info_unlocked(mount_t *m, file_context_t *c,
+    FSP_FSCTL_FILE_INFO *info)
 {
     zum_attr_t attr, base;
     int error;
@@ -451,6 +460,21 @@ context_info(mount_t *m, file_context_t *c, FSP_FSCTL_FILE_INFO *info)
     if (c->snapshot != NULL)
         info->FileAttributes |= FILE_ATTRIBUTE_READONLY;
     return (STATUS_SUCCESS);
+}
+
+static NTSTATUS
+context_info(mount_t *m, file_context_t *c, FSP_FSCTL_FILE_INFO *info)
+{
+    SRWLOCK *lock;
+    NTSTATUS status;
+
+    if (c->kind != K_FILE)
+        return (context_info_unlocked(m, c, info));
+    lock = object_lock(m, c->base);
+    AcquireSRWLockShared(lock);
+    status = context_info_unlocked(m, c, info);
+    ReleaseSRWLockShared(lock);
+    return (status);
 }
 
 static NTSTATUS
@@ -743,13 +767,17 @@ Read(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
 {
     mount_t *m = MOUNT(fsp);
     file_context_t *c = context;
+    SRWLOCK *lock;
     uint32_t done = 0;
     int error;
 
     if (c->kind != K_FILE)
         return (STATUS_INVALID_DEVICE_REQUEST);
     SHARED(m);
+    lock = object_lock(m, c->base);
+    AcquireSRWLockShared(lock);
     error = zum_fs_read(c->fs, c->object, offset, length, buffer, &done);
+    ReleaseSRWLockShared(lock);
     UNLOCK_SHARED(m);
     *pdone = done;
     if (error != 0)
@@ -764,6 +792,7 @@ Write(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
 {
     mount_t *m = MOUNT(fsp);
     file_context_t *c = context;
+    SRWLOCK *lock;
     zum_attr_t attr;
     uint64_t at = to_end ? ZUM_FS_APPEND : offset;
     NTSTATUS status;
@@ -772,7 +801,9 @@ Write(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
     *pdone = 0;
     if (!writable(m, c))
         return (STATUS_MEDIA_WRITE_PROTECTED);
-    EXCLUSIVE(m);
+    SHARED(m);
+    lock = object_lock(m, c->base);
+    AcquireSRWLockExclusive(lock);
     /* Paging I/O never extends the file. */
     if (constrained) {
         error = zum_fs_getattr(c->fs, c->object, &attr);
@@ -788,9 +819,10 @@ Write(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
     status = status_of(error);
     if (NT_SUCCESS(status)) {
         *pdone = length;
-        status = context_info(m, c, info);
+        status = context_info_unlocked(m, c, info);
     }
-    UNLOCK_EXCLUSIVE(m);
+    ReleaseSRWLockExclusive(lock);
+    UNLOCK_SHARED(m);
     return (status);
 }
 
@@ -1388,6 +1420,8 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
         return (EMFILE);
     memset(m, 0, sizeof (*m));
     InitializeSRWLock(&m->lock);
+    for (i = 0; i < OBJECT_LOCK_COUNT; i++)
+        InitializeSRWLock(&m->object_locks[i]);
     InitializeCriticalSection(&m->snap_lock);
     m->readonly = readonly;
     strncpy_s(m->dataset, sizeof (m->dataset), dataset, _TRUNCATE);
