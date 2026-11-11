@@ -129,15 +129,13 @@ ARM64 packages are cross-compiled on the x64 machine:
 - userland and `zfswin-um` with `clang-cl --target=aarch64-pc-windows-msvc`;
 - the administration suite with NativeAOT.
 
-First build OpenSSL for ARM64 once. It goes into `out\` and installs nothing
-system-wide:
+First build OpenSSL for ARM64 once. The helper reuses a complete install in
+`out\vcpkg-openssl` (or `%ZFSWIN_CI_DATA%\out\vcpkg-openssl`) and otherwise
+builds the pinned dependency with the vcpkg that ships with Visual Studio.
+It installs nothing system-wide:
 
 ```powershell
-$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-mkdir out\vcpkg-openssl; cd out\vcpkg-openssl
-'{ "name": "zfswin-openssl", "version": "1.0.0", "dependencies": [ "openssl" ], "builtin-baseline": "29718cfec805208b4e2d80ed91e681143b488dd7" }' | Set-Content vcpkg.json
-& "$vs\VC\vcpkg\vcpkg.exe" install --triplet arm64-windows-static --x-install-root=$PWD\installed    # about 11 minutes
-cd ..\..
+scripts\ensure-arm64-openssl.ps1
 powershell -File scripts\build-driver.ps1 -Architecture arm64            # out\driver-package-arm64
 powershell -File scripts\build-release.ps1                               # x64 and arm64 by default
 ```
