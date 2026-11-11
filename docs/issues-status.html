@@ -60,18 +60,11 @@
           </thead>
           <tbody>
             <tr>
-              <td class="issue-title"><a href="https://github.com/rosenbalchev/zfsWindows/issues/21">#21 - GUI Tweak</a></td>
-              <td><span class="status">In progress</span></td>
-              <td class="phase">Implementation</td>
-              <td class="agent">implementer</td>
-              <td class="details">All-tab WebView2 UI, safe selection of unused partitions and unallocated ranges for mirror/cache devices, and executable icon.</td>
-            </tr>
-            <tr>
-              <td class="issue-title"><a href="https://github.com/rosenbalchev/zfsWindows/issues/22">#22 - User-mode write performance</a></td>
-              <td><span class="status">In progress</span></td>
-              <td class="phase">WinFsp-mounted baseline</td>
-              <td class="agent">performance-reviewer</td>
-              <td class="details">Run durable and buffered writes through a local WinFsp mount backed only by temporary image files; compare against the engine-only path.</td>
+              <td class="issue-title"><a href="https://github.com/rosenbalchev/zfsWindows/issues/22">#22 - Performance optimization in user mode</a></td>
+              <td><span class="status">Needs review</span></td>
+              <td class="phase">Mitigation candidate review</td>
+              <td class="agent">human</td>
+              <td class="details">Review measured small-write results and request batching: 4 KiB writes with a 1 MiB flush cadence measured 47.7 MiB/s; 64 KiB writes measured 109.7 MiB/s.</td>
             </tr>
           </tbody>
         </table>
