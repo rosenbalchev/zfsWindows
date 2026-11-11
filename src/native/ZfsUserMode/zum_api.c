@@ -193,25 +193,39 @@ int
 zum_fs_read(zum_fs_t *fs, uint64_t object, uint64_t offset, uint32_t length,
     void *buffer, uint32_t *done)
 {
-    zum_znode_t *zp;
-    uint64_t n;
+    dmu_object_info_t info = { 0 };
+    sa_bulk_attr_t attrs[2];
+    sa_handle_t *hdl = NULL;
+    uint64_t mode, size, n;
+    int count = 0;
     int error;
 
     *done = 0;
-    if ((error = zum_zget(fs, object, &zp)) != 0)
+    if ((error = dmu_object_info(fs->os, object, &info)) != 0)
         return (error);
-    if (S_ISDIR(zp->z_mode)) {
-        zum_zrele(zp);
-        return (EISDIR);
+    if (info.doi_bonus_type != DMU_OT_SA)
+        return (ENOTSUP);
+    error = sa_handle_get(fs->os, object, NULL, SA_HDL_PRIVATE, &hdl);
+    if (error != 0) {
+        if (hdl != NULL)
+            sa_handle_destroy(hdl);
+        return (error);
     }
-    if (offset < zp->z_size) {
-        n = MIN((uint64_t)length, zp->z_size - offset);
+    SA_ADD_BULK_ATTR(attrs, count, fs->sa_table[ZPL_MODE], NULL,
+        &mode, sizeof (mode));
+    SA_ADD_BULK_ATTR(attrs, count, fs->sa_table[ZPL_SIZE], NULL,
+        &size, sizeof (size));
+    error = sa_bulk_lookup(hdl, attrs, count);
+    if (error == 0 && S_ISDIR(mode))
+        error = EISDIR;
+    if (error == 0 && offset < size) {
+        n = MIN((uint64_t)length, size - offset);
         error = dmu_read(fs->os, object, offset, n, buffer,
             DMU_READ_PREFETCH);
         if (error == 0)
             *done = (uint32_t)n;
     }
-    zum_zrele(zp);
+    sa_handle_destroy(hdl);
     return (error);
 }
 

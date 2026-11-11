@@ -1,6 +1,7 @@
 // Cache-layer checks through the driver (plan step 13).
 //
 //   read-unbuffered <file>                     read with FILE_FLAG_NO_BUFFERING
+//   read-random <file> <count> <seed> [blockKiB]
 //   coherency <dir>                            Cache Manager / mapping / non-cached coherency
 //   cache-writer <dir> <buffered|flush|writethrough> <ack.log>
 //                                              write files until killed; ack each one
@@ -43,7 +44,8 @@ static class Cache
             result = args[0] switch
             {
                 "read-unbuffered" => ReadUnbuffered(args[1]),
-                "read-random" => ReadRandom(args[1], int.Parse(args[2]), int.Parse(args[3])),
+                "read-random" => ReadRandom(args[1], int.Parse(args[2]), int.Parse(args[3]),
+                    args.Length > 4 ? int.Parse(args[4]) : 128),
                 "coherency" => Coherency(Path.GetFullPath(args[1]), failures),
                 "cache-writer" => Writer(Path.GetFullPath(args[1]), args[2], args[3]),
                 "cache-check" => Check(Path.GetFullPath(args[1]), args[2], args[3], failures),
@@ -89,13 +91,18 @@ static class Cache
     // the same blocks, so the hash must not change (for example after the
     // L2ARC device was corrupted).  Sequential rereads would be served by
     // prefetch and rarely reach the L2ARC.
-    static unsafe object ReadRandom(string path, int count, int seed)
+    static unsafe object ReadRandom(string path, int count, int seed, int blockKiB)
     {
-        const int block = 128 * 1024;
+        if (blockKiB < 4 || (blockKiB & (blockKiB - 1)) != 0)
+            throw new ArgumentOutOfRangeException(nameof(blockKiB),
+                "Use a power-of-two block size of at least 4 KiB.");
+        var block = blockKiB * 1024;
         using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read,
             NoBuffering);
         var blocks = RandomAccess.GetLength(handle) / block;
-        var buffer = (byte*)NativeMemory.AlignedAlloc(block, 4096);
+        if (blocks == 0)
+            throw new InvalidDataException("File is smaller than one aligned read block.");
+        var buffer = (byte*)NativeMemory.AlignedAlloc((nuint)block, 4096);
         try
         {
             using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -107,7 +114,8 @@ static class Cache
                 var read = RandomAccess.Read(handle, span, random.NextInt64(blocks) * block);
                 sha.AppendData(span[..read]);
             }
-            return new { path, count, seed, seconds = Math.Round(watch.Elapsed.TotalSeconds, 3),
+            return new { path, count, seed, blockKiB,
+                         seconds = Math.Round(watch.Elapsed.TotalSeconds, 3),
                          sha256 = Convert.ToHexString(sha.GetHashAndReset()) };
         }
         finally { NativeMemory.AlignedFree(buffer); }

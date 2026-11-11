@@ -46,6 +46,15 @@ public sealed class FileOperationTests : IDisposable
     }
 
     [Fact]
+    public void ReadingDirectoryReturnsIsDirectory()
+    {
+        var directory = _fs.CreateDirectory("/directory");
+        var error = Assert.Throws<ZfsUmException>(() =>
+            _fs.Read(directory, 0, new byte[1]));
+        Assert.Equal(21, error.Errno);
+    }
+
+    [Fact]
     public void TruncateShrinksAndGrowsWithZeros()
     {
         var obj = _fs.CreateFile("/trunc.bin");
