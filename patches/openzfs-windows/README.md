@@ -750,3 +750,25 @@ On Windows, `zfs_file_open()` now strips the offset and length only for the
 underlying `stat64()` and `open64()` calls. The original path remains in the
 file object so the existing offset and length handling continues to bound all
 I/O to the selected unallocated range.
+
+## 0038 — zpool: validate offset-limited disk vdevs
+
+The previous fix made libzpool able to open an offset-limited physical-disk
+vdev, but `zpool add` rejected the argument first in `make_leaf_vdev()`. Its
+Windows path check did not recognize `#offset#length#device` and reported
+"must be a full path or shorthand device name" (GitHub issue #32).
+
+The zpool command now validates the underlying physical-drive path while
+retaining the encoded path in the vdev configuration, allowing user-mode
+`zpool add ... cache ...` to reach the existing bounded-I/O implementation.
+
+## 0038 — zpool: validate offset-limited disk vdevs
+
+The previous fix made libzpool able to open an offset-limited physical-disk
+vdev, but `zpool add` rejected the argument first in `make_leaf_vdev()`. Its
+Windows path check did not recognize `#offset#length#device` and reported
+"must be a full path or shorthand device name" (GitHub issue #32).
+
+The zpool command now validates the underlying physical-drive path while
+retaining the encoded path in the vdev configuration, allowing user-mode
+`zpool add ... cache ...` to reach the existing bounded-I/O implementation.
