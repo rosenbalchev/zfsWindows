@@ -736,3 +736,17 @@ that the directory exists as before (`C:\` for a file at a drive's root).
 `spa_prop_validate()` accepts them in the user-space engine only
 (`!_KERNEL`), which opens the path as given. The kernel driver's
 `zfs_file_open()` takes NT paths, so it still refuses them.
+
+## 0037 — libzpool: open offset-limited physical-disk vdevs
+
+The GUI can offer an unallocated range on a Windows disk as a cache device,
+recorded as `#offset#length#\\?\PhysicalDriveN`. User-mode libzpool already
+uses the prefix to limit I/O and report the vdev size, but it also passed the
+prefixed string to `open64()`. Windows then rejected it as a device path
+(`cannot open ...: no such device`), which made adding an L2ARC from the
+user-mode GUI fail (GitHub issue #32).
+
+On Windows, `zfs_file_open()` now strips the offset and length only for the
+underlying `stat64()` and `open64()` calls. The original path remains in the
+file object so the existing offset and length handling continues to bound all
+I/O to the selected unallocated range.
