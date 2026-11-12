@@ -1,0 +1,73 @@
+diff --git a/cmd/zpool/zpool_vdev.c b/cmd/zpool/zpool_vdev.c
+--- a/cmd/zpool/zpool_vdev.c
++++ b/cmd/zpool/zpool_vdev.c
+@@ -192,6 +192,37 @@ is_shorthand_path(const char *arg, char *path, size_t path_size,
+ 	return (error);
+ }
+ 
++#ifdef _WIN32
++/*
++ * A whole-disk vdev is stored as "#offset#length#device".  The zpool
++ * command validates a new vdev before libzpool opens it, so validate the
++ * underlying device while retaining the encoded path in the nvlist.
++ */
++static const char *
++zpool_offset_device_path(const char *arg, char *base, size_t base_size)
++{
++	const char *p;
++	char *end;
++
++	if (arg[0] != '#')
++		return (arg);
++
++	errno = 0;
++	(void) strtoull(arg + 1, &end, 10);
++	if (errno == ERANGE || end == arg + 1 || *end != '#')
++		return (arg);
++	p = end + 1;
++	errno = 0;
++	(void) strtoull(p, &end, 10);
++	if (errno == ERANGE || end == p || *end != '#' || end[1] == '\0' ||
++	    strlen(end + 1) >= base_size)
++		return (arg);
++
++	strlcpy(base, end + 1, base_size);
++	return (base);
++}
++#endif
++
+ /*
+  * Determine if the given path is a hot spare within the given configuration.
+  * If no configuration is given we rely solely on the label.
+@@ -268,6 +299,13 @@ make_leaf_vdev(const char *arg, boolean_t is_primary, uint64_t ashift)
+ 	const char *type = NULL;
+ 	boolean_t wholedisk = B_FALSE;
+ 	int err;
++#ifdef _WIN32
++	char offset_path[MAXPATHLEN];
++	const char *complete_arg = zpool_offset_device_path(arg, offset_path,
++	    sizeof (offset_path));
++#else
++	const char *complete_arg = arg;
++#endif
+ 
+ 	/*
+ 	 * Determine what type of vdev this is, and put the full path into
+@@ -275,7 +313,7 @@ make_leaf_vdev(const char *arg, boolean_t is_primary, uint64_t ashift)
+ 	 * checking the st_mode of the file.
+ 	 */
+ #ifdef _WIN32
+-	if (arg[0] == '/' || arg[0] == '\\') {
++	if (complete_arg[0] == '/' || complete_arg[0] == '\\') {
+ #else
+ 	if (arg[0] == '/') {
+ #endif
+@@ -287,7 +325,7 @@ make_leaf_vdev(const char *arg, boolean_t is_primary, uint64_t ashift)
+ 		 * to store the given path as ZPOOL_CONFIG_PATH to ensure we
+ 		 * can leverage udev's persistent device labels.
+ 		 */
+-		if (realpath(arg, path) == NULL) {
++		if (realpath(complete_arg, path) == NULL) {
+ 			(void) fprintf(stderr,
+ 			    gettext("cannot resolve path '%s'\n"), arg);
+ 			return (NULL);
