@@ -10,8 +10,8 @@ namespace Zfs.Admin.Gui;
 /// </summary>
 sealed partial class MainForm
 {
-    readonly ComboBox ratesPool = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
-    readonly NumericUpDown ratesInterval = new() { Minimum = 1, Maximum = 60, Value = 5, Width = 60 };
+    readonly ComboBox ratesPool = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200, AccessibleName = "Pool" };
+    readonly NumericUpDown ratesInterval = new() { Minimum = 1, Maximum = 60, Value = 5, Width = 60, AccessibleName = "Sample interval in seconds" };
     readonly CheckBox ratesPause = new() { Text = "Pause", AutoSize = true, Padding = new Padding(8, 4, 0, 0) };
     readonly RateChart throughputChart = new("MB/s", v => (v / 1048576).ToString("0.#")) { Dock = DockStyle.Fill };
     readonly RateChart iopsChart = new("IOPS", v => v.ToString("0")) { Dock = DockStyle.Fill };
@@ -31,7 +31,7 @@ sealed partial class MainForm
         top.Controls.Add(ratesInterval);
         top.Controls.Add(new Label { Text = "s", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(ratesPause);
-        ratesPool.SelectedIndexChanged += (_, _) => { if (!applyingWebAction) ResetRates(); };
+        ratesPool.SelectedIndexChanged += (_, _) => ResetRates();
         ratesInterval.ValueChanged += (_, _) => ratesTimer.Interval = (int)ratesInterval.Value * 1000;
         ratesTimer.Tick += async (_, _) => await SampleRatesAsync();
         tabs.SelectedIndexChanged += (_, _) => UpdateRatesTimer();

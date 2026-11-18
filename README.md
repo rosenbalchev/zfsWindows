@@ -58,20 +58,28 @@ tool in the Start menu (`ZfsWinGui.exe`, needs the .NET 10 Desktop Runtime).
   - adding and removing mirror disks, read caches (L2ARC) and write logs
     (SLOG). In the user-mode edition a write log is not used and a read
     cache is dropped at the next import, see below.
-  - **Overview**, **Integrity**, **Redundancy**, **Rates**, and **Snapshots**
-    tabs: pool health and capacity, damaged files and scrub errors, copies
-    and drive health, live I/O and ARC statistics, and snapshot create,
-    rollback, temporary mount, and restore-by-Explorer workflows.
+  - pool health and capacity, damaged files and scrub errors, copies and
+    drive health, live I/O and ARC statistics, and snapshot create,
+    rollback, temporary mount, and restore-by-Explorer workflows (the
+    **Overview**, **Health & scrub**, **Devices**, **Performance** and
+    **Snapshots** sections; **Integrity**, **Redundancy** and **Rates** tabs
+    in the native fallback).
 - **User-mode edition, in addition:** its service and mounts.
 
 ### GUI dashboard preview
 
-The dashboard is generated locally as self-contained HTML with inline SVG;
-it does not load scripts or assets from the network. WebView2 hosts the
-Overview tab when the runtime is installed, and the same page is written to
-`%LOCALAPPDATA%\OpenZFS\dashboard.html` for the **Open in browser** fallback.
-All monitoring tabs refresh without blocking the window, and the GUI has a
-headless `--self-check` path plus `--screenshots <directory>` evidence mode.
+When the WebView2 runtime is installed, the whole window is a web app
+embedded in `ZfsWinGui.exe`: sections for Overview, Datasets, Snapshots,
+Devices, Health & scrub, Performance and the user-mode service, one pool
+picker, and in-page confirmations that ask you to type the snapshot, pool
+or action name before anything destructive runs. It loads nothing from the
+network, and it can only ask the window for a fixed list of commands, which
+check every argument and confirmation again before ZfsWinBroker is called.
+Without WebView2 (Windows LTSC and Server), the native tabs remain and the
+Overview dashboard is written to `%LOCALAPPDATA%\OpenZFS\dashboard.html` for
+**Open in browser**. Views refresh every 5 seconds without reloading, and
+the GUI has a headless `--self-check` path plus a `--screenshots <directory>`
+evidence mode that captures every view.
 
 The images below are the issue-17 UI previews used to exercise the layout and
 content before disposable-pool VM captures are attached:

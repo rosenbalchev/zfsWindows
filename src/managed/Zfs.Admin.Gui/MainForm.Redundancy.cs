@@ -48,7 +48,24 @@ sealed partial class MainForm
         }
         copiesList.EndUpdate();
 
-        // WMI is slow: ask Windows at most once a minute.
+        IReadOnlyDictionary<int, DriveHealth> drives = await DriveHealthAsync();
+        healthList.BeginUpdate();
+        healthList.Items.Clear();
+        foreach (LeafHealth h in LeafHealth.Of(status, drives))
+        {
+            var item = new ListViewItem([h.Name is null ? h.Device : $"{h.Device}  ({h.Name})", h.State ?? "", $"{h.ReadErrors}/{h.WriteErrors}/{h.ChecksumErrors}",
+                h.Windows, h.Media ?? "–", h.TemperatureC is int t ? $"{t} °C" : "–", h.WearPercent is int w ? $"{w}%" : "–",
+                h.PowerOnHours?.ToString("N0") ?? "–", h.Note ?? h.ReadErrorsUncorrected?.ToString("N0") ?? "–"]);
+            if (h.Problem)
+                item.ForeColor = Color.Firebrick;
+            healthList.Items.Add(item);
+        }
+        healthList.EndUpdate();
+    }
+
+    /// <summary>Windows' drive health; WMI is slow, so at most once a minute.</summary>
+    async Task<IReadOnlyDictionary<int, DriveHealth>> DriveHealthAsync()
+    {
         if (driveHealth is null || DateTimeOffset.UtcNow - driveHealthAt > TimeSpan.FromMinutes(1))
         {
             try
@@ -62,56 +79,17 @@ sealed partial class MainForm
             }
             driveHealthAt = DateTimeOffset.UtcNow;
         }
-        healthList.BeginUpdate();
-        healthList.Items.Clear();
-        foreach (VdevInfo leaf in Leaves(status))
-        {
-            string path = leaf.Path ?? leaf.Name;
-            string errors = $"{leaf.ReadErrors}/{leaf.WriteErrors}/{leaf.ChecksumErrors}";
-            string[] windows;
-            Match disk = Regex.Match(path, @"PhysicalDrive(\d+)", RegexOptions.IgnoreCase);
-            if (disk.Success && driveHealth.TryGetValue(int.Parse(disk.Groups[1].Value), out DriveHealth? h))
-            {
-                windows = [$"{h.Health}{(h.Status is { Length: > 0 } && h.Status != "OK" ? $" ({h.Status})" : "")}", h.Media,
-                    h.TemperatureC is int t ? $"{t} °C" : "–", h.WearPercent is int w ? $"{w}%" : "–",
-                    h.PowerOnHours?.ToString("N0") ?? "–", h.ReadErrorsUncorrected?.ToString("N0") ?? "–"];
-                path = $"{path}  ({h.Name})";
-            }
-            else if (HostVolume(path) is DriveInfo volume)
-            {
-                windows = [volume.IsReady ? "image file" : "volume not ready", "file",
-                    "–", "–", "–", volume.IsReady ? $"host {volume.Name} {Format.Bytes(volume.AvailableFreeSpace)} free" : "–"];
-            }
-            else
-            {
-                windows = ["unknown", "–", "–", "–", "–", "–"];
-            }
-            var item = new ListViewItem([path, leaf.State ?? "", errors, .. windows]);
-            if (leaf.State is not ("ONLINE" or null) || leaf.ReadErrors + leaf.WriteErrors + leaf.ChecksumErrors > 0 || windows[0] is "Warning" or "Unhealthy")
-                item.ForeColor = Color.Firebrick;
-            healthList.Items.Add(item);
-        }
-        healthList.EndUpdate();
-
-        static IEnumerable<VdevInfo> Leaves(PoolStatusInfo s) =>
-            new[] { s.Vdevs, s.Logs, s.Caches, s.Spares, s.Special, s.Dedup }.SelectMany(g => g).SelectMany(Flatten);
-
-        static IEnumerable<VdevInfo> Flatten(VdevInfo v) => v.IsLeaf ? [v] : v.Children.SelectMany(Flatten);
+        return driveHealth;
     }
 
-    /// <summary>The volume holding an image-file vdev ("\\?\D:\pools\a.img" → D:\).</summary>
-    static DriveInfo? HostVolume(string path)
-    {
-        string p = path.Replace('/', '\\');
-        foreach (string prefix in new[] { @"\\?\", @"\\.\" })
-            if (p.StartsWith(prefix, StringComparison.Ordinal))
-                p = p[prefix.Length..];
-        return p.Length >= 3 && char.IsAsciiLetter(p[0]) && p[1] == ':' ? new DriveInfo(p[..1]) : null;
-    }
-
-    /// <summary>--screenshots: every tab as a PNG (WebView2's own capture for the Overview).</summary>
+    /// <summary>--screenshots: every view as a PNG (the web app's views when WebView2 runs it).</summary>
     async Task TakeScreenshotsAsync(string directory)
     {
+        if (WebActive)
+        {
+            await TakeWebScreenshotsAsync(directory);
+            return;
+        }
         Directory.CreateDirectory(directory);
         try
         {
@@ -132,21 +110,6 @@ sealed partial class MainForm
                 string file = Path.Combine(directory, $"{tabs.SelectedIndex + 1:00}-{page.Text.Replace(' ', '-').ToLowerInvariant()}.png");
                 using var bitmap = new Bitmap(Width, Height);
                 DrawToBitmap(bitmap, new Rectangle(0, 0, Width, Height));
-                // DrawToBitmap cannot see WebView2's content: its own capture goes on top.
-                if (page.Text == "Overview" && web?.CoreWebView2 is not null)
-                {
-                    using var stream = new MemoryStream();
-                    await web.CoreWebView2.CapturePreviewAsync(Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png, stream);
-                    await File.WriteAllBytesAsync(Path.ChangeExtension(file, ".page.png"), stream.ToArray());
-                    stream.Position = 0;
-                    using var content = Image.FromStream(stream);
-                    Point at = PointToClient(web.PointToScreen(Point.Empty));
-                    // Client to window coordinates: DrawToBitmap draws the frame too.
-                    Point origin = PointToScreen(Point.Empty);
-                    at.Offset(origin.X - Left, origin.Y - Top);
-                    using var g = Graphics.FromImage(bitmap);
-                    g.DrawImage(content, new Rectangle(at, web.Size));
-                }
                 bitmap.Save(file, System.Drawing.Imaging.ImageFormat.Png);
             }
         }
@@ -154,5 +117,48 @@ sealed partial class MainForm
         {
             Close();
         }
+    }
+}
+
+/// <summary>
+/// One leaf device as the Redundancy tab and the Devices view show it: its
+/// ZFS state and counters, and what Windows says about the drive (or, for an
+/// image file, the volume holding it).
+/// </summary>
+sealed record LeafHealth(string Device, string? Name, string Role, string? State, long ReadErrors, long WriteErrors, long ChecksumErrors,
+    string Windows, string? Media, int? TemperatureC, int? WearPercent, long? PowerOnHours, long? ReadErrorsUncorrected, string? Note)
+{
+    /// <summary>Not ONLINE, any error counted, or Windows warns about the drive.</summary>
+    public bool Problem => State is not ("ONLINE" or null) || ReadErrors + WriteErrors + ChecksumErrors > 0 || Windows.StartsWith("Warning", StringComparison.Ordinal) || Windows.StartsWith("Unhealthy", StringComparison.Ordinal);
+
+    public static IReadOnlyList<LeafHealth> Of(PoolStatusInfo s, IReadOnlyDictionary<int, DriveHealth> drives) =>
+        new[] { ("data", s.Vdevs), ("log", s.Logs), ("cache", s.Caches), ("spare", s.Spares), ("special", s.Special), ("dedup", s.Dedup) }
+            .SelectMany(g => g.Item2.SelectMany(Flatten).Select(v => Describe(v, g.Item1, drives))).ToList();
+
+    static IEnumerable<VdevInfo> Flatten(VdevInfo v) => v.IsLeaf ? [v] : v.Children.SelectMany(Flatten);
+
+    static LeafHealth Describe(VdevInfo leaf, string role, IReadOnlyDictionary<int, DriveHealth> drives)
+    {
+        string path = leaf.Path ?? leaf.Name;
+        Match disk = Regex.Match(path, @"PhysicalDrive(\d+)", RegexOptions.IgnoreCase);
+        if (disk.Success && drives.TryGetValue(int.Parse(disk.Groups[1].Value), out DriveHealth? h))
+            return new(path, h.Name, role, leaf.State, leaf.ReadErrors, leaf.WriteErrors, leaf.ChecksumErrors,
+                $"{h.Health}{(h.Status is { Length: > 0 } && h.Status != "OK" ? $" ({h.Status})" : "")}", h.Media,
+                h.TemperatureC, h.WearPercent, h.PowerOnHours, h.ReadErrorsUncorrected, null);
+        if (HostVolume(path) is DriveInfo volume)
+            return new(path, null, role, leaf.State, leaf.ReadErrors, leaf.WriteErrors, leaf.ChecksumErrors,
+                volume.IsReady ? "image file" : "volume not ready", "file", null, null, null, null,
+                volume.IsReady ? $"host {volume.Name} {Format.Bytes(volume.AvailableFreeSpace)} free" : null);
+        return new(path, null, role, leaf.State, leaf.ReadErrors, leaf.WriteErrors, leaf.ChecksumErrors, "unknown", null, null, null, null, null, null);
+    }
+
+    /// <summary>The volume holding an image-file vdev ("\\?\D:\pools\a.img" → D:\).</summary>
+    static DriveInfo? HostVolume(string path)
+    {
+        string p = path.Replace('/', '\\');
+        foreach (string prefix in new[] { @"\\?\", @"\\.\" })
+            if (p.StartsWith(prefix, StringComparison.Ordinal))
+                p = p[prefix.Length..];
+        return p.Length >= 3 && char.IsAsciiLetter(p[0]) && p[1] == ':' ? new DriveInfo(p[..1]) : null;
     }
 }

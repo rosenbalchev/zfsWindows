@@ -10,7 +10,7 @@ namespace Zfs.Admin.Gui;
 /// </summary>
 sealed partial class MainForm
 {
-    readonly ComboBox snapshotDataset = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
+    readonly ComboBox snapshotDataset = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260, AccessibleName = "Dataset" };
     readonly ListView snapshots = NewList(("Snapshot", 260), ("Created", 150), ("Used", 90), ("Referenced", 90), ("Mounted at", 160));
     readonly CheckBox keepMounted = new() { Text = "Keep temporary mounts when this window closes", AutoSize = false, Size = new Size(290, 40) };
     // Mounted from this window: unmounted when it closes unless keepMounted.
@@ -25,7 +25,7 @@ sealed partial class MainForm
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(4) };
         top.Controls.Add(new Label { Text = "Dataset:", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(snapshotDataset);
-        snapshotDataset.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowSnapshotsAsync(); };
+        snapshotDataset.SelectedIndexChanged += async (_, _) => await ShowSnapshotsAsync();
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, Width = 320, Padding = new Padding(8) };
         void Action(string text, Func<Task> handler)
@@ -266,6 +266,13 @@ sealed class MountPointDialog : Form
 
     public string? MountPoint => useLetter.Checked ? letter.SelectedItem as string : folder.Text.Trim();
 
+    /// <summary>Drive letters G: to Z: that nothing uses, Z: first.</summary>
+    public static IReadOnlyList<string> FreeDriveLetters()
+    {
+        var used = Environment.GetLogicalDrives().Select(d => char.ToUpperInvariant(d[0])).ToHashSet();
+        return Enumerable.Range('G', 'Z' - 'G' + 1).Reverse().Select(c => (char)c).Where(c => !used.Contains(c)).Select(c => $"{c}:").ToList();
+    }
+
     public MountPointDialog(string snapshot)
     {
         Text = $"Mount {snapshot} read-only";
@@ -275,10 +282,7 @@ sealed class MountPointDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MinimizeBox = MaximizeBox = false;
         Font = SystemFonts.MessageBoxFont;
-        var used = Environment.GetLogicalDrives().Select(d => char.ToUpperInvariant(d[0])).ToHashSet();
-        for (char c = 'Z'; c >= 'G'; c--)
-            if (!used.Contains(c))
-                letter.Items.Add($"{c}:");
+        letter.Items.AddRange(FreeDriveLetters().Select(l => (object)l).ToArray());
         if (letter.Items.Count > 0)
             letter.SelectedIndex = 0;
         var browse = new Button { Text = "Browse…", AutoSize = true };

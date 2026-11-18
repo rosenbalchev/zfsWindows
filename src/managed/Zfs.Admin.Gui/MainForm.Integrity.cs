@@ -6,7 +6,7 @@ namespace Zfs.Admin.Gui;
 /// <summary>The Integrity tab: files with blocks that failed their checksum, per-device counters, scrub.</summary>
 sealed partial class MainForm
 {
-    readonly ComboBox integrityPool = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+    readonly ComboBox integrityPool = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200, AccessibleName = "Pool" };
     readonly Label integrityExplanation = new() { AutoSize = true, MaximumSize = new Size(1000, 0), Padding = new Padding(4) };
     readonly Label integrityScan = new() { AutoSize = true, Padding = new Padding(4, 8, 4, 4) };
     readonly ProgressBar integrityProgress = new() { Width = 220, Height = 16, Margin = new Padding(4, 8, 4, 4) };
@@ -20,7 +20,7 @@ sealed partial class MainForm
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(4) };
         top.Controls.Add(new Label { Text = "Pool:", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(integrityPool);
-        integrityPool.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowIntegrityAsync(); };
+        integrityPool.SelectedIndexChanged += async (_, _) => await ShowIntegrityAsync();
         var scrub = new Button { Text = "Start scrub", AutoSize = true };
         scrub.Click += async (_, _) =>
         {
