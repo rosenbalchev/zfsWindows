@@ -1,0 +1,42 @@
+diff --git a/module/zcommon/zfs_prop.c b/module/zcommon/zfs_prop.c
+--- a/module/zcommon/zfs_prop.c
++++ b/module/zcommon/zfs_prop.c
+@@ -562,7 +562,17 @@ zfs_prop_init(void)
+ 	    "none | formC | formD | formKC | formKD", "NORMALIZATION",
+ 	    normalize_table, sfeatures);
+ 	zprop_register_index(ZFS_PROP_CASE, "casesensitivity",
++#ifdef _WIN32
++	    /*
++	     * Windows names are case-insensitive and case-preserving, and its
++	     * tools rely on it (GitHub issue #37).  Only a new pool's root
++	     * file system takes this default; a new child takes its parent's
++	     * setting, and existing file systems keep theirs.
++	     */
++	    ZFS_CASE_INSENSITIVE, PROP_ONETIME, ZFS_TYPE_FILESYSTEM |
++#else
+ 	    ZFS_CASE_SENSITIVE, PROP_ONETIME, ZFS_TYPE_FILESYSTEM |
++#endif
+ 	    ZFS_TYPE_SNAPSHOT,
+ 	    "sensitive | insensitive | mixed", "CASE", case_table, sfeatures);
+ 	zprop_register_index(ZFS_PROP_KEYFORMAT, "keyformat",
+diff --git a/module/zfs/zfs_znode.c b/module/zfs/zfs_znode.c
+--- a/module/zfs/zfs_znode.c
++++ b/module/zfs/zfs_znode.c
+@@ -424,7 +424,17 @@ zfs_get_zplprop(objset_t *os, zfs_prop_t prop, uint64_t *value)
+ 			*value = 0;
+ 			break;
+ 		case ZFS_PROP_CASE:
++#ifdef _WIN32
++			/*
++			 * A new pool's root file system (no objset yet) takes
++			 * the Windows default of zfs_prop.c; an existing file
++			 * system without the entry stays case-sensitive.
++			 */
++			*value = os == NULL ? ZFS_CASE_INSENSITIVE :
++			    ZFS_CASE_SENSITIVE;
++#else
+ 			*value = ZFS_CASE_SENSITIVE;
++#endif
+ 			break;
+ 		case ZFS_PROP_ACLTYPE:
+ #ifdef __FreeBSD__

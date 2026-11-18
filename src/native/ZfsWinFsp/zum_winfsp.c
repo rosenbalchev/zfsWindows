@@ -1006,13 +1006,67 @@ GetSecurity(FSP_FILE_SYSTEM *fsp, PVOID context, PSECURITY_DESCRIPTOR out,
     return (status);
 }
 
+/*
+ * sd with the owner of change, as a self-relative descriptor to LocalFree.
+ * FspSetSecurityDescriptor checks a new owner against no token
+ * (SetPrivateObjectSecurity without one), so it refused every owner change
+ * with STATUS_INVALID_OWNER, even rewriting the current owner, which Windows
+ * Installer does when it replaces a file (issue #26).  The handle was
+ * granted WRITE_OWNER against the caller when it was opened.
+ */
+static NTSTATUS
+with_owner(PSECURITY_DESCRIPTOR sd, PSECURITY_DESCRIPTOR change,
+    PSECURITY_DESCRIPTOR *out)
+{
+    const SECURITY_DESCRIPTOR_CONTROL kept = SE_DACL_AUTO_INHERITED |
+        SE_SACL_AUTO_INHERITED | SE_DACL_PROTECTED | SE_SACL_PROTECTED;
+    SECURITY_DESCRIPTOR abs;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    DWORD revision, size = 0;
+    PSID owner, group;
+    PACL dacl, sacl;
+    BOOL owner_defaulted, group_defaulted, dacl_present, dacl_defaulted,
+        sacl_present, sacl_defaulted;
+
+    *out = NULL;
+    if (!GetSecurityDescriptorOwner(change, &owner, &owner_defaulted) ||
+        owner == NULL)
+        return (STATUS_INVALID_OWNER);
+    if (!GetSecurityDescriptorControl(sd, &control, &revision) ||
+        !GetSecurityDescriptorGroup(sd, &group, &group_defaulted) ||
+        !GetSecurityDescriptorDacl(sd, &dacl_present, &dacl,
+        &dacl_defaulted) ||
+        !GetSecurityDescriptorSacl(sd, &sacl_present, &sacl,
+        &sacl_defaulted) ||
+        !InitializeSecurityDescriptor(&abs, SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorOwner(&abs, owner, owner_defaulted) ||
+        !SetSecurityDescriptorGroup(&abs, group, group_defaulted) ||
+        !SetSecurityDescriptorDacl(&abs, dacl_present, dacl,
+        dacl_defaulted) ||
+        !SetSecurityDescriptorSacl(&abs, sacl_present, sacl,
+        sacl_defaulted) ||
+        !SetSecurityDescriptorControl(&abs, kept, control & kept))
+        return (FspNtStatusFromWin32(GetLastError()));
+    (void) MakeSelfRelativeSD(&abs, NULL, &size);
+    if ((*out = LocalAlloc(LMEM_FIXED, size)) == NULL)
+        return (STATUS_INSUFFICIENT_RESOURCES);
+    if (!MakeSelfRelativeSD(&abs, *out, &size)) {
+        NTSTATUS status = FspNtStatusFromWin32(GetLastError());
+
+        LocalFree(*out);
+        *out = NULL;
+        return (status);
+    }
+    return (STATUS_SUCCESS);
+}
+
 static NTSTATUS
 SetSecurity(FSP_FILE_SYSTEM *fsp, PVOID context, SECURITY_INFORMATION what,
     PSECURITY_DESCRIPTOR change)
 {
     mount_t *m = MOUNT(fsp);
     file_context_t *c = context;
-    PSECURITY_DESCRIPTOR sd, updated = NULL;
+    PSECURITY_DESCRIPTOR sd, updated = NULL, owned = NULL;
     zum_attr_t attr = { 0 };
     ULONG size = 0;
     NTSTATUS status;
@@ -1022,14 +1076,23 @@ SetSecurity(FSP_FILE_SYSTEM *fsp, PVOID context, SECURITY_INFORMATION what,
     EXCLUSIVE(m);
     (void) zum_fs_getattr(c->fs, c->base, &attr);
     sd = object_sd(c->fs, c->base, (BOOLEAN)attr.is_dir, 0, &size);
+    /* The owner is set by with_owner(), the rest by WinFsp. */
     status = sd == NULL ? STATUS_INSUFFICIENT_RESOURCES :
-        FspSetSecurityDescriptor(sd, what, change, &updated);
+        FspSetSecurityDescriptor(sd, what & ~OWNER_SECURITY_INFORMATION,
+        change, &updated);
+    if (NT_SUCCESS(status) && (what & OWNER_SECURITY_INFORMATION))
+        status = with_owner(updated, change, &owned);
     if (NT_SUCCESS(status)) {
-        status = status_of(zum_fs_set_security(c->fs, c->base, updated,
-            GetSecurityDescriptorLength(updated)));
+        PSECURITY_DESCRIPTOR result = owned != NULL ? owned : updated;
+
+        status = status_of(zum_fs_set_security(c->fs, c->base, result,
+            GetSecurityDescriptorLength(result)));
+    }
+    if (owned != NULL)
+        LocalFree(owned);
+    if (updated != NULL)
         FspDeleteSecurityDescriptor(updated,
             (NTSTATUS (*)())FspSetSecurityDescriptor);
-    }
     UNLOCK_EXCLUSIVE(m);
     if (sd != NULL)
         LocalFree(sd);
@@ -1402,6 +1465,36 @@ find_mount(const char *dataset)
 }
 
 /*
+ * A drive letter is mounted through the Mount Manager ("\\.\X:"), as a disk
+ * volume is.  A letter WinFsp defines itself (DefineDosDevice) has no volume
+ * name: GetFinalPathNameByHandle fails on it with ERROR_UNRECOGNIZED_VOLUME
+ * and Windows Installer refuses packages there (issue #26).  NULL (any free
+ * letter) takes the highest free one from Z: down, as WinFsp would.  A
+ * folder is returned unchanged.
+ */
+static PCWSTR
+mountmgr_point(PCWSTR mountpoint, WCHAR *buf, size_t size)
+{
+    DWORD used = GetLogicalDrives();
+    WCHAR letter;
+
+    if (mountpoint == NULL) {
+        for (letter = L'Z'; letter >= L'D'; letter--)
+            if (!(used & (1UL << (letter - L'A'))))
+                break;
+        if (letter < L'D')
+            return (NULL);
+    } else if (wcslen(mountpoint) == 2 && mountpoint[1] == L':' &&
+        iswalpha(mountpoint[0])) {
+        letter = towupper(mountpoint[0]);
+    } else {
+        return (mountpoint);
+    }
+    swprintf_s(buf, size, L"\\\\.\\%c:", letter);
+    return (buf);
+}
+
+/*
  * Mount a dataset.  source: where to find its pool if not imported yet;
  * mountpoint: "X:", an empty or missing folder, or NULL for any free drive
  * letter.  The table lock is held exclusive by the caller.
@@ -1416,7 +1509,8 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
     mount_t *m = NULL;
     FILETIME now;
     NTSTATUS status;
-    WCHAR wds[256];
+    WCHAR wds[256], managed[8];
+    PCWSTR at;
     int i, error;
 
     if (find_mount(dataset) != NULL)
@@ -1492,8 +1586,14 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
     status = FspFileSystemCreate(L"" FSP_FSCTL_DISK_DEVICE_NAME, &params,
         &zum_interface, &m->fsp);
     if (NT_SUCCESS(status)) {
+        PCWSTR mp = mountmgr_point(mountpoint, managed, ARRAYSIZE(managed));
+
         m->fsp->UserContext = m;
-        status = FspFileSystemSetMountPoint(m->fsp, (PWSTR)mountpoint);
+        status = FspFileSystemSetMountPoint(m->fsp, (PWSTR)mp);
+        /* The Mount Manager needs an administrator; zfswin-um mount may not be. */
+        if (!NT_SUCCESS(status) && mp != mountpoint &&
+            status != STATUS_OBJECT_NAME_COLLISION)
+            status = FspFileSystemSetMountPoint(m->fsp, (PWSTR)mountpoint);
     }
     if (NT_SUCCESS(status))
         status = FspFileSystemStartDispatcher(m->fsp, 0);
@@ -1507,8 +1607,11 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
         DeleteCriticalSection(&m->snap_lock);
         return (status == STATUS_OBJECT_NAME_COLLISION ? EEXIST : EINVAL);
     }
-    wcsncpy_s(m->mountpoint, MAX_PATH, FspFileSystemMountPoint(m->fsp),
-        _TRUNCATE);
+    /* Recorded and reported as "X:", however it was mounted. */
+    at = FspFileSystemMountPoint(m->fsp);
+    if (wcsncmp(at, L"\\\\.\\", 4) == 0)
+        at += 4;
+    wcsncpy_s(m->mountpoint, MAX_PATH, at, _TRUNCATE);
     m->in_use = TRUE;
     FspServiceLog(EVENTLOG_INFORMATION_TYPE, L"zfswin-um %hs: mounted %s on "
         L"%s%s", ZFSWIN_VERSION, wds, m->mountpoint,
