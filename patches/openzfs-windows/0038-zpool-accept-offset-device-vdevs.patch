@@ -71,3 +71,22 @@ diff --git a/cmd/zpool/zpool_vdev.c b/cmd/zpool/zpool_vdev.c
  			(void) fprintf(stderr,
  			    gettext("cannot resolve path '%s'\n"), arg);
  			return (NULL);
+@@ -303,6 +341,18 @@ make_leaf_vdev(const char *arg, boolean_t is_primary, uint64_t ashift)
+
+ 		/* After whole disk check restore original passed path */
+ 		(void) strlcpy(path, arg, sizeof (path));
++#ifdef _WIN32
++		/*
++		 * An offset extent is a slice of its disk, not the whole disk.
++		 * Marking it whole_disk would make the in-use check examine
++		 * every partition on the disk and, when forced, have
++		 * make_disks() write a new GPT over the entire disk.
++		 */
++		if (complete_arg != arg) {
++			wholedisk = B_FALSE;
++			type = VDEV_TYPE_DISK;
++		}
++#endif
+ 	} else if (zpool_is_draid_spare(arg)) {
+ 		if (!is_primary) {
+ 			(void) fprintf(stderr,
