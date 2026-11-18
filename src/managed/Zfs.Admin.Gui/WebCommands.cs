@@ -40,8 +40,11 @@ sealed record DevicePick(IReadOnlyList<string> Devices, string Summary, bool Mir
 /// attach and add must come from the native picker this window opened.  The
 /// broker validates and audits every pool operation once more.
 /// </summary>
-sealed class WebCommands
+sealed partial class WebCommands
 {
+    [System.Text.RegularExpressions.GeneratedRegex("^[a-z0-9][a-z0-9,-]{0,31}$")]
+    private static partial System.Text.RegularExpressions.Regex FeatureValue();
+
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { IncludeFields = true };
 
     readonly AdminClient client;
@@ -193,7 +196,8 @@ sealed class WebCommands
                 pools.Add((JsonNode)new JsonObject
                 {
                     ["name"] = p.Name, ["health"] = p.Health ?? s?.State,
-                    ["capacityPercent"] = p.CapacityPercent,
+                    ["size"] = p.Size, ["allocated"] = p.Allocated, ["free"] = p.Free,
+                    ["capacityPercent"] = p.CapacityPercent, ["fragmentationPercent"] = p.FragmentationPercent, ["dedupRatio"] = p.DedupRatio,
                     ["errorCount"] = s?.ErrorCount ?? 0,
                     ["deviceProblems"] = leaves.Count(v => v.State is not ("ONLINE" or null) || v.ReadErrors + v.WriteErrors + v.ChecksumErrors > 0),
                     ["scan"] = JsonSerializer.SerializeToNode(s?.Scan, Json),
@@ -303,7 +307,11 @@ sealed class WebCommands
             "dedup" => AdminClient.DedupValues,
             _ => AdminClient.SyncValues,
         };
-        string value = OneOf(a, "value", [.. allowed]);
+        // The usual values, or another one zfs knows (zstd-5, gzip-4, skein…):
+        // zfs set refuses what it does not know.
+        string value = Validation.PropertyValue(Validation.OptionalString(a, "value"));
+        if (!allowed.Contains(value, StringComparer.Ordinal) && !FeatureValue().IsMatch(value))
+            throw Validation.Invalid("value", $"'{value}' is not a {property} value.");
         return client.SetDatasetPropertyAsync(dataset, property, value);
     }
 

@@ -1,8 +1,8 @@
 // The ZfsWinGui web app.  Everything it reads or changes goes through one
 // allow-listed command table in the window (WebCommands.cs); this page never
-// talks to the network.  Views render into regions: a refresh replaces only
-// the regions whose markup changed, so scroll position, focus and half-made
-// choices survive the 5-second refresh.
+// talks to the network.  A refresh updates the page in place (morph), so
+// scroll position, focus, open sections and half-made choices survive the
+// 5-second refresh.
 'use strict';
 (() => {
   const webview = window.chrome && window.chrome.webview;
@@ -104,7 +104,7 @@
     data: {}, errors: {}, loading: {},
     sel: { dataset: null, snapshot: null, disk: null, mount: null },
     snapDataset: null, pendingProps: {}, propFilter: '',
-    rates: { pool: null, every: 5, paused: false, metric: 'mb', series: [], last: null },
+    rates: { pool: null, every: 5, paused: false, series: [], last: null },
   };
   const poolDatasets = () => (S.app?.datasets || []).filter((d) => d === S.pool || d.startsWith(S.pool + '/'));
   const appPool = () => (S.app?.pools || []).find((p) => p.name === S.pool);
@@ -114,29 +114,51 @@
   function applyWidths(root) {
     for (const el of root.querySelectorAll('[data-w]')) el.style.width = `${Math.max(0, Math.min(100, Number(el.dataset.w) || 0))}%`;
   }
-  // The shell (everything outside [data-region]) is replaced only when it
-  // changes; each region only when its own markup changes.
+  // A new view replaces the page; a refresh of the same view updates it in
+  // place.  morph() keeps every element that is still there and changes only
+  // the text and attributes that differ, so focus, hover, scrolled tables,
+  // opened help sections and the page's scroll position survive.
   function render(markup) {
     const tpl = document.createElement('template');
     tpl.innerHTML = markup.toString();
-    const regions = new Map();
-    for (const r of tpl.content.querySelectorAll('[data-region]')) { regions.set(r.dataset.region, r.innerHTML); r.innerHTML = ''; }
-    const holder = document.createElement('div');
-    holder.append(tpl.content);
-    const shell = S.view + '\n' + holder.innerHTML;
-    if (main.dataset.shell !== shell) {
-      main.replaceChildren(...holder.childNodes);
-      main.dataset.shell = shell;
-      for (const el of main.querySelectorAll('[data-region]')) { el.innerHTML = regions.get(el.dataset.region) ?? ''; el._src = el.innerHTML; }
-      applyWidths(main);
-      return;
+    if (main.dataset.view !== S.view) {
+      main.replaceChildren(tpl.content);
+      main.dataset.view = S.view;
+      main.scrollTop = 0;
+    } else {
+      morph(main, tpl.content);
     }
-    for (const el of main.querySelectorAll('[data-region]')) {
-      const src = regions.get(el.dataset.region) ?? '';
-      if (el._src === src) continue;
-      el.innerHTML = src;
-      el._src = src;
-      applyWidths(el);
+    applyWidths(main);
+  }
+  const sameKind = (a, b) => a.nodeType === b.nodeType && a.nodeName === b.nodeName && (a.nodeType !== 1 || (a.dataset?.key ?? null) === (b.dataset?.key ?? null));
+  function morph(target, source) {
+    const before = [...target.childNodes], after = [...source.childNodes];
+    after.forEach((to, i) => {
+      const from = before[i];
+      if (!from) { target.appendChild(to); return; }
+      if (!sameKind(from, to)) { target.replaceChild(to, from); return; }
+      if (from.nodeType !== 1) { if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue; return; }
+      morphAttributes(from, to);
+      morph(from, to);
+      morphState(from);
+    });
+    for (let i = before.length - 1; i >= after.length; i--) before[i].remove();
+  }
+  function morphAttributes(from, to) {
+    // style comes from data-w (applyWidths); a <details> stays as the user left it.
+    const keep = (name) => name === 'style' || (name === 'open' && from.nodeName === 'DETAILS');
+    for (const { name } of [...from.attributes]) if (!keep(name) && !to.hasAttribute(name)) from.removeAttribute(name);
+    for (const { name, value } of [...to.attributes]) if (!keep(name) && from.getAttribute(name) !== value) from.setAttribute(name, value);
+  }
+  // What a control shows once the user touched it no longer follows its
+  // attributes; every select and checkbox here records its change at once,
+  // so the markup is the truth.  Typed text is left alone.
+  function morphState(el) {
+    if (el.nodeName === 'SELECT') {
+      const i = [...el.options].findIndex((o) => o.hasAttribute('selected'));
+      el.selectedIndex = i >= 0 ? i : 0;
+    } else if (el.nodeName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+      el.checked = el.hasAttribute('checked');
     }
   }
   const emptyState = (title, text, extra) => html`<div class="panel empty"><strong>${title}</strong><span>${text}</span>${extra || ''}</div>`;
@@ -231,12 +253,12 @@
   function show(name) {
     if (!VIEWS[name]) return;
     S.view = name;
-    main.dataset.shell = '';
+    main.dataset.view = '';
     main.scrollTop = 0;
     drawFrame();
     drawView();
-    if (name === 'performance') scheduleRates(true);
-    else { scheduleRates(); loadView(name); }
+    scheduleRates(name === 'performance' || (name === 'overview' && S.rates.series.length === 0));
+    if (name !== 'performance') loadView(name);
   }
 
   // --- feedback ---------------------------------------------------------------
@@ -377,6 +399,7 @@
         <section class="panel"><h2>Copies of your data</h2>
           ${p.redundancy ? html`<div class="big">${p.redundancy.healthyCopies} cop${p.redundancy.healthyCopies === 1 ? 'y' : 'ies'}</div><p class="hint">${p.redundancy.text}</p>` : html`<p class="hint">Not reported.</p>`}</section>
       </div>
+      <div class="charts">${chartPanel('mb', true)}${chartPanel('iops', true)}</div>
       <section class="panel flush"><h2>Datasets</h2>
         <div class="row pad-x" data-region="count">
           ${counted ? html`<span><b>${num(files)}</b> files · <b>${num(folders)}</b> folders</span>${countedAt ? html`<span class="mut">counted ${ago(countedAt)}</span>` : ''}` : html`<span class="mut">Files not counted yet.</span>`}
@@ -391,7 +414,16 @@
               <td class="num">${num(c?.files)}</td><td class="num">${num(c?.folders)}</td></tr>`;
           })}</tbody></table></div>
       </section>
-      <section class="panel" data-region="memory">${memoryPanel(d.memory)}</section>`;
+      <section class="panel" data-region="memory">${memoryPanel(d.memory)}</section>
+      ${allPools()}`;
+  }
+  function allPools() {
+    const pools = S.app?.pools || [];
+    return html`<section class="panel flush"><h2>All pools</h2><div class="table-wrap" data-region="pools"><table class="t"><thead><tr><th>Pool</th><th>Health</th><th class="num">Size</th><th class="num">Allocated</th><th class="num">Free</th><th>Capacity</th><th class="num">Fragmentation</th><th class="num">Dedup</th><th>Last scrub</th><th class="num">Device issues</th></tr></thead><tbody>
+      ${pools.map((p) => html`<tr tabindex="0" data-act="select-pool" data-key="${p.name}" aria-selected="${p.name === S.pool}" class="${tone(p.health) === 'ok' ? '' : tone(p.health)}"><td class="mono">${p.name}</td><td>${chip(p.health || 'UNKNOWN', tone(p.health))}</td><td class="num">${bytes(p.size)}</td><td class="num">${bytes(p.allocated)}</td><td class="num">${bytes(p.free)}</td>
+        <td><span class="bar thin"><i class="${p.capacityPercent > 90 ? 'fill-bad' : p.capacityPercent > 80 ? 'fill-warn' : 'fill-accent'}" data-w="${p.capacityPercent ?? 0}"></i></span> ${p.capacityPercent ?? '–'}%</td>
+        <td class="num">${p.fragmentationPercent ?? '–'}%</td><td class="num">${p.dedupRatio || '–'}</td><td>${scanText(p.scan)}</td><td class="num">${p.deviceProblems || 0}</td></tr>`)}
+    </tbody></table></div></section>`;
   }
   function memoryPanel(m) {
     const arc = m?.arc;
@@ -400,7 +432,7 @@
     const ddt = (m.dedupTables || []).reduce((s, t) => s + (t.item2 || 0), 0);
     return html`<h2>ZFS memory (ARC)</h2>
       <div class="row wide-gap">
-        <div><div class="big">${bytes(arc.size)}</div><span class="mut">target ${bytes(arc.target)} · max ${bytes(arc.max)}</span></div>
+        <div><div class="big">${bytes(arc.size)}</div><span class="mut">target ${bytes(arc.target)} · min ${bytes(arc.min)} · max ${bytes(arc.max)}</span></div>
         <div><div class="big">${pct(arc.hitRatio, 1)}</div><span class="mut">hits (${num(arc.hits)} / ${num(arc.misses)} misses)</span></div>
         ${arc.l2Size > 0 ? html`<div><div class="big">${bytes(arc.l2Size)}</div><span class="mut">L2ARC, ${pct(arc.l2HitRatio, 1)} hits</span></div>` : ''}
         ${ddt > 0 ? html`<div><div class="big">${bytes(ddt)}</div><span class="mut">dedup tables</span></div>` : ''}
@@ -422,6 +454,9 @@
     ['dedup', 'Deduplication', ['off', 'on', 'verify', 'sha256', 'sha256,verify', 'blake3', 'edonr,verify']],
     ['sync', 'Sync writes', ['standard', 'always', 'disabled']],
   ];
+  const OTHER = '__other__';
+  // What zfs accepts as compression, dedup or sync values: zstd-5, gzip-4, skein,verify…
+  const FEATURE_VALUE = /^[a-z0-9][a-z0-9,-]{0,31}$/;
   function drawDatasets() {
     const d = S.data.datasets;
     const ds = d.list.find((x) => x.name === S.sel.dataset);
@@ -443,8 +478,8 @@
             <h2>Features for new writes</h2>
             <div class="features">${FEATURES.map(([name, label, values]) => {
               const current = prop(name), chosen = changes[name] ?? current;
-              const list = values.includes(current) || !current ? values : [current, ...values];
-              return html`<label for="f-${name}">${label}</label><select id="f-${name}" data-change="prop" data-prop="${name}" class="${changes[name] !== undefined ? 'changed' : ''}">${list.map((v) => html`<option${attr(v === chosen, 'selected')}>${v}</option>`)}</select>`;
+              const list = [...new Set([current, chosen, ...values].filter(Boolean))];
+              return html`<label for="f-${name}">${label}</label><select id="f-${name}" data-change="prop" data-prop="${name}" class="${changes[name] !== undefined ? 'changed' : ''}">${list.map((v) => html`<option${attr(v === chosen, 'selected')}>${v}</option>`)}<option value="${OTHER}">Other value…</option></select>`;
             })}</div>
             ${changeCount > 0 ? html`<div class="pending"><span>${changeCount} change${changeCount === 1 ? '' : 's'} not applied</span><button type="button" class="btn small" data-act="props-undo">Undo</button><button type="button" class="btn small primary" data-act="props-apply">Apply to new writes</button></div>` : ''}
             <details class="help"><summary>What these change</summary><p>Changes apply to data written afterwards; existing blocks keep their compression and dedup state. Dedup needs RAM for its table and pays off only for genuinely duplicate data. sync=disabled is faster but loses the last seconds of writes on a power cut.</p></details>`
@@ -599,11 +634,14 @@
   }
 
   // --- Performance ------------------------------------------------------------------
+  // One sampler for the Performance view and the Overview's activity panel:
+  // it runs while either is on screen and keeps the last five minutes.
+  const WINDOW_SECONDS = 300;
   let rateTimer = null;
   function scheduleRates(now) {
     clearTimeout(rateTimer);
     rateTimer = null;
-    if (S.view !== 'performance' || S.rates.paused || S.minimized || !S.app?.brokerAvailable || !S.pool) return;
+    if (!['performance', 'overview'].includes(S.view) || S.rates.paused || S.minimized || !S.app?.brokerAvailable || !S.pool) return;
     rateTimer = setTimeout(sampleRates, now ? 0 : S.rates.every * 1000);
   }
   async function sampleRates() {
@@ -612,17 +650,18 @@
     try {
       const d = await call('rates.sample', { pool: S.pool });
       if (!d.pending && r.pool === S.pool) {
-        r.series.push({ t: d.sampledAt, rb: d.total.readBytesPerSecond, wb: d.total.writeBytesPerSecond, ri: d.total.readIops, wi: d.total.writeIops });
-        if (r.series.length > 120) r.series.shift();
+        const t = Date.now();
+        r.series.push({ t, rb: d.total.readBytesPerSecond, wb: d.total.writeBytesPerSecond, ri: d.total.readIops, wi: d.total.writeIops });
+        // One sample older than the window keeps the line reaching its left edge.
+        while (r.series.length > 2 && r.series[1].t < t - WINDOW_SECONDS * 1000) r.series.shift();
       }
       r.last = d;
-      S.data.performance = r;
       S.errors.performance = null;
     } catch (e) {
       S.errors.performance = e;
       setStatus(`Performance: ${e.message}`);
     }
-    if (S.view === 'performance') drawView();
+    if (S.view === 'performance' || S.view === 'overview') drawView();
     scheduleRates();
   }
   function niceMax(m) {
@@ -630,40 +669,47 @@
     const p = 10 ** Math.floor(Math.log10(m)), f = m / p;
     return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
   }
-  function chart(series, metric, every) {
-    const W = 760, H = 230, L = 56, R = 14, T = 10, B = 26;
-    const read = series.map((s) => (metric === 'mb' ? s.rb / 1048576 : s.ri));
-    const write = series.map((s) => (metric === 'mb' ? s.wb / 1048576 : s.wi));
+  const MEASURES = {
+    mb: { title: 'Throughput', unit: 'MB/s', read: (s) => s.rb / 1048576, write: (s) => s.wb / 1048576, text: (v) => v.toFixed(1) },
+    iops: { title: 'Operations', unit: 'IOPS', read: (s) => s.ri, write: (s) => s.wi, text: (v) => num(Math.round(v)) },
+  };
+  // Read and write over the last five minutes, on a time axis.
+  function chart(series, kind, small) {
+    const m = MEASURES[kind];
+    // A narrower drawing for the small charts keeps their labels readable.
+    const W = small ? 420 : 520, H = small ? 160 : 230, L = 48, R = 14, T = 10, B = 26;
+    const end = series.length ? series[series.length - 1].t : Date.now(), start = end - WINDOW_SECONDS * 1000;
+    const read = series.map(m.read), write = series.map(m.write);
     // Four gridline steps, each a round number.
     const max = niceMax(Math.max(0, ...read, ...write) * 1.05 / 4) * 4;
-    const n = 120;
-    const x = (i) => L + (W - L - R) * (n - series.length + i) / (n - 1);
+    const x = (t) => L + (W - L - R) * Math.max(0, (t - start) / (WINDOW_SECONDS * 1000));
     const y = (v) => T + (H - T - B) * (1 - v / max);
-    const label = (v) => (v >= 10000 ? `${(v / 1000).toFixed(0)}k` : v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(0) : v.toFixed(1));
+    const label = (v) => (v >= 10000 ? `${(v / 1000).toFixed(0)}k` : v >= 10 ? v.toFixed(0) : v.toFixed(1));
     const grid = [0, 1, 2, 3, 4].map((i) => { const v = max * i / 4, yy = y(v); return html`<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}"></line><text x="${L - 8}" y="${yy + 4}" text-anchor="end">${label(v)}</text>`; });
-    const ticks = [0, 30, 60, 90, 119].map((i) => { const xx = L + (W - L - R) * i / (n - 1); const secs = (n - 1 - i) * every; return html`<text x="${xx}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === 119 ? 'end' : 'middle'}">${i === 119 ? 'now' : secs >= 60 ? `−${(secs / 60).toFixed(secs % 60 ? 1 : 0)} min` : `−${secs} s`}</text>`; });
-    const line = (values) => values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-    const area = (values) => (values.length ? `${x(0).toFixed(1)},${H - B} ${line(values)} ${x(values.length - 1).toFixed(1)},${H - B}` : '');
-    const dot = (values, cls) => (values.length ? html`<circle class="${cls}" cx="${x(values.length - 1)}" cy="${y(values[values.length - 1])}" r="4"></circle>` : '');
-    return html`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Read and write ${metric === 'mb' ? 'throughput' : 'operations'} over the last ${n} samples">
+    const ticks = [5, 4, 3, 2, 1, 0].map((min) => html`<text x="${x(end - min * 60000)}" y="${H - 6}" text-anchor="${min === 5 ? 'start' : min === 0 ? 'end' : 'middle'}">${min === 0 ? 'now' : `−${min} min`}</text>`);
+    const line = (values) => values.map((v, i) => `${x(series[i].t).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    const area = (values) => `${x(series[0].t).toFixed(1)},${H - B} ${line(values)} ${x(end).toFixed(1)},${H - B}`;
+    const dot = (values, cls) => (values.length ? html`<circle class="${cls}" cx="${x(end)}" cy="${y(values[values.length - 1])}" r="4"></circle>` : '');
+    return html`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Read and write ${m.unit} over the last five minutes">
       <g class="grid">${grid}${ticks}</g>
       ${series.length > 1 ? html`<polygon class="read-area" points="${area(read)}"></polygon><polygon class="write-area" points="${area(write)}"></polygon><polyline class="read" points="${line(read)}"></polyline><polyline class="write" points="${line(write)}"></polyline>` : ''}
       ${dot(read, 'read-dot')}${dot(write, 'write-dot')}
-      ${series.length < 2 ? html`<text x="${(L + W - R) / 2}" y="${H / 2}" text-anchor="middle">Collecting samples…</text>` : ''}</svg>`;
+      ${series.length < 2 ? html`<text x="${(L + W - R) / 2}" y="${(T + H - B) / 2}" text-anchor="middle">Collecting samples…</text>` : ''}</svg>`;
+  }
+  function chartPanel(kind, small) {
+    const r = S.rates, m = MEASURES[kind], last = r.series[r.series.length - 1];
+    return html`<section class="panel chart"><h2>${m.title}, last 5 minutes</h2>
+      <div data-region="chart-${kind}"><div class="legend chart-legend"><span><b class="read-key"></b>Read <strong>${last ? `${m.text(m.read(last))} ${m.unit}` : '–'}</strong></span><span><b class="write-key"></b>Write <strong>${last ? `${m.text(m.write(last))} ${m.unit}` : '–'}</strong></span></div>
+      ${chart(r.series, kind, small)}</div></section>`;
   }
   function drawPerformance() {
-    const r = S.rates, d = r.last, last = r.series[r.series.length - 1];
-    const unit = r.metric === 'mb' ? 'MB/s' : 'IOPS';
-    const value = (b, i) => (r.metric === 'mb' ? (b / 1048576).toFixed(1) : num(Math.round(i)));
+    const r = S.rates, d = r.last;
     return html`
       <div class="vhead"><h1>Performance</h1><span class="sub">${S.pool}</span>
         <div class="actions">
-          <label for="rate-every" class="mut">Every</label><select id="rate-every" data-change="rate-every">${[1, 2, 5, 10, 30, 60].map((s) => html`<option value="${s}"${attr(s === r.every, 'selected')}>${s} s</option>`)}</select>
-          <div class="seg" role="group" aria-label="Measure"><button type="button" data-act="rate-metric" data-metric="mb" aria-pressed="${r.metric === 'mb'}">MB/s</button><button type="button" data-act="rate-metric" data-metric="iops" aria-pressed="${r.metric === 'iops'}">IOPS</button></div>
+          <label for="rate-every" class="mut">Sample every</label><select id="rate-every" data-change="rate-every">${[1, 2, 5, 10, 30, 60].map((s) => html`<option value="${s}"${attr(s === r.every, 'selected')}>${s} s</option>`)}</select>
           <button type="button" class="btn" data-act="rate-pause">${r.paused ? 'Resume' : 'Pause'}</button></div></div>
-      <section class="panel chart"><h2>${r.metric === 'mb' ? 'Throughput' : 'Operations per second'}</h2>
-        <div data-region="chart"><div class="legend chart-legend"><span><b class="read-key"></b>Read <strong>${last ? `${value(last.rb, last.ri)} ${unit}` : '–'}</strong></span><span><b class="write-key"></b>Write <strong>${last ? `${value(last.wb, last.wi)} ${unit}` : '–'}</strong></span></div>
-        ${chart(r.series, r.metric, r.every)}</div></section>
+      <div class="charts">${chartPanel('mb')}${chartPanel('iops')}</div>
       <div class="split">
         <section class="panel flush"><h2>Devices</h2><div class="table-wrap" data-region="devices">${d && !d.pending ? html`<table class="t"><thead><tr><th>Device</th><th class="num">Read MB/s</th><th class="num">Write MB/s</th><th class="num">Read IOPS</th><th class="num">Write IOPS</th></tr></thead><tbody>
           <tr><td class="mono"><b>${S.pool} (pool)</b></td><td class="num">${(d.total.readBytesPerSecond / 1048576).toFixed(1)}</td><td class="num">${(d.total.writeBytesPerSecond / 1048576).toFixed(1)}</td><td class="num">${num(Math.round(d.total.readIops))}</td><td class="num">${num(Math.round(d.total.writeIops))}</td></tr>
@@ -720,6 +766,12 @@
   // --- actions --------------------------------------------------------------------------
   const ACT = {
     goto: (ds) => show(ds.view),
+    refresh: async () => {
+      await refresh();
+      if (S.view === 'performance' || S.view === 'overview') scheduleRates(true);
+      setStatus(`Refreshed at ${new Date().toLocaleTimeString()}.`);
+    },
+    'select-pool': (ds) => { CHANGE.pool({ value: ds.key }); },
     'report-save': async () => {
       try { const file = await call('report.save'); if (file) toast(`Saved ${file}.`); } catch (e) { errorDialog('Save report failed', e); }
     },
@@ -838,7 +890,6 @@
       token: S.pool, action: (confirm) => call('pool.clear', { pool: S.pool, confirm }),
     }),
 
-    'rate-metric': (ds) => { S.rates.metric = ds.metric; drawView(); },
     'rate-pause': () => { S.rates.paused = !S.rates.paused; drawView(); scheduleRates(true); },
 
     service: (ds) => {
@@ -875,6 +926,7 @@
     'keep-mounted': (el) => call('snapshots.keepMounted', { value: el.checked }).catch((e) => errorDialog('Keep mounts', e)),
     prop: (el) => {
       const dataset = S.sel.dataset, name = el.dataset.prop;
+      if (el.value === OTHER) { otherValue(dataset, name); return; }
       const current = S.data.datasets.properties.find((p) => p.name === name)?.value;
       const changes = (S.pendingProps[dataset] ||= {});
       if (el.value === current) delete changes[name]; else changes[name] = el.value;
@@ -882,6 +934,22 @@
     },
     'rate-every': (el) => { S.rates.every = Number(el.value); drawView(); scheduleRates(); },
   };
+  function otherValue(dataset, name) {
+    const label = FEATURES.find((f) => f[0] === name)[1];
+    const current = S.pendingProps[dataset]?.[name] ?? S.data.datasets.properties.find((p) => p.name === name)?.value ?? '';
+    openDialog(html`<form><div class="dh"><span class="eyebrow">${dataset}</span><h2>Another ${label.toLowerCase()} value</h2></div>
+      <div class="db"><label class="field">Value, as zfs set takes it (for example ${name === 'compression' ? 'zstd-5 or gzip-4' : name === 'dedup' ? 'skein,verify' : 'standard'})<input type="text" name="value" value="${current}" autofocus spellcheck="false" autocomplete="off"></label>
+        <p class="hint">It is applied with the other changes; zfs refuses a value it does not know.</p><p class="error" hidden></p></div>
+      <div class="df"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Use this value</button></div></form>`, {
+      onSubmit: (f) => {
+        const value = String(f.get('value')).trim().toLowerCase();
+        if (!FEATURE_VALUE.test(value)) throw new HostError({ message: 'Use lowercase letters, digits, commas and hyphens, as zfs does.' });
+        const changes = (S.pendingProps[dataset] ||= {});
+        if (value === S.data.datasets.properties.find((p) => p.name === name)?.value) delete changes[name]; else changes[name] = value;
+        return true;
+      },
+    }).then(() => drawView());
+  }
   const INPUT = {
     'prop-filter': (el) => { S.propFilter = el.value; drawView(); },
   };

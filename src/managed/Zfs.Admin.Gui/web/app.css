@@ -25,7 +25,9 @@ button, select, input, textarea { font: inherit; color: inherit; }
 /* --- frame ------------------------------------------------------------------ */
 .titlebar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--card); border-bottom: 1px solid var(--line); }
 .logo { width: 18px; height: 18px; border-radius: 4px; background: linear-gradient(135deg, var(--accent), var(--c1)); }
-.app-name { font-weight: 600; }
+.app-name { font-weight: 600; white-space: nowrap; }
+.titlebar .btn, .edition { white-space: nowrap; }
+@media (max-width: 820px) { .app-name { display: none; } }
 .context { display: flex; align-items: center; gap: 8px; margin-left: 14px; }
 .context label { color: var(--mut); }
 .titlebar-end { margin-left: auto; display: flex; align-items: center; gap: 10px; }
@@ -162,6 +164,7 @@ table.t th.num, table.t td.num { text-align: right; }
 .disk .chip { justify-self: start; }
 
 /* charts */
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
 .chart svg { width: 100%; height: auto; display: block; }
 .chart .grid line { stroke: var(--line); }
 .chart text { fill: var(--mut); font-size: 11px; font-family: var(--f-ui); }
