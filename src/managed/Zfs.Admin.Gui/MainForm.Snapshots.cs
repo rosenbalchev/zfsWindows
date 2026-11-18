@@ -25,21 +25,21 @@ sealed partial class MainForm
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(4) };
         top.Controls.Add(new Label { Text = "Dataset:", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(snapshotDataset);
-        snapshotDataset.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowSnapshotsAsync(); };
+        snapshotDataset.SelectedIndexChanged += async (_, _) => await ShowSnapshotsAsync();
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, Width = 320, Padding = new Padding(8) };
-        void Action(string text, Func<Task> handler, ButtonWeight weight = ButtonWeight.Default)
+        void Action(string text, Func<Task> handler)
         {
-            var b = new Button { Text = text, Width = 290, Height = 34 }.Weighted(weight);
+            var b = new Button { Text = text, Width = 290, Height = 34 };
             b.Click += async (_, _) => await handler();
             actions.Controls.Add(b);
         }
-        Action("Create snapshot…", CreateSnapshotAsync, ButtonWeight.Primary);
+        Action("Create snapshot…", CreateSnapshotAsync);
         Action("Mount temporarily (read-only)…", MountSnapshotAsync);
         Action("Open in Explorer", () => { OpenMounted(); return Task.CompletedTask; });
         Action("Unmount", UnmountSnapshotAsync);
-        Action("Restore dataset (roll back)…", RollbackAsync, ButtonWeight.Danger);
-        Action("Destroy snapshot…", DestroySnapshotAsync, ButtonWeight.Danger);
+        Action("Restore dataset (roll back)…", RollbackAsync);
+        Action("Destroy snapshot…", DestroySnapshotAsync);
         actions.Controls.Add(keepMounted);
         actions.Controls.Add(new Label
         {
@@ -266,6 +266,13 @@ sealed class MountPointDialog : Form
 
     public string? MountPoint => useLetter.Checked ? letter.SelectedItem as string : folder.Text.Trim();
 
+    /// <summary>Drive letters G: to Z: that nothing uses, Z: first.</summary>
+    public static IReadOnlyList<string> FreeDriveLetters()
+    {
+        var used = Environment.GetLogicalDrives().Select(d => char.ToUpperInvariant(d[0])).ToHashSet();
+        return Enumerable.Range('G', 'Z' - 'G' + 1).Reverse().Select(c => (char)c).Where(c => !used.Contains(c)).Select(c => $"{c}:").ToList();
+    }
+
     public MountPointDialog(string snapshot)
     {
         Text = $"Mount {snapshot} read-only";
@@ -275,10 +282,7 @@ sealed class MountPointDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MinimizeBox = MaximizeBox = false;
         Font = SystemFonts.MessageBoxFont;
-        var used = Environment.GetLogicalDrives().Select(d => char.ToUpperInvariant(d[0])).ToHashSet();
-        for (char c = 'Z'; c >= 'G'; c--)
-            if (!used.Contains(c))
-                letter.Items.Add($"{c}:");
+        letter.Items.AddRange(FreeDriveLetters().Select(l => (object)l).ToArray());
         if (letter.Items.Count > 0)
             letter.SelectedIndex = 0;
         var browse = new Button { Text = "Browse…", AutoSize = true };

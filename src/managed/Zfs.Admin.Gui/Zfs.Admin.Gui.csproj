@@ -27,10 +27,14 @@
   <ItemGroup>
     <ProjectReference Include="..\Zfs.Admin\Zfs.Admin.csproj" />
     <PackageReference Include="System.Management" Version="10.0.0" />
-    <!-- The tab content uses WebView2 when its runtime is installed; only the
-         loader is bundled. Without it, native WinForms controls remain available. -->
+    <!-- The window is a web app in WebView2 when its runtime is installed; only
+         the loader is bundled. Without it, the native WinForms tabs remain. -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The web app, served from the exe itself (WebShell.cs): web/index.html, app.css, app.js. -->
+    <EmbeddedResource Include="web\*" LogicalName="web/%(Filename)%(Extension)" />
   </ItemGroup>
   <!-- The package references its WPF control too; a WinForms app needs
        neither it nor the WindowsBase version conflict it brings. -->

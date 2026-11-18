@@ -84,8 +84,10 @@ public static class DashboardHtml
             .Append("<div><span class=\"mut\">Fragmentation</span><b>").Append(p.Pool.FragmentationPercent is long f ? $"{f}%" : "–").Append("</b></div></div>");
         h.Append("</div></div>");
 
-        // Space saved: compression per dataset, dedup, block cloning.
-        long compression = p.Datasets.Sum(d => d.Saved);
+        // Space saved: compression, dedup, block cloning.  A dataset's used
+        // and logicalused include its children, so only the top-most
+        // datasets count (usually the pool's root alone).
+        long compression = TopMost(p.Datasets).Sum(d => d.Saved);
         double dedupRatio = Ratio(p.Pool.DedupRatio);
         long dedup = dedupRatio > 1 ? (long)(used * (dedupRatio - 1)) : 0;
         long clone = p.BlockCloneSaved ?? 0;
@@ -178,6 +180,19 @@ public static class DashboardHtml
             null => "never",
             _ => $"{what} {s.State.ToLowerInvariant()}",
         };
+    }
+
+    /// <summary>The datasets none of whose ancestors is in the list.</summary>
+    public static IEnumerable<DatasetInfo> TopMost(IReadOnlyList<DatasetInfo> datasets)
+    {
+        var names = datasets.Select(d => d.Name).ToHashSet(StringComparer.Ordinal);
+        return datasets.Where(d =>
+        {
+            for (int slash = d.Name.LastIndexOf('/'); slash > 0; slash = d.Name.LastIndexOf('/', slash - 1))
+                if (names.Contains(d.Name[..slash]))
+                    return false;
+            return true;
+        });
     }
 
     static double Ratio(string? text) =>

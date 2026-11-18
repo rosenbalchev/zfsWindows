@@ -16,10 +16,13 @@ sealed partial class MainForm : Form
     readonly ToolStripStatusLabel editionStatus = new() { TextAlign = ContentAlignment.MiddleRight };
     readonly ToolStripLabel editionBadge = new() { Alignment = ToolStripItemAlignment.Right, Font = new Font(SystemFonts.MessageBoxFont!, FontStyle.Bold) };
     readonly TabControl tabs = new() { Dock = DockStyle.Fill };
+    readonly ToolStrip toolbar = new() { GripStyle = ToolStripGripStyle.Hidden };
+    readonly StatusStrip statusBar = new();
     readonly System.Windows.Forms.Timer autoRefresh = new() { Interval = 5000 };
     TabPage userModePage = null!;
     string edition = "";
     bool refreshing;
+    readonly Task webInitialized = Task.CompletedTask;
 
     /// <summary>--screenshots: render every tab to a PNG in this folder, then close.</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -55,14 +58,12 @@ sealed partial class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         Font = SystemFonts.MessageBoxFont;
 
-        var tools = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
         var refresh = new ToolStripButton("Refresh") { DisplayStyle = ToolStripItemDisplayStyle.Text };
         refresh.Click += async (_, _) => await RefreshAllAsync();
         var save = new ToolStripButton("Save report…") { DisplayStyle = ToolStripItemDisplayStyle.Text };
         save.Click += async (_, _) => await SaveReportAsync();
-        tools.Items.AddRange([refresh, save, editionBadge]);
-        var status = new StatusStrip();
-        status.Items.AddRange([statusText, editionStatus]);
+        toolbar.Items.AddRange([refresh, save, editionBadge]);
+        statusBar.Items.AddRange([statusText, editionStatus]);
 
         tabs.TabPages.Add(OverviewPage());
         tabs.TabPages.Add(PoolsPage());
@@ -72,10 +73,9 @@ sealed partial class MainForm : Form
         tabs.TabPages.Add(IntegrityPage());
         tabs.TabPages.Add(RatesPage());
         tabs.TabPages.Add(userModePage = UserModePage());
-        RegisterWebHosts();
         Controls.Add(tabs);
-        Controls.Add(tools);
-        Controls.Add(status);
+        Controls.Add(toolbar);
+        Controls.Add(statusBar);
         Shown += async (_, _) =>
         {
             edition = Edition.Detect();
@@ -83,24 +83,23 @@ sealed partial class MainForm : Form
             editionStatus.Text = edition;
             await RefreshAllAsync();
             if (ScreenshotDirectory is not null)
+            {
+                await webInitialized;
                 await TakeScreenshotsAsync(ScreenshotDirectory);
+            }
             else
                 autoRefresh.Start();
         };
-        // Every 5 s: the tab in view, never while minimized or busy.
+        // Every 5 s: the tab in view, never while minimized or busy (the web app refreshes itself).
         autoRefresh.Tick += async (_, _) => await RefreshVisibleAsync();
-        tabs.SelectedIndexChanged += async (_, _) =>
-        {
-            MoveWebViewToSelectedTab();
-            await RefreshVisibleAsync();
-        };
+        tabs.SelectedIndexChanged += async (_, _) => await RefreshVisibleAsync();
         FormClosing += OnClosing;
-        _ = InitializeWebViewAsync();
+        webInitialized = InitializeWebViewAsync();
     }
 
     async Task RefreshVisibleAsync()
     {
-        if (refreshing || WindowState == FormWindowState.Minimized || !brokerAvailable || !tabs.Enabled)
+        if (refreshing || WebActive || WindowState == FormWindowState.Minimized || !brokerAvailable || !tabs.Enabled)
             return;
         refreshing = true;
         TabPage page = tabs.SelectedTab!;
@@ -122,7 +121,6 @@ sealed partial class MainForm : Form
         finally
         {
             refreshing = false;
-            RenderSelectedWebPage();
         }
     }
 
@@ -145,7 +143,7 @@ sealed partial class MainForm : Form
         var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         foreach (var (label, action) in new[] { ("Start scrub", "start"), ("Pause scrub", "pause"), ("Stop scrub", "stop") })
         {
-            var b = new Button { Text = label, AutoSize = true }.Weighted(action == "start" ? ButtonWeight.Primary : ButtonWeight.Default);
+            var b = new Button { Text = label, AutoSize = true };
             b.Click += async (_, _) =>
             {
                 if (SelectedPool() is string pool)
@@ -160,7 +158,7 @@ sealed partial class MainForm : Form
         bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         split.Panel2.Controls.Add(bottom);
         page.Controls.Add(split);
-        pools.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowPoolAsync(); };
+        pools.SelectedIndexChanged += async (_, _) => await ShowPoolAsync();
         return page;
     }
 
@@ -188,7 +186,7 @@ sealed partial class MainForm : Form
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         split.Panel2.Controls.Add(right);
         page.Controls.Add(split);
-        datasets.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowDatasetAsync(); };
+        datasets.SelectedIndexChanged += async (_, _) => await ShowDatasetAsync();
         return page;
     }
 
@@ -211,20 +209,20 @@ sealed partial class MainForm : Form
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(4) };
         top.Controls.Add(new Label { Text = "Pool:", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(devicePool);
-        devicePool.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowDevicesAsync(); };
+        devicePool.SelectedIndexChanged += async (_, _) => await ShowDevicesAsync();
         var actions = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, Width = 320, Padding = new Padding(8) };
-        void Action(string text, Func<Task> handler, ButtonWeight weight = ButtonWeight.Default)
+        void Action(string text, Func<Task> handler)
         {
             // Two lines' height: the longer captions wrap instead of being cut.
-            var b = new Button { Text = text, Width = 290, Height = 44 }.Weighted(weight);
+            var b = new Button { Text = text, Width = 290, Height = 44 };
             b.Click += async (_, _) => await handler();
             actions.Controls.Add(b);
         }
         Action("Add mirror device to selected disk…", AddMirrorAsync);
-        Action("Remove selected disk from its mirror", DetachMirrorAsync, ButtonWeight.Danger);
+        Action("Remove selected disk from its mirror", DetachMirrorAsync);
         Action("Add read cache (L2ARC)…", () => AddCacheAsync("cache"));
         Action("Add write log (SLOG)…", () => AddCacheAsync("log"));
-        Action("Remove selected cache or log device", RemoveCacheAsync, ButtonWeight.Danger);
+        Action("Remove selected cache or log device", RemoveCacheAsync);
         deviceHelp.Text = "A mirror keeps a full copy on every member; ZFS resilvers a new member automatically.  " +
                           "A read cache (L2ARC) is a fast device that holds data evicted from RAM.  " +
                           "A write log (SLOG) speeds up synchronous writes; mirror it, because it holds writes not yet on the pool.";
@@ -247,14 +245,14 @@ sealed partial class MainForm : Form
         top.Controls.Add(serviceLabel);
         foreach (var (label, action) in new[] { ("Start", "start"), ("Stop (unmount and export)", "stop"), ("Restart", "restart") })
         {
-            var b = new Button { Text = label, AutoSize = true }.Weighted(action == "stop" ? ButtonWeight.Danger : ButtonWeight.Default);
+            var b = new Button { Text = label, AutoSize = true };
             b.Click += async (_, _) => await RunAsync($"{label} {UserModeMounts.ServiceName}", () => UserModeService.ControlAsync(action));
             top.Controls.Add(b);
         }
         var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(4) };
-        var add = new Button { Text = "Add mount…", AutoSize = true }.Weighted(ButtonWeight.Primary);
+        var add = new Button { Text = "Add mount…", AutoSize = true };
         var edit = new Button { Text = "Edit…", AutoSize = true };
-        var remove = new Button { Text = "Remove", AutoSize = true }.Weighted(ButtonWeight.Danger);
+        var remove = new Button { Text = "Remove", AutoSize = true };
         add.Click += (_, _) => EditMount(null);
         edit.Click += (_, _) => { if (SelectedMount() is UserModeMount m) EditMount(m); };
         remove.Click += (_, _) =>
@@ -280,6 +278,8 @@ sealed partial class MainForm : Form
 
     async Task RefreshAllAsync()
     {
+        if (WebActive)
+            return;
         UseWaitCursor = true;
         try
         {
@@ -315,7 +315,6 @@ sealed partial class MainForm : Form
         finally
         {
             UseWaitCursor = false;
-            RenderSelectedWebPage();
         }
     }
 

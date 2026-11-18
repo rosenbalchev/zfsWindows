@@ -8,9 +8,10 @@ using Zfs.Admin;
 namespace Zfs.Admin.Gui;
 
 /// <summary>
-/// The tabs share WebView2 when available. Without its runtime (Windows LTSC
-/// and Server), Overview opens from %LOCALAPPDATA%\OpenZFS\dashboard.html;
-/// the WinForms tab controls remain usable.
+/// The Overview tab and the WebView2 set-up.  With WebView2 the window is the
+/// web app (MainForm.WebApp.cs).  Without its runtime (Windows LTSC and
+/// Server) the native tabs remain, and Overview opens from
+/// %LOCALAPPDATA%\OpenZFS\dashboard.html in the browser.
 /// </summary>
 sealed partial class MainForm
 {
@@ -59,20 +60,17 @@ sealed partial class MainForm
             var environment = await CoreWebView2Environment.CreateAsync(null, data);
             web = new WebView2 { Dock = DockStyle.Fill };
             await web.EnsureCoreWebView2Async(environment);
-            web.CoreWebView2.Settings.AreDevToolsEnabled = false;
-            web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-            web.CoreWebView2.Settings.IsScriptEnabled = true;
-            web.CoreWebView2.Settings.IsStatusBarEnabled = false;
-            web.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
-            // Only our local data pages are allowed; Web UI actions use a validated message allowlist.
-            web.CoreWebView2.NavigationStarting += (_, e) =>
-            {
-                if (!e.Uri.StartsWith("data:", StringComparison.Ordinal) && !e.Uri.StartsWith("about:", StringComparison.Ordinal))
-                    e.Cancel = true;
-            };
+            CoreWebView2Settings settings = web.CoreWebView2.Settings;
+            settings.AreDevToolsEnabled = false;
+            settings.AreDefaultContextMenusEnabled = false;
+            settings.IsStatusBarEnabled = false;
+            settings.IsZoomControlEnabled = false;
+            settings.AreBrowserAcceleratorKeysEnabled = false;
+            settings.IsPasswordAutosaveEnabled = false;
+            settings.IsGeneralAutofillEnabled = false;
+            settings.AreHostObjectsAllowed = false;
             overviewFallback.Visible = false;
-            MoveWebViewToSelectedTab();
-            RenderSelectedWebPage();
+            StartWebApp(environment);
         }
         catch (Exception e) when (e is WebView2RuntimeNotFoundException or COMException or InvalidOperationException or UnauthorizedAccessException)
         {
@@ -96,8 +94,6 @@ sealed partial class MainForm
         lastHtml = comparable;
         if (web is null)
             WriteDashboardFile(html);
-        else if (tabs.SelectedTab?.Text == "Overview")
-            RenderSelectedWebPage();
         if (DateTimeOffset.UtcNow - lastWalk > AutoCountInterval && counting is null)
             _ = CountFilesAsync();
     }
@@ -188,8 +184,11 @@ sealed partial class MainForm
             countNow.Enabled = true;
             countCancel.Enabled = false;
         }
-        lastHtml = "";
-        await ShowOverviewAsync();
+        if (!WebActive)
+        {
+            lastHtml = "";
+            await ShowOverviewAsync();
+        }
     }
 
     void WriteDashboardFile(string html)
@@ -213,7 +212,7 @@ sealed partial class MainForm
         Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { DashboardFile } });
     }
 
-    async Task SaveReportAsync()
+    async Task<string?> SaveReportAsync()
     {
         DashboardData data;
         try
@@ -223,16 +222,17 @@ sealed partial class MainForm
         catch (AdminException e)
         {
             Error("Save report", e);
-            return;
+            return null;
         }
         using var dialog = new SaveFileDialog
         {
             Title = "Save report", Filter = "Web page (*.html)|*.html", FileName = $"openzfs-report-{DateTime.Now:yyyyMMdd-HHmm}.html",
         };
         if (dialog.ShowDialog(this) != DialogResult.OK)
-            return;
+            return null;
         File.WriteAllText(dialog.FileName, DashboardHtml.Render(data));
         statusText.Text = $"Saved {dialog.FileName}.";
+        return dialog.FileName;
     }
 
     static bool IsTemporary(string dataset) => dataset.Contains($"/{Operations.TemporaryParent}", StringComparison.Ordinal);

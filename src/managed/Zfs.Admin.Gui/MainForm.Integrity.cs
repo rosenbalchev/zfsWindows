@@ -20,14 +20,14 @@ sealed partial class MainForm
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(4) };
         top.Controls.Add(new Label { Text = "Pool:", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
         top.Controls.Add(integrityPool);
-        integrityPool.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowIntegrityAsync(); };
-        var scrub = new Button { Text = "Start scrub", AutoSize = true }.Weighted(ButtonWeight.Primary);
+        integrityPool.SelectedIndexChanged += async (_, _) => await ShowIntegrityAsync();
+        var scrub = new Button { Text = "Start scrub", AutoSize = true };
         scrub.Click += async (_, _) =>
         {
             if (integrityPool.SelectedItem is string pool)
                 await RunAsync($"Start scrub on {pool}", () => client.ScrubAsync(pool, "start"));
         };
-        var clear = new Button { Text = "Clear error counters…", AutoSize = true }.Weighted(ButtonWeight.Danger);
+        var clear = new Button { Text = "Clear error counters…", AutoSize = true };
         clear.Click += async (_, _) =>
         {
             if (integrityPool.SelectedItem is string pool && Confirm($"Reset the READ, WRITE and CKSUM counters of every device in {pool} (zpool clear)?\r\n\r\n" +
