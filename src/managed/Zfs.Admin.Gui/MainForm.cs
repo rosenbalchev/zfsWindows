@@ -32,13 +32,13 @@ sealed partial class MainForm : Form
 
     // Datasets
     readonly ListView datasets = NewList(("Dataset", 220), ("Used", 90), ("Available", 90), ("Compression", 90), ("Mounted at", 160));
-    readonly ComboBox compression = Choice(AdminClient.CompressionValues);
-    readonly ComboBox dedup = Choice(AdminClient.DedupValues);
-    readonly ComboBox sync = Choice(AdminClient.SyncValues);
+    readonly ComboBox compression = Choice(AdminClient.CompressionValues, "Compression");
+    readonly ComboBox dedup = Choice(AdminClient.DedupValues, "Deduplication");
+    readonly ComboBox sync = Choice(AdminClient.SyncValues, "Sync writes");
     readonly ListView properties = NewList(("Property", 160), ("Value", 200), ("Source", 120));
 
     // Devices
-    readonly ComboBox devicePool = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+    readonly ComboBox devicePool = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200, AccessibleName = "Pool" };
     readonly TreeView deviceTree = new() { Dock = DockStyle.Fill, HideSelection = false };
     readonly Label deviceHelp = new() { AutoSize = true, MaximumSize = new Size(300, 0), Padding = new Padding(4) };
 
@@ -145,7 +145,7 @@ sealed partial class MainForm : Form
         var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         foreach (var (label, action) in new[] { ("Start scrub", "start"), ("Pause scrub", "pause"), ("Stop scrub", "stop") })
         {
-            var b = new Button { Text = label, AutoSize = true };
+            var b = new Button { Text = label, AutoSize = true }.Weighted(action == "start" ? ButtonWeight.Primary : ButtonWeight.Default);
             b.Click += async (_, _) =>
             {
                 if (SelectedPool() is string pool)
@@ -213,18 +213,18 @@ sealed partial class MainForm : Form
         top.Controls.Add(devicePool);
         devicePool.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowDevicesAsync(); };
         var actions = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, Width = 320, Padding = new Padding(8) };
-        void Action(string text, Func<Task> handler)
+        void Action(string text, Func<Task> handler, ButtonWeight weight = ButtonWeight.Default)
         {
             // Two lines' height: the longer captions wrap instead of being cut.
-            var b = new Button { Text = text, Width = 290, Height = 44 };
+            var b = new Button { Text = text, Width = 290, Height = 44 }.Weighted(weight);
             b.Click += async (_, _) => await handler();
             actions.Controls.Add(b);
         }
         Action("Add mirror device to selected disk…", AddMirrorAsync);
-        Action("Remove selected disk from its mirror", DetachMirrorAsync);
+        Action("Remove selected disk from its mirror", DetachMirrorAsync, ButtonWeight.Danger);
         Action("Add read cache (L2ARC)…", () => AddCacheAsync("cache"));
         Action("Add write log (SLOG)…", () => AddCacheAsync("log"));
-        Action("Remove selected cache or log device", RemoveCacheAsync);
+        Action("Remove selected cache or log device", RemoveCacheAsync, ButtonWeight.Danger);
         deviceHelp.Text = "A mirror keeps a full copy on every member; ZFS resilvers a new member automatically.  " +
                           "A read cache (L2ARC) is a fast device that holds data evicted from RAM.  " +
                           "A write log (SLOG) speeds up synchronous writes; mirror it, because it holds writes not yet on the pool.";
@@ -247,14 +247,14 @@ sealed partial class MainForm : Form
         top.Controls.Add(serviceLabel);
         foreach (var (label, action) in new[] { ("Start", "start"), ("Stop (unmount and export)", "stop"), ("Restart", "restart") })
         {
-            var b = new Button { Text = label, AutoSize = true };
+            var b = new Button { Text = label, AutoSize = true }.Weighted(action == "stop" ? ButtonWeight.Danger : ButtonWeight.Default);
             b.Click += async (_, _) => await RunAsync($"{label} {UserModeMounts.ServiceName}", () => UserModeService.ControlAsync(action));
             top.Controls.Add(b);
         }
         var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(4) };
-        var add = new Button { Text = "Add mount…", AutoSize = true };
+        var add = new Button { Text = "Add mount…", AutoSize = true }.Weighted(ButtonWeight.Primary);
         var edit = new Button { Text = "Edit…", AutoSize = true };
-        var remove = new Button { Text = "Remove", AutoSize = true };
+        var remove = new Button { Text = "Remove", AutoSize = true }.Weighted(ButtonWeight.Danger);
         add.Click += (_, _) => EditMount(null);
         edit.Click += (_, _) => { if (SelectedMount() is UserModeMount m) EditMount(m); };
         remove.Click += (_, _) =>
@@ -591,9 +591,9 @@ sealed partial class MainForm : Form
         return list;
     }
 
-    static ComboBox Choice(IReadOnlyList<string> values)
+    static ComboBox Choice(IReadOnlyList<string> values, string name)
     {
-        var box = new ComboBox { Width = 160, DropDownStyle = ComboBoxStyle.DropDown };
+        var box = new ComboBox { Width = 160, DropDownStyle = ComboBoxStyle.DropDown, AccessibleName = name };
         box.Items.AddRange(values.Select(v => (object)v).ToArray());
         return box;
     }

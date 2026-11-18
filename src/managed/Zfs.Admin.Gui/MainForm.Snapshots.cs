@@ -10,7 +10,7 @@ namespace Zfs.Admin.Gui;
 /// </summary>
 sealed partial class MainForm
 {
-    readonly ComboBox snapshotDataset = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
+    readonly ComboBox snapshotDataset = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260, AccessibleName = "Dataset" };
     readonly ListView snapshots = NewList(("Snapshot", 260), ("Created", 150), ("Used", 90), ("Referenced", 90), ("Mounted at", 160));
     readonly CheckBox keepMounted = new() { Text = "Keep temporary mounts when this window closes", AutoSize = false, Size = new Size(290, 40) };
     // Mounted from this window: unmounted when it closes unless keepMounted.
@@ -28,18 +28,18 @@ sealed partial class MainForm
         snapshotDataset.SelectedIndexChanged += async (_, _) => { if (!applyingWebAction) await ShowSnapshotsAsync(); };
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, Width = 320, Padding = new Padding(8) };
-        void Action(string text, Func<Task> handler)
+        void Action(string text, Func<Task> handler, ButtonWeight weight = ButtonWeight.Default)
         {
-            var b = new Button { Text = text, Width = 290, Height = 34 };
+            var b = new Button { Text = text, Width = 290, Height = 34 }.Weighted(weight);
             b.Click += async (_, _) => await handler();
             actions.Controls.Add(b);
         }
-        Action("Create snapshot…", CreateSnapshotAsync);
+        Action("Create snapshot…", CreateSnapshotAsync, ButtonWeight.Primary);
         Action("Mount temporarily (read-only)…", MountSnapshotAsync);
         Action("Open in Explorer", () => { OpenMounted(); return Task.CompletedTask; });
         Action("Unmount", UnmountSnapshotAsync);
-        Action("Restore dataset (roll back)…", RollbackAsync);
-        Action("Destroy snapshot…", DestroySnapshotAsync);
+        Action("Restore dataset (roll back)…", RollbackAsync, ButtonWeight.Danger);
+        Action("Destroy snapshot…", DestroySnapshotAsync, ButtonWeight.Danger);
         actions.Controls.Add(keepMounted);
         actions.Controls.Add(new Label
         {

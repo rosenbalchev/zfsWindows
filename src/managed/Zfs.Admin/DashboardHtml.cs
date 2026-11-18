@@ -204,24 +204,19 @@ public static class DashboardHtml
 
     static string E(string? s) => WebUtility.HtmlEncode(s ?? "");
 
-    static string Css(bool dark)
-    {
-        var (bg, card, line, fg, mut, track) = dark
-            ? ("#1c1c1c", "#2b2b2b", "#3a3a3a", "#f0f0f0", "#a8b0bb", "#3a3f46")
-            : ("#f6f8fb", "#ffffff", "#e4e8ee", "#1b1b1b", "#5f6b7a", "#e8edf3");
-        return $$"""
-            :root{--bg:{{bg}};--card:{{card}};--line:{{line}};--fg:{{fg}};--mut:{{mut}};--track:{{track}};--ok:#2e9d4f;--warn:#c27c0e;--bad:#d23b2c;--c1:#2f9e6f;--c2:#7b5fd0;--c3:#d08a2f;--acc:#2f6fd0}
-            *{box-sizing:border-box}body{margin:0;padding:14px;background:var(--bg);color:var(--fg);font:13px "Segoe UI",system-ui,sans-serif}
+    static string Css(bool dark) =>
+        WebTheme.Tokens(dark) + $$"""
+            *{box-sizing:border-box}body{margin:0;padding:14px;background:var(--bg);color:var(--fg);font:{{WebTheme.Font}}}
             header{display:flex;gap:12px;align-items:baseline;margin-bottom:10px}h1{font-size:16px;margin:0}
-            .edition{padding:2px 10px;border-radius:10px;background:var(--line);font-weight:600;font-size:11px}
+            .edition{padding:2px 10px;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:11px}
             .pool{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-bottom:14px}
             .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}.wide{grid-column:1/-1}
             .card h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);font-weight:600}
             .row{display:flex;gap:24px;align-items:center;flex-wrap:wrap}.big{font-size:24px;font-weight:600}.big small{font-size:12px;font-weight:400;color:var(--mut)}
             .mut{color:var(--mut)}.kv{display:grid;gap:6px}.kv b{display:block;font-size:15px}
-            .pill{display:inline-block;padding:3px 12px;border-radius:10px;font-weight:600;color:#fff}.pill.ok{background:var(--ok)}.pill.warn{background:var(--warn)}.pill.bad{background:var(--bad)}
+            .pill{display:inline-block;padding:3px 12px;border-radius:10px;font-weight:600}.pill.ok{background:var(--ok-soft);color:var(--ok)}.pill.warn{background:var(--warn-soft);color:var(--warn)}.pill.bad{background:var(--bad-soft);color:var(--bad)}
             .okt{color:var(--ok)}.badt{color:var(--bad)}.warnbox{border-color:var(--warn)}
-            .track{stroke:var(--track)}.fill{stroke:var(--acc)}.fillwarn{stroke:var(--warn)}.fillbad{stroke:var(--bad)}
+            .track{stroke:var(--track)}.fill{stroke:var(--accent)}.fillwarn{stroke:var(--warn)}.fillbad{stroke:var(--bad)}
             .ringv{font-size:22px;font-weight:600;fill:var(--fg)}.ringl{font-size:11px;fill:var(--mut)}
             .bars{display:grid;gap:8px;margin-top:10px}.bl{display:flex;justify-content:space-between}
             .hb{height:12px;border-radius:6px;background:var(--track);overflow:hidden;display:flex;margin-top:3px}.hb i{display:block;height:100%}
@@ -230,5 +225,4 @@ public static class DashboardHtml
             table{border-collapse:collapse;width:100%;margin-top:8px}th{text-align:left;color:var(--mut);font-weight:600;border-bottom:1px solid var(--line);padding:3px 6px}
             td{padding:3px 6px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}.num{text-align:right}
             """;
-    }
 }
