@@ -48,6 +48,14 @@
 #define PATH_BYTES (32768 * 3)
 
 /*
+ * WinFsp caches the results of metadata callbacks in the file-system driver.
+ * Keep the cache bounded: ZFS mutations are not currently reported through
+ * WinFsp invalidation notifications, so an infinite timeout would make
+ * directory and security metadata observably stale.
+ */
+#define ZUM_METADATA_TIMEOUT_MS 1000
+
+/*
  * Block cloning.  WinFsp hands a file system only control codes with a
  * custom device type (bit 0x8000), so the standard
  * FSCTL_DUPLICATE_EXTENTS_TO_FILE never arrives here; this code takes the
@@ -1455,7 +1463,20 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
     params.VolumeCreationTime = ((UINT64)now.dwHighDateTime << 32) |
         now.dwLowDateTime;
     params.VolumeSerialNumber = (UINT32)st.fsid_guid;
-    params.FileInfoTimeout = 1000;
+    params.FileInfoTimeout = ZUM_METADATA_TIMEOUT_MS;
+    /*
+     * Use the V1 per-operation timeouts instead of making directory,
+     * security, and volume queries inherit an implicit/default policy.  The
+     * one-second TTL is intentionally conservative: it reduces repeated
+     * callback traffic during workloads such as directory synchronization,
+     * while preserving bounded freshness and ACL correctness.
+     */
+    params.VolumeInfoTimeoutValid = 1;
+    params.DirInfoTimeoutValid = 1;
+    params.SecurityTimeoutValid = 1;
+    params.VolumeInfoTimeout = ZUM_METADATA_TIMEOUT_MS;
+    params.DirInfoTimeout = ZUM_METADATA_TIMEOUT_MS;
+    params.SecurityTimeout = ZUM_METADATA_TIMEOUT_MS;
     params.CaseSensitiveSearch = st.case_sensitive != 0;
     params.CasePreservedNames = 1;
     params.UnicodeOnDisk = 1;
