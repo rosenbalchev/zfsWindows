@@ -2312,14 +2312,77 @@ bridge_snapshot_unmount(const char *snapshot)
     ReleaseSRWLockShared(&table_lock);
 }
 
+/*
+ * A source as the pool's record keeps it.  A pool found by the import scan
+ * on a disk's ZFS partition has the partition's device as its vdev path
+ * ("//?/Harddisk2Partition1"), which the import at start does not open; the
+ * partition's range of its disk, "#offset#length#\\?\PhysicalDriveN", is what
+ * a pool created on the disk records and what a renumbered disk is found
+ * from by name.  Anything else is kept as it is.
+ */
+static void
+stable_source(const char *src, char *out, size_t size)
+{
+    unsigned long disk, part;
+    PARTITION_INFORMATION_EX info;
+    WCHAR dev[64];
+    HANDLE h;
+    DWORD got;
+    const char *name = src;
+    char tail;
+
+    if (strncmp(name, "//?/", 4) == 0 || strncmp(name, "\\\\?\\", 4) == 0 ||
+        strncmp(name, "\\\\.\\", 4) == 0)
+        name += 4;
+    else if (_strnicmp(name, "/dev/", 5) == 0)
+        name += 5;
+    if (sscanf_s(name, "Harddisk%luPartition%lu%c", &disk, &part, &tail,
+        1) != 2 || part == 0) {
+        strncpy_s(out, size, src, _TRUNCATE);
+        return;
+    }
+    swprintf_s(dev, ARRAYSIZE(dev), L"\\\\.\\Harddisk%luPartition%lu", disk,
+        part);
+    h = CreateFileW(dev, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+        OPEN_EXISTING, 0, NULL);
+    if (h != INVALID_HANDLE_VALUE &&
+        DeviceIoControl(h, IOCTL_DISK_GET_PARTITION_INFO_EX, NULL, 0, &info,
+        sizeof (info), &got, NULL))
+        _snprintf_s(out, size, _TRUNCATE, "#%llu#%llu#\\\\?\\PhysicalDrive%lu",
+            (unsigned long long)info.StartingOffset.QuadPart,
+            (unsigned long long)info.PartitionLength.QuadPart, disk);
+    else
+        strncpy_s(out, size, src, _TRUNCATE);
+    if (h != INVALID_HANDLE_VALUE)
+        CloseHandle(h);
+}
+
 static void
 bridge_pool_imported(const char *pool, const char *sources)
 {
     WCHAR key[400], wpool[256], wsrc[4096];
+    char stable[4096] = "", one[1024];
+    const char *p = sources, *end;
     HKEY h;
 
+    /* Each source in the form an import at start can use. */
+    while (*p != '\0') {
+        size_t n;
+
+        end = strchr(p, ';');
+        n = end != NULL ? (size_t)(end - p) : strlen(p);
+        if (n < sizeof (one)) {
+            memcpy(one, p, n);
+            one[n] = '\0';
+            if (stable[0] != '\0')
+                strncat_s(stable, sizeof (stable), ";", _TRUNCATE);
+            stable_source(one, stable + strlen(stable),
+                sizeof (stable) - strlen(stable));
+        }
+        p = end != NULL ? end + 1 : p + n;
+    }
     wide_of(pool, wpool, 256);
-    wide_of(sources, wsrc, 4096);
+    wide_of(stable, wsrc, 4096);
     swprintf_s(key, 400, L"%s\\%s", POOLS_KEY, wpool);
     if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, key, 0, NULL, 0, KEY_WRITE, NULL,
         &h, NULL) == ERROR_SUCCESS) {

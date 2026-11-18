@@ -252,10 +252,19 @@ import_pool(const char *pool, const char *search_path, boolean_t readonly,
      * display path "/dev/physicaldriveN", which no scan can open.
      */
     for (i = 0; error != 0 && i < npaths; i++) {
+        /*
+         * A disk's partition device ("//?/Harddisk2Partition1", recorded
+         * before the engine kept partitions as their disk's range) moves
+         * with the disk number too.
+         */
         if (paths[i][0] == '#' ||
             strncasecmp(paths[i], "/dev/physicaldrive", 18) == 0 ||
             strncasecmp(paths[i], "\\\\?\\PhysicalDrive", 17) == 0 ||
-            strncasecmp(paths[i], "\\\\.\\PhysicalDrive", 17) == 0) {
+            strncasecmp(paths[i], "\\\\.\\PhysicalDrive", 17) == 0 ||
+            strncasecmp(paths[i], "/dev/Harddisk", 13) == 0 ||
+            strncasecmp(paths[i], "//?/Harddisk", 12) == 0 ||
+            strncasecmp(paths[i], "\\\\?\\Harddisk", 12) == 0 ||
+            strncasecmp(paths[i], "\\\\.\\Harddisk", 12) == 0) {
             importargs_t all = { 0 };
 
             all.can_be_active = B_TRUE;
