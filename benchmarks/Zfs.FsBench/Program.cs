@@ -51,6 +51,7 @@ string[] flushed = Enumerable.Range(0, o.FlushFiles).Select(i => Path.Combine(di
 Directory.CreateDirectory(Path.Combine(dir, "flush"));
 Run("create+flush", flushed, f => { using var s = new FileStream(f, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096); s.Write(payload); s.Flush(flushToDisk: true); });
 Run("create+writethrough", flushed.Select(f => f + ".wt").ToArray(), f => { using var s = new FileStream(f, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough); s.Write(payload); });
+Run($"create+flush x{o.Threads}", flushed.Select(f => f + ".p").ToArray(), f => { using var s = new FileStream(f, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096); s.Write(payload); s.Flush(flushToDisk: true); }, o.Threads);
 
 string[] parallelFiles = Enumerable.Range(0, o.Files).Select(i => Path.Combine(dir, "par", $"t{i % o.Threads:D2}", $"f{i:D6}.dat")).ToArray();
 foreach (var d in parallelFiles.Select(Path.GetDirectoryName).Distinct())

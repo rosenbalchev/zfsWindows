@@ -498,6 +498,26 @@ names_changed(mount_t *m)
 }
 
 /*
+ * The names of file object (not a directory: names below it would stay)
+ * are gone, under whatever spelling the cache has them.  The mount lock is
+ * held exclusive.
+ */
+static void
+names_forget(mount_t *m, uint64_t object)
+{
+    lookup_cache_t *lc = m->lookups;
+    int i;
+
+    if (lc == NULL)
+        return;
+    AcquireSRWLockExclusive(&lc->lock);
+    for (i = 0; i < LOOKUP_SLOTS; i++)
+        if (lc->slot[i].object == object)
+            lc->slot[i].names = 0;
+    ReleaseSRWLockExclusive(&lc->lock);
+}
+
+/*
  * zum_fs_lookup() of t's path, through the cache for the live dataset.  The
  * mount lock is held (shared or exclusive), so the generation cannot move.
  */
@@ -532,6 +552,33 @@ lookup(mount_t *m, const target_t *t, uint64_t *object)
     }
     if (error == 0)
         lookup_put(m, rel, len, *object);
+    return (error);
+}
+
+/*
+ * The directory holding t's path (through the cache) and the final
+ * component, which points into t->rel.
+ */
+static int
+parent_of(mount_t *m, const target_t *t, uint64_t *dir, const char **leaf)
+{
+    const char *slash = strrchr(t->rel, '/');
+    target_t parent = *t;
+    char *path;
+    int error;
+
+    *leaf = slash != NULL ? slash + 1 : t->rel;
+    if (slash == NULL || slash == t->rel) {
+        *dir = t->fs == m->fs ? m->root : 0;
+        return (*dir != 0 ? 0 : zum_fs_lookup(t->fs, "", dir));
+    }
+    if ((path = malloc((size_t)(slash - t->rel) + 1)) == NULL)
+        return (ENOMEM);
+    memcpy(path, t->rel, (size_t)(slash - t->rel));
+    path[slash - t->rel] = '\0';
+    parent.rel = path;
+    error = lookup(m, &parent, dir);
+    free(path);
     return (error);
 }
 
@@ -880,15 +927,22 @@ Create(FSP_FILE_SYSTEM *fsp, PWSTR name, UINT32 create_options,
             error = zum_fs_stream_open(t.fs, base, stream, 1, &object);
         is_dir = FALSE;
     } else if (error == 0) {
-        error = zum_fs_create(t.fs, t.rel, is_dir, &object);
+        /*
+         * In the parent the lookup cache knows, with its attributes and
+         * the descriptor WinFsp computed from the parent's and the
+         * caller's, in one transaction.
+         */
+        uint64_t dir;
+        const char *leaf;
+
+        error = parent_of(m, &t, &dir, &leaf);
+        if (error == 0)
+            error = zum_fs_create_at(t.fs, dir, leaf, is_dir,
+                (attributes & ZUM_FA_SETTABLE) != 0 ?
+                attributes & ZUM_FA_SETTABLE : UINT32_MAX,
+                sd, sd != NULL ? GetSecurityDescriptorLength(sd) : 0,
+                &object);
         base = object;
-        if (error == 0 && (attributes & ZUM_FA_SETTABLE) != 0)
-            error = zum_fs_setattr(t.fs, object,
-                attributes & ZUM_FA_SETTABLE, 0, 0, 0, 0);
-        /* WinFsp computed it from the parent's and the caller's. */
-        if (error == 0 && sd != NULL)
-            error = zum_fs_set_security(t.fs, object, sd,
-                GetSecurityDescriptorLength(sd));
     }
     status = error == ENOENT ? STATUS_OBJECT_PATH_NOT_FOUND :
         error == EROFS ? STATUS_MEDIA_WRITE_PROTECTED : status_of(error);
@@ -1004,11 +1058,20 @@ Cleanup(FSP_FILE_SYSTEM *fsp, PVOID context, PWSTR name, ULONG flags)
         return;
     EXCLUSIVE(m);
     error = resolve(m, path, &t);
-    if (error == 0 && c->stream != NULL)
+    if (error == 0 && c->stream != NULL) {
         error = zum_fs_stream_remove(c->fs, c->base, c->stream);
-    else if (error == 0)
-        error = zum_fs_remove(c->fs, t.rel, c->is_dir);
-    names_changed(m);
+    } else if (error == 0) {
+        uint64_t dir;
+        const char *leaf;
+
+        error = parent_of(m, &t, &dir, &leaf);
+        if (error == 0)
+            error = zum_fs_remove_at(c->fs, dir, leaf, c->is_dir);
+    }
+    if (c->stream == NULL && !c->is_dir)
+        names_forget(m, c->base);
+    else if (c->stream == NULL)
+        names_changed(m);
     UNLOCK_EXCLUSIVE(m);
     if (error != 0)
         FspServiceLog(EVENTLOG_WARNING_TYPE,
@@ -1063,7 +1126,8 @@ Write(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
     file_context_t *c = context;
     SRWLOCK *lock;
     zum_attr_t attr;
-    uint64_t at = to_end ? ZUM_FS_APPEND : offset;
+    uint64_t at = to_end ? ZUM_FS_APPEND : offset, txg = 0;
+    zum_pool_t *pool = NULL;
     NTSTATUS status;
     int error = 0;
 
@@ -1084,7 +1148,7 @@ Write(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
     if (error == 0 && length > 0)
         error = zum_fs_write(c->fs, c->object, &at, buffer, length);
     if (error == 0 && c->write_through)
-        error = zum_fs_sync(c->fs);
+        txg = zum_fs_sync_txg(c->fs, &pool);
     status = status_of(error);
     if (NT_SUCCESS(status)) {
         *pdone = length;
@@ -1092,6 +1156,9 @@ Write(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
     }
     ReleaseSRWLockExclusive(lock);
     UNLOCK_SHARED(m);
+    /* Written through: durable before the write completes, as Flush. */
+    if (txg != 0)
+        zum_pool_wait(pool, txg);
     return (status);
 }
 
@@ -1101,12 +1168,21 @@ Flush(FSP_FILE_SYSTEM *fsp, PVOID context, FSP_FSCTL_FILE_INFO *info)
     mount_t *m = MOUNT(fsp);
     file_context_t *c = context;
     NTSTATUS status = STATUS_SUCCESS;
+    zum_pool_t *pool;
+    uint64_t txg;
 
-    EXCLUSIVE(m);
-    (void) zum_fs_sync(m->fs);
+    /*
+     * What must be durable is what was written before the flush: the txg
+     * is chosen under the lock and waited for without it, so concurrent
+     * flushes share a txg and nothing else waits behind one.
+     */
+    SHARED(m);
+    txg = zum_fs_sync_txg(m->fs, &pool);
     if (c != NULL)
         status = context_info(m, c, info);
-    UNLOCK_EXCLUSIVE(m);
+    UNLOCK_SHARED(m);
+    if (txg != 0)
+        zum_pool_wait(pool, txg);
     return (status);
 }
 
@@ -1233,7 +1309,14 @@ Rename(FSP_FILE_SYSTEM *fsp, PVOID context, PWSTR name, PWSTR new_name,
     }
     if (NT_SUCCESS(status))
         status = status_of(zum_fs_rename(m->fs, tf.rel, tt.rel));
-    names_changed(m);
+    /* A directory moves the names below it too. */
+    if (c->is_dir) {
+        names_changed(m);
+    } else {
+        names_forget(m, c->object);
+        if (error == 0 && target != c->object)
+            names_forget(m, target);	/* replaced */
+    }
     UNLOCK_EXCLUSIVE(m);
 out:
     free(from);
