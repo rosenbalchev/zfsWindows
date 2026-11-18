@@ -267,6 +267,23 @@ jobs:
         with:
           clean: false
 
+      # From the build's artifact, not the workspace: another run's build
+      # on this runner may have cleaned out\release in between (a master
+      # build did, between this run's build and these tests).
+      - name: Download packages
+        uses: actions/download-artifact@v7
+        with:
+          name: OpenZFS-for-Windows-${{ needs.build.outputs.version }}-x64-${{ inputs.configuration == 'Debug' && 'debug' || 'release' }}
+          path: artifact
+
+      - name: Place packages
+        run: |
+          $v = '${{ needs.build.outputs.version }}'
+          New-Item -ItemType Directory -Force "out\release\$v", "out\driver-package" | Out-Null
+          Get-ChildItem artifact -Recurse -Filter *.msi | Copy-Item -Destination "out\release\$v"
+          Get-ChildItem artifact -Recurse -Filter zfswindows-test.cer | Copy-Item -Destination "out\driver-package"
+          Remove-Item -Recurse -Force artifact
+
       - name: x64 user-mode VM integration tests
         run: scripts\ci\Invoke-CiSuite.ps1 -Platform x64 -Edition usermode -Configuration $env:CONFIGURATION -Version ${{ needs.build.outputs.version }}
 
