@@ -221,7 +221,7 @@ import_pool(const char *pool, const char *search_path, boolean_t readonly,
         .lpc_ops = &libzpool_config_ops,
         .lpc_printerr = B_TRUE
     };
-    nvlist_t *config = NULL, *props = NULL;
+    nvlist_t *config = NULL, *props = NULL, *tried;
     char *paths[16];
     int npaths, error, i;
 
@@ -280,6 +280,16 @@ import_pool(const char *pool, const char *search_path, boolean_t readonly,
         mutex_exit(&zum_import_lock);
         cmn_err(CE_WARN, "locate pool %s: error %d", pool, error);
         return (error);
+    }
+    /*
+     * A scan that accepts an active pool returns the config of the labels,
+     * without the tryimport zpool import does, and spa_import() keeps only
+     * the cache devices of the config it is given: the pool's cache devices
+     * are in the tryimport's (GitHub issue #43).
+     */
+    if ((tried = spa_tryimport(config)) != NULL) {
+        fnvlist_free(config);
+        config = tried;
     }
 
     props = fnvlist_alloc();

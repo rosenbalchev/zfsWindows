@@ -782,3 +782,16 @@ pool's root file system, which is what pool creation reads.
 The property is set once, when a file system is created. Only a new pool's
 root file system takes the default; a new child takes its parent's setting,
 and existing file systems keep theirs.
+
+## 0040 — libzpool: a tryimport keeps the pool's cache devices
+
+`spa_import()` throws away the cache-device list it loaded from the MOS. It
+then keeps the cache devices of the config it was given, which `zpool import`
+takes from a tryimport. In the kernel, a tryimport loads the cache devices
+and its config lists them. libzpool skips them on a read-only pool, which is
+meant for zdb's checkpointed state, and a tryimport is read-only. Every
+user-mode `zpool import` therefore lost the pool's cache devices, although
+they stayed recorded in the MOS (GitHub issue #43). The engine's own import
+at service start now runs a tryimport too (`zum_pool_um.c`).
+
+libzpool now loads the cache devices in a tryimport, as the kernel does.

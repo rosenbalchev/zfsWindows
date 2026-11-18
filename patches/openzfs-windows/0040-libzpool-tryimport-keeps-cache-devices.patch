@@ -1,0 +1,18 @@
+diff --git a/module/zfs/spa.c b/module/zfs/spa.c
+--- a/module/zfs/spa.c
++++ b/module/zfs/spa.c
+@@ -2712,8 +2712,13 @@
+ 	 * As L2 caches are part of the ARC which is shared among open
+ 	 * pools, we skip loading them when we load the checkpointed
+ 	 * state of the pool.
++	 *
++	 * A tryimport is read-only too, but spa_import() drops the cache
++	 * devices it loaded and keeps those of the tryimport config: without
++	 * them there, an import in user space loses its cache devices.
+ 	 */
+-	if (!spa_writeable(spa))
++	if (!spa_writeable(spa) &&
++	    spa->spa_load_state != SPA_LOAD_TRYIMPORT)
+ 		return;
+ #endif
+ 
