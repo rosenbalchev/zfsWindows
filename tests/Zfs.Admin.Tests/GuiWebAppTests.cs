@@ -215,6 +215,9 @@ public sealed class GuiWebCommandTests : IAsyncDisposable
         JsonNode state = Ok(await Send("app.state"))!;
         Assert.True(state["brokerAvailable"]!.GetValue<bool>());
         Assert.Equal("tank", state["pools"]![0]!["name"]!.GetValue<string>());
+        // What the All pools table shows, for every pool.
+        foreach (string column in new[] { "health", "size", "allocated", "free", "capacityPercent", "fragmentationPercent", "dedupRatio", "deviceProblems", "scan" })
+            Assert.True(state["pools"]![0]!.AsObject().ContainsKey(column), column);
         Assert.Equal(["tank", "tank/a"], state["datasets"]!.AsArray().Select(d => d!.GetValue<string>()));
 
         Assert.NotNull(Ok(await Send("overview.get"))!["generatedAt"]);
@@ -277,9 +280,16 @@ public sealed class GuiWebCommandTests : IAsyncDisposable
     public async Task OnlyTheFeaturePropertiesAndTheirValuesCanBeSet()
     {
         Assert.Equal("invalid-argument", Refused(await Send("dataset.set", new() { ["dataset"] = "tank/a", ["property"] = "mountpoint", ["value"] = "/x" })));
-        Assert.Equal("invalid-argument", Refused(await Send("dataset.set", new() { ["dataset"] = "tank/a", ["property"] = "compression", ["value"] = "best" })));
+        // Values outside the usual list pass when they look like a zfs value; zfs set judges them.
+        foreach (string bad in new[] { "Zstd", "zstd 5", "-r", "on;off", "", new string('a', 40) })
+            Assert.Equal("invalid-argument", Refused(await Send("dataset.set", new() { ["dataset"] = "tank/a", ["property"] = "compression", ["value"] = bad })));
         Ok(await Send("dataset.set", new() { ["dataset"] = "tank/a", ["property"] = "compression", ["value"] = "zstd" }));
-        Assert.Equal(["set", "compression=zstd", "tank/a"], Assert.Single(Changes()));
+        Ok(await Send("dataset.set", new() { ["dataset"] = "tank/a", ["property"] = "compression", ["value"] = "zstd-5" }));
+        Ok(await Send("dataset.set", new() { ["dataset"] = "tank/a", ["property"] = "dedup", ["value"] = "skein,verify" }));
+        string[][] changes = Changes();
+        Assert.Equal(["set", "compression=zstd", "tank/a"], changes[0]);
+        Assert.Equal(["set", "compression=zstd-5", "tank/a"], changes[1]);
+        Assert.Equal(["set", "dedup=skein,verify", "tank/a"], changes[2]);
     }
 
     [Fact]

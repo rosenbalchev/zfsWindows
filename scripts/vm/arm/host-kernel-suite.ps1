@@ -51,6 +51,8 @@ function Checks($name, $r) {
 Restore-VMCheckpoint -VMName $Guest -Name $Checkpoint -Confirm:$false
 $deadline = (Get-Date).AddMinutes(2)
 while ((Get-VM $Guest).State -notin 'Saved', 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+# As host-usermode-suite.ps1: 6 GB for the guest.
+if ((Get-VM $Guest).State -eq 'Off') { Set-VMMemory -VMName $Guest -StartupBytes 6GB }
 Start-VM -Name $Guest
 Start-Sleep -Seconds 30
 $s = Open-ArmGuest 10

@@ -40,6 +40,10 @@ function Save {
 Restore-VMCheckpoint -VMName $Guest -Name $Checkpoint -Confirm:$false
 $deadline = (Get-Date).AddMinutes(2)
 while ((Get-VM $Guest).State -notin 'Saved', 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+# 6 GB for the guest, not the checkpoint's 8 GB: the 16 GB ARM PC has about
+# 7.5 GB free after boot, and Start-VM failed with OutOfMemory.  The memory
+# stage writes twice the guest's RAM, whatever it is.
+if ((Get-VM $Guest).State -eq 'Off') { Set-VMMemory -VMName $Guest -StartupBytes 6GB }
 Start-VM -Name $Guest
 Start-Sleep -Seconds 30
 
