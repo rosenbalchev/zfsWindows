@@ -51,11 +51,8 @@ function Checks($name, $r) {
 Restore-VMCheckpoint -VMName $Guest -Name $Checkpoint -Confirm:$false
 $deadline = (Get-Date).AddMinutes(2)
 while ((Get-VM $Guest).State -notin 'Saved', 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
-# As host-usermode-suite.ps1: the guest gets the memory the host has free.
-$freeMB = [math]::Floor((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1KB)
-if ((Get-VM $Guest).State -eq 'Off' -and $freeMB - 1024 -lt (Get-VM $Guest).MemoryStartup / 1MB) {
-    Set-VMMemory -VMName $Guest -StartupBytes $(if ($freeMB - 1024 -ge 6144) { 6GB } else { 4GB })
-}
+# As host-usermode-suite.ps1: 6 GB for the guest.
+if ((Get-VM $Guest).State -eq 'Off') { Set-VMMemory -VMName $Guest -StartupBytes 6GB }
 Start-VM -Name $Guest
 Start-Sleep -Seconds 30
 $s = Open-ArmGuest 10
