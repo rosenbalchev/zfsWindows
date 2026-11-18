@@ -246,6 +246,14 @@ if (Test-Path (Join-Path $cross "fs-expected.json")) {
 # Many small files in deep trees, and the tree pools of the other platforms.
 . (Join-Path $PSScriptRoot "TreeSuite.ps1")
 Invoke-TreeStages "x64-kernel-$($Configuration.ToLower())" "installer"
+# Pools imported when Windows goes down come back at boot (issue #46).
+$kb = Guest "kbootprep"
+Record "installer-kbootprep" $kb
+Expect "boot-import pools prepared" (@($kb.failed).Count -eq 0) ($kb.failed -join ', ')
+Restart-Guest
+$kb = Guest "kbootcheck" @{ Hash = $kb.hash }
+Record "installer-kbootcheck" $kb
+Expect "pools imported again at boot" (@($kb.failed).Count -eq 0) ($kb.failed -join ', ')
 
 # --- 5. repair ------------------------------------------------------------------------------
 # Setup refuses while Windows has a reboot pending (Windows Update services

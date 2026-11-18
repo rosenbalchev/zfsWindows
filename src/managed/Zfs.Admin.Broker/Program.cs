@@ -23,6 +23,7 @@ public static class Program
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
             Console.WriteLine($"{ServiceName} {typeof(Program).Assembly.GetName().Version?.ToString(3)}: serving \\\\.\\pipe\\{Protocol.PipeName}; Ctrl+C stops.");
             _ = RemoveTemporaryMountsAsync(Console.WriteLine, stop.Token);
+            _ = KernelPools.ImportAsync((m, _) => Console.WriteLine(m), stop.Token);
             CreateServer(entry => Console.WriteLine(Describe(entry))).RunAsync(stop.Token).GetAwaiter().GetResult();
             return 0;
         }
@@ -102,6 +103,7 @@ sealed class BrokerService : ServiceBase
         stop = new CancellationTokenSource();
         running = Task.Run(() => Program.CreateServer(Audit).RunAsync(stop.Token));
         _ = Program.RemoveTemporaryMountsAsync(m => Write(m, EventLogEntryType.Information, 3), stop.Token);
+        _ = KernelPools.ImportAsync((m, ok) => Write(m, ok ? EventLogEntryType.Information : EventLogEntryType.Warning, ok ? 4 : 5), stop.Token);
         Write($"{ServiceName} {typeof(Program).Assembly.GetName().Version?.ToString(3)} started (protocol {Protocol.Version}).", EventLogEntryType.Information, 1);
     }
 

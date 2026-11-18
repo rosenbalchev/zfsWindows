@@ -245,6 +245,15 @@ output appears there, including `zfsinstaller` and the pool check.
 See the README's *Using ZFS volumes* section (step 17) for creating a pool on
 a disk, mounting it at a drive letter or folder, and having it mount at boot.
 
+- **At boot:** the driver records every imported pool in
+  `C:\Windows\System32\drivers\zpool.cache`, from its creation or import to
+  its export. When ZfsWinBroker starts, it starts the driver and imports the
+  pools of that file with their cache and log devices, which mounts them
+  again. A pool not found where it was recorded (disks renumbered) is looked
+  for on all disks by its GUID. A pool whose disks are still missing is
+  tried again for about 7 minutes. `zpool export` keeps a pool out until it
+  is imported again; a pool with `cachefile=none` is never imported at boot.
+
 ## Diagnostics
 
 - `zfswin version` shows the versions of zfswin, the broker and the kernel
@@ -252,6 +261,8 @@ a disk, mounting it at a drive letter or folder, and having it mount at boot.
   services.
 - **Event Viewer > Windows Logs > Application**, source `ZfsWinBroker`:
   - service start and stop: event IDs 1 and 2;
+  - a pool imported at boot: event 4; a pool or the driver that could not
+    be: event 5;
   - every completed administrative command, with the user, the arguments and
     the duration: event 100;
   - every refused or failed one: event 101.
