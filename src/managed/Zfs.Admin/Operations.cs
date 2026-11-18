@@ -526,8 +526,11 @@ public static class Operations
             if (r.ExitCode == 0 && !string.IsNullOrWhiteSpace(r.StandardOutput) && JsonNode.Parse(r.StandardOutput)?["pools"]?[pool] is JsonNode status)
             {
                 string want = DeviceKey(device);
+                // A free-space extent ("#offset#length#\\?\PhysicalDriveN")
+                // is its phys_path; its path is a display name.
                 foreach (JsonObject leaf in DeviceLeaves(status))
-                    if (DeviceKey(leaf["path"]?.GetValue<string>()) == want && leaf["guid"] is JsonValue guid && guid.TryGetValue(out string? text) && ulong.TryParse(text, out _))
+                    if ((DeviceKey(leaf["path"]?.GetValue<string>()) == want || DeviceKey(leaf["phys_path"]?.GetValue<string>()) == want)
+                        && leaf["guid"] is JsonValue guid && guid.TryGetValue(out string? text) && ulong.TryParse(text, out _))
                         return text;
             }
         }

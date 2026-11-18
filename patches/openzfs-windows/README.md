@@ -762,13 +762,8 @@ The zpool command now validates the underlying physical-drive path while
 retaining the encoded path in the vdev configuration, allowing user-mode
 `zpool add ... cache ...` to reach the existing bounded-I/O implementation.
 
-## 0038 — zpool: validate offset-limited disk vdevs
-
-The previous fix made libzpool able to open an offset-limited physical-disk
-vdev, but `zpool add` rejected the argument first in `make_leaf_vdev()`. Its
-Windows path check did not recognize `#offset#length#device` and reported
-"must be a full path or shorthand device name" (GitHub issue #32).
-
-The zpool command now validates the underlying physical-drive path while
-retaining the encoded path in the vdev configuration, allowing user-mode
-`zpool add ... cache ...` to reach the existing bounded-I/O implementation.
+The extent is recorded as a slice (`whole_disk=0`), not a whole disk, even
+though the underlying physical drive is one. Taking the whole-disk flag from
+the drive made the in-use check lock every partition on it, so an extent on
+the system disk failed with "Slice \\?\HarddiskNPartitionM appears in use";
+with `-f`, `make_disks()` would have labelled the entire drive with a new GPT.
