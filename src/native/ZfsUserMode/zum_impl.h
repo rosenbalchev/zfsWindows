@@ -101,12 +101,30 @@ int zum_resolve(zum_context_t *context, const char *path, zum_znode_t **dzpp,
     char leaf[ZAP_MAXNAMELEN], zum_znode_t **zpp);
 int zum_lookup_path(zum_context_t *context, const char *path,
     uint64_t *object);
+int zum_lookup_path_at(zum_context_t *context, uint64_t dir,
+    const char *path, uint64_t *object);
 
 /* Namespace and data, '/'-separated paths relative to the dataset root. */
 int zum_create_path(zum_context_t *context, const char *path,
     boolean_t isdir, uint64_t *object_out);
 int zum_create_entry(zum_context_t *context, zum_znode_t *dzp,
     const char *name, boolean_t isdir, uint64_t *object_out);
+/*
+ * zum_create_entry() that also sets the Windows attributes (UINT32_MAX:
+ * none) and the packed SA xattr nvlist (NULL: none) of the new node, in
+ * the same transaction.
+ */
+int zum_create_entry_ex(zum_context_t *context, zum_znode_t *dzp,
+    const char *name, boolean_t isdir, uint32_t attributes,
+    const void *dxattr, size_t dxattr_len, uint64_t *object_out);
+uint64_t zum_apply_win_attributes(uint64_t pflags, uint32_t a);
+/*
+ * The packed SA xattr nvlist of a new node holding only its security
+ * descriptor, as zum_fs_set_security() would store it (vmem_free it);
+ * ENOTSUP when xattrs live in directories (xattr=dir).
+ */
+int zum_ntacl_pack(zum_context_t *context, const void *sd, size_t len,
+    void **packed, size_t *size);
 int zum_remove_entry(zum_context_t *context, zum_znode_t *dzp,
     const char *name);
 int zum_dir_lookup(zum_context_t *context, zum_znode_t *dzp,
@@ -125,6 +143,8 @@ int zum_xattr_set(zum_context_t *context, zum_znode_t *zp, const char *name,
     const void *value, size_t len);
 int zum_remove_path(zum_context_t *context, const char *path,
     boolean_t isdir, boolean_t defer_reclaim);
+int zum_remove_at(zum_context_t *context, zum_znode_t *dzp,
+    const char *name, boolean_t isdir, boolean_t defer_reclaim);
 int zum_rename_path(zum_context_t *context, const char *from,
     const char *to);
 int zum_truncate_path(zum_context_t *context, const char *path,

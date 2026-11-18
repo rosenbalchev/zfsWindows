@@ -30,7 +30,9 @@ param(
     # Which build of out\release\<version> to test (...-testsigned-debug.msi
     # or ...-testsigned.msi); the upgrade package must be the same build.
     [ValidateSet("Debug", "Release")]
-    [string]$Configuration = "Debug"
+    [string]$Configuration = "Debug",
+    # out\release\<version>; default: the current build number.
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,7 +40,7 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $state = Get-Content (Join-Path $repo "TestVolumes\vm\$Name.json") -Raw | ConvertFrom-Json
 $credential = New-Object PSCredential ($state.user, (ConvertTo-SecureString $state.password -AsPlainText -Force))
 $results = Join-Path $repo "TestVolumes\vm\results.jsonl"
-$version = & (Join-Path $repo "scripts\Get-ZfsWinVersion.ps1")
+$version = if ($Version) { $Version } else { & (Join-Path $repo "scripts\Get-ZfsWinVersion.ps1") }
 $tag = if ($Configuration -eq "Debug") { "-debug" } else { "" }
 if (-not $Msi) { $Msi = Join-Path $repo "out\release\$version\OpenZFS-for-Windows-$version-x64-testsigned$tag.msi" }
 if (-not $UpgradeMsi) { $UpgradeMsi = Get-ChildItem (Join-Path $repo "out\release") -Recurse -Filter "OpenZFS-for-Windows-*-x64-testsigned$tag.msi" | Where-Object FullName -ne $Msi | Sort-Object LastWriteTime | Select-Object -Last 1 -ExpandProperty FullName }

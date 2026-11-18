@@ -499,12 +499,12 @@ dir_remove(zum_context_t *context, zum_znode_t *dzp, const char *name,
 }
 
 /*
- * Resolve a '/'-separated path relative to the dataset root to its parent
+ * Resolve a '/'-separated path relative to directory dir to its parent
  * directory and final component.  "." and ".." components are rejected.
  */
 static int
-resolve_parent(zum_context_t *context, const char *path, zum_znode_t **dzpp,
-    char leaf[ZAP_MAXNAMELEN])
+resolve_parent_at(zum_context_t *context, uint64_t dir, const char *path,
+    zum_znode_t **dzpp, char leaf[ZAP_MAXNAMELEN])
 {
     zum_znode_t *dzp = NULL, *next;
     const char *start = path, *slash;
@@ -513,8 +513,12 @@ resolve_parent(zum_context_t *context, const char *path, zum_znode_t **dzpp,
     size_t length;
     int error;
 
-    if ((error = zum_zget(context, context->root_obj, &dzp)) != 0)
+    if ((error = zum_zget(context, dir, &dzp)) != 0)
         return (error);
+    if (!S_ISDIR(dzp->z_mode)) {
+        zum_zrele(dzp);
+        return (ENOTDIR);
+    }
     while (*start == '/')
         start++;
     for (;;) {
@@ -549,6 +553,14 @@ resolve_parent(zum_context_t *context, const char *path, zum_znode_t **dzpp,
     return (error);
 }
 
+/* resolve_parent_at() from the dataset root. */
+static int
+resolve_parent(zum_context_t *context, const char *path, zum_znode_t **dzpp,
+    char leaf[ZAP_MAXNAMELEN])
+{
+    return (resolve_parent_at(context, context->root_obj, path, dzpp, leaf));
+}
+
 /* Resolve a path to its znode, optionally also returning the parent. */
 int
 zum_resolve(zum_context_t *context, const char *path, zum_znode_t **dzpp,
@@ -573,6 +585,14 @@ zum_resolve(zum_context_t *context, const char *path, zum_znode_t **dzpp,
 int
 zum_lookup_path(zum_context_t *context, const char *path, uint64_t *object)
 {
+    return (zum_lookup_path_at(context, context->root_obj, path, object));
+}
+
+/* A path relative to directory dir (which an empty path names). */
+int
+zum_lookup_path_at(zum_context_t *context, uint64_t dir, const char *path,
+    uint64_t *object)
+{
     char leaf[ZAP_MAXNAMELEN];
     zum_znode_t *dzp;
     const char *p = path;
@@ -581,10 +601,10 @@ zum_lookup_path(zum_context_t *context, const char *path, uint64_t *object)
     while (*p == '/')
         p++;
     if (*p == '\0') {
-        *object = context->root_obj;
+        *object = dir;
         return (0);
     }
-    if ((error = resolve_parent(context, path, &dzp, leaf)) != 0)
+    if ((error = resolve_parent_at(context, dir, path, &dzp, leaf)) != 0)
         return (error);
     error = dir_lookup(context, dzp, leaf, object);
     zum_zrele(dzp);
@@ -657,11 +677,14 @@ trivial_aces(uint64_t mode, zfs_ace_hdr_t aces[3])
  * non-inherited ACL, producing the same SA layout and flags as the Linux
  * ZPL.  Called in an assigned transaction; failures VERIFY.  With
  * ZUM_MK_XATTRDIR, dzp is the file whose xattr directory this is; with
- * ZUM_MK_ROOT, dzp is NULL and the node is its own parent.
+ * ZUM_MK_ROOT, dzp is NULL and the node is its own parent.  attributes
+ * (UINT32_MAX: none) and dxattr (NULL: none) are what a later
+ * zum_fs_setattr() and SA xattr store would set, written with the node.
  */
 static zum_znode_t *
 mknode(zum_context_t *context, zum_znode_t *dzp, uint64_t mode,
-    const zfs_ace_hdr_t aces[3], int flags, dmu_tx_t *tx)
+    const zfs_ace_hdr_t aces[3], int flags, uint32_t attributes,
+    const void *dxattr, size_t dxattr_len, dmu_tx_t *tx)
 {
     dmu_buf_t *db = NULL;
     sa_bulk_attr_t attrs[16];
@@ -721,6 +744,8 @@ mknode(zum_context_t *context, zum_znode_t *dzp, uint64_t mode,
     if ((mode & (S_IXUSR | S_IXGRP | S_IXOTH)) ==
         (S_IXUSR | S_IXGRP | S_IXOTH))
         zp->z_pflags |= ZFS_NO_EXECS_DENIED;
+    if (attributes != UINT32_MAX)
+        zp->z_pflags = zum_apply_win_attributes(zp->z_pflags, attributes);
 
     VERIFY0(sa_buf_hold(context->os, zp->z_id, NULL, &db));
     VERIFY0(sa_handle_get_from_db(context->os, db, NULL, SA_HDL_SHARED,
@@ -758,6 +783,9 @@ mknode(zum_context_t *context, zum_znode_t *dzp, uint64_t mode,
         &acl_count, 8);
     SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_DACL_ACES], NULL,
         (void *)aces, 3 * sizeof (zfs_ace_hdr_t));
+    if (dxattr != NULL)
+        SA_ADD_BULK_ATTR(attrs, count, context->sa_table[ZPL_DXATTR], NULL,
+            (void *)dxattr, (uint32_t)dxattr_len);
     VERIFY0(sa_replace_all_by_template(zp->z_sa_hdl, attrs, count, tx));
     znode_load_blksz(zp);
     return (zp);
@@ -771,6 +799,15 @@ mknode(zum_context_t *context, zum_znode_t *dzp, uint64_t mode,
 int
 zum_create_entry(zum_context_t *context, zum_znode_t *dzp, const char *name,
     boolean_t isdir, uint64_t *object_out)
+{
+    return (zum_create_entry_ex(context, dzp, name, isdir, UINT32_MAX, NULL,
+        0, object_out));
+}
+
+int
+zum_create_entry_ex(zum_context_t *context, zum_znode_t *dzp,
+    const char *name, boolean_t isdir, uint32_t attributes,
+    const void *dxattr, size_t dxattr_len, uint64_t *object_out)
 {
     zfs_ace_hdr_t aces[3];
     zum_znode_t *zp;
@@ -804,7 +841,8 @@ zum_create_entry(zum_context_t *context, zum_znode_t *dzp, const char *name,
     dmu_tx_hold_zap(tx, dzp->z_id, TRUE, name);
     if (isdir)
         dmu_tx_hold_zap(tx, DMU_NEW_OBJECT, FALSE, NULL);
-    dmu_tx_hold_sa_create(tx, sizeof (aces) + ZFS_SA_BASE_ATTR_SIZE);
+    dmu_tx_hold_sa_create(tx, sizeof (aces) + ZFS_SA_BASE_ATTR_SIZE +
+        (dxattr != NULL ? dxattr_len : 0));
     dmu_tx_hold_sa(tx, dzp->z_sa_hdl, B_FALSE);
     error = dmu_tx_assign(tx, DMU_TX_WAIT);
     if (error != 0) {
@@ -813,7 +851,8 @@ zum_create_entry(zum_context_t *context, zum_znode_t *dzp, const char *name,
     }
 
     /* An assigned transaction cannot be aborted; failures past here VERIFY. */
-    zp = mknode(context, dzp, mode, aces, 0, tx);
+    zp = mknode(context, dzp, mode, aces, 0, attributes, dxattr, dxattr_len,
+        tx);
     error = link_create(context, dzp, name, zp, tx, ZWC_NEW);
     if (error != 0)
         VERIFY0(dmu_object_free(context->os, zp->z_id, tx));
@@ -875,7 +914,7 @@ zum_xattrdir(zum_context_t *context, zum_znode_t *zp, boolean_t create,
         return (error);
     }
     xzp = mknode(context, zp, S_IFDIR | S_ISVTX | 0777, aces,
-        ZUM_MK_XATTRDIR, tx);
+        ZUM_MK_XATTRDIR, UINT32_MAX, NULL, 0, tx);
     VERIFY0(sa_update(zp->z_sa_hdl, context->sa_table[ZPL_XATTR],
         &xzp->z_id, sizeof (xzp->z_id), tx));
     zp->z_xattr = xzp->z_id;
@@ -988,7 +1027,8 @@ zum_create_fs(objset_t *os, nvlist_t *zplprops, dmu_tx_t *tx)
     VERIFY0(sa_setup(os, sa_obj, zfs_attr_table, ZPL_END,
         &context.sa_table));
     VERIFY0(trivial_aces(S_IFDIR | 0755, aces));
-    rootzp = mknode(&context, NULL, S_IFDIR | 0755, aces, ZUM_MK_ROOT, tx);
+    rootzp = mknode(&context, NULL, S_IFDIR | 0755, aces, ZUM_MK_ROOT,
+        UINT32_MAX, NULL, 0, tx);
     VERIFY0(zap_add(os, moid, ZFS_ROOT_OBJ, 8, 1, &rootzp->z_id, tx));
     zum_zrele(rootzp);
 }
@@ -1004,14 +1044,34 @@ zum_remove_path(zum_context_t *context, const char *path, boolean_t isdir,
     boolean_t defer_reclaim)
 {
     char name[ZAP_MAXNAMELEN];
-    zum_znode_t *dzp = NULL, *zp = NULL;
+    zum_znode_t *dzp = NULL;
+    int error;
+
+    if (context->readonly)
+        return (EROFS);
+    if ((error = resolve_parent(context, path, &dzp, name)) != 0)
+        return (error);
+    error = zum_remove_at(context, dzp, name, isdir, defer_reclaim);
+    zum_zrele(dzp);
+    return (error);
+}
+
+/* zum_remove_path() of name in directory dzp. */
+int
+zum_remove_at(zum_context_t *context, zum_znode_t *dzp, const char *name,
+    boolean_t isdir, boolean_t defer_reclaim)
+{
+    zum_znode_t *zp = NULL;
     boolean_t unlinked = B_FALSE;
+    uint64_t object;
     dmu_tx_t *tx;
     int error;
 
     if (context->readonly)
         return (EROFS);
-    if ((error = zum_resolve(context, path, &dzp, name, &zp)) != 0)
+    if ((error = dir_lookup(context, dzp, name, &object)) != 0)
+        return (error);
+    if ((error = zum_zget(context, object, &zp)) != 0)
         return (error);
     if (isdir && !S_ISDIR(zp->z_mode))
         error = ENOTDIR;
@@ -1021,7 +1081,6 @@ zum_remove_path(zum_context_t *context, const char *path, boolean_t isdir,
         error = ENOTEMPTY;
     if (error != 0) {
         zum_zrele(zp);
-        zum_zrele(dzp);
         return (error);
     }
 
@@ -1035,7 +1094,6 @@ zum_remove_path(zum_context_t *context, const char *path, boolean_t isdir,
     if (error != 0) {
         dmu_tx_abort(tx);
         zum_zrele(zp);
-        zum_zrele(dzp);
         return (error);
     }
     VERIFY0(link_destroy(context, dzp, name, zp, tx, 0, &unlinked));
@@ -1047,7 +1105,6 @@ zum_remove_path(zum_context_t *context, const char *path, boolean_t isdir,
     if (unlinked && !defer_reclaim)
         reclaim(context, zp);
     zum_zrele(zp);
-    zum_zrele(dzp);
     return (error);
 }
 

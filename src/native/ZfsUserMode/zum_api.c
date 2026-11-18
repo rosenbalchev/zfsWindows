@@ -55,8 +55,8 @@ win_attributes(uint64_t pflags, boolean_t isdir)
 }
 
 /* zfs_setwinflags_xva(): only these four are the caller's to change. */
-static uint64_t
-apply_win_attributes(uint64_t pflags, uint32_t a)
+uint64_t
+zum_apply_win_attributes(uint64_t pflags, uint32_t a)
 {
     static const struct { uint64_t z; uint32_t w; } map[] = {
         { ZFS_READONLY, ZUM_FA_READONLY },
@@ -75,35 +75,62 @@ apply_win_attributes(uint64_t pflags, uint32_t a)
     return (pflags);
 }
 
+/*
+ * An object's attributes with one SA handle and one bulk lookup: what
+ * zum_zget() and a lookup of the times did, without the znode's xattr and
+ * project ids, which attributes do not need (getattr and every directory
+ * entry, issue #33).  Pre-SA layouts are refused as zum_zget() does.
+ * *found: the object was there (what a failed zum_zget() would not say).
+ */
 static int
-fill_attr(zum_context_t *context, zum_znode_t *zp, zum_attr_t *attr)
+getattr_impl(zum_fs_t *fs, uint64_t object, zum_attr_t *attr,
+    boolean_t *found)
 {
-    sa_bulk_attr_t bulk[4];
+    sa_bulk_attr_t bulk[8];
+    sa_handle_t *hdl = NULL;
+    dmu_object_info_t info;
+    uint64_t mode, size, links, pflags;
     uint64_t atime[2], mtime[2], ctime[2], crtime[2];
     uint32_t blksz;
     u_longlong_t blocks;
     int count = 0, error;
 
-    SA_ADD_BULK_ATTR(bulk, count, context->sa_table[ZPL_ATIME], NULL,
-        atime, 16);
-    SA_ADD_BULK_ATTR(bulk, count, context->sa_table[ZPL_MTIME], NULL,
-        mtime, 16);
-    SA_ADD_BULK_ATTR(bulk, count, context->sa_table[ZPL_CTIME], NULL,
-        ctime, 16);
-    SA_ADD_BULK_ATTR(bulk, count, context->sa_table[ZPL_CRTIME], NULL,
-        crtime, 16);
-    if ((error = sa_bulk_lookup(zp->z_sa_hdl, bulk, count)) != 0)
+    *found = B_FALSE;
+    if ((error = sa_handle_get(fs->os, object, NULL, SA_HDL_PRIVATE,
+        &hdl)) != 0) {
+        if (hdl != NULL)
+            sa_handle_destroy(hdl);
         return (error);
-    dmu_object_size_from_db(sa_get_db(zp->z_sa_hdl), &blksz, &blocks);
+    }
+    dmu_object_info_from_db(sa_get_db(hdl), &info);
+    if (info.doi_bonus_type != DMU_OT_SA) {
+        sa_handle_destroy(hdl);
+        return (ENOTSUP);
+    }
+    *found = B_TRUE;
+    SA_ADD_BULK_ATTR(bulk, count, fs->sa_table[ZPL_MODE], NULL, &mode, 8);
+    SA_ADD_BULK_ATTR(bulk, count, fs->sa_table[ZPL_SIZE], NULL, &size, 8);
+    SA_ADD_BULK_ATTR(bulk, count, fs->sa_table[ZPL_LINKS], NULL, &links, 8);
+    SA_ADD_BULK_ATTR(bulk, count, fs->sa_table[ZPL_FLAGS], NULL, &pflags, 8);
+    SA_ADD_BULK_ATTR(bulk, count, fs->sa_table[ZPL_ATIME], NULL, atime, 16);
+    SA_ADD_BULK_ATTR(bulk, count, fs->sa_table[ZPL_MTIME], NULL, mtime, 16);
+    SA_ADD_BULK_ATTR(bulk, count, fs->sa_table[ZPL_CTIME], NULL, ctime, 16);
+    SA_ADD_BULK_ATTR(bulk, count, fs->sa_table[ZPL_CRTIME], NULL, crtime, 16);
+    error = sa_bulk_lookup(hdl, bulk, count);
+    if (error == 0)
+        dmu_object_size_from_db(sa_get_db(hdl), &blksz, &blocks);
+    sa_handle_destroy(hdl);
+    if (error != 0)
+        return (error);
 
-    attr->object = zp->z_id;
-    attr->mode = zp->z_mode;
-    attr->is_dir = S_ISDIR(zp->z_mode);
+    attr->object = object;
+    attr->mode = mode;
+    attr->is_dir = S_ISDIR(mode);
     /* A directory's ZPL size counts entries; Windows expects 0. */
-    attr->size = attr->is_dir ? 0 : zp->z_size;
+    attr->size = attr->is_dir ? 0 : size;
     attr->allocation = attr->is_dir ? 0 : (uint64_t)blocks << SPA_MINBLOCKSHIFT;
-    attr->links = zp->z_links;
-    attr->attributes = win_attributes(zp->z_pflags, attr->is_dir);
+    attr->links = links;
+    attr->attributes = win_attributes(pflags, attr->is_dir);
     attr->creation_time = to_filetime(crtime);
     attr->access_time = to_filetime(atime);
     attr->write_time = to_filetime(mtime);
@@ -114,14 +141,9 @@ fill_attr(zum_context_t *context, zum_znode_t *zp, zum_attr_t *attr)
 int
 zum_fs_getattr(zum_fs_t *fs, uint64_t object, zum_attr_t *attr)
 {
-    zum_znode_t *zp;
-    int error;
+    boolean_t found;
 
-    if ((error = zum_zget(fs, object, &zp)) != 0)
-        return (error);
-    error = fill_attr(fs, zp, attr);
-    zum_zrele(zp);
-    return (error);
+    return (getattr_impl(fs, object, attr, &found));
 }
 
 int
@@ -140,7 +162,7 @@ zum_fs_setattr(zum_fs_t *fs, uint64_t object, uint32_t attributes,
     if ((error = zum_zget(fs, object, &zp)) != 0)
         return (error);
     if (attributes != UINT32_MAX) {
-        zp->z_pflags = apply_win_attributes(zp->z_pflags, attributes);
+        zp->z_pflags = zum_apply_win_attributes(zp->z_pflags, attributes);
         SA_ADD_BULK_ATTR(bulk, count, fs->sa_table[ZPL_FLAGS], NULL,
             &zp->z_pflags, 8);
     }
@@ -187,6 +209,13 @@ int
 zum_fs_lookup(zum_fs_t *fs, const char *path, uint64_t *object)
 {
     return (zum_lookup_path(fs, path, object));
+}
+
+int
+zum_fs_lookup_at(zum_fs_t *fs, uint64_t dir, const char *path,
+    uint64_t *object)
+{
+    return (zum_lookup_path_at(fs, dir, path, object));
 }
 
 int
@@ -249,9 +278,59 @@ zum_fs_create(zum_fs_t *fs, const char *path, int is_dir, uint64_t *object)
 }
 
 int
+zum_fs_create_at(zum_fs_t *fs, uint64_t dir, const char *name, int is_dir,
+    uint32_t attributes, const void *sd, uint32_t sd_len, uint64_t *object)
+{
+    zum_znode_t *dzp;
+    void *packed = NULL;
+    size_t size = 0;
+    boolean_t separate = B_FALSE;
+    int error;
+
+    if (fs->readonly)
+        return (EROFS);
+    if ((error = zum_zget(fs, dir, &dzp)) != 0)
+        return (error);
+    if (!S_ISDIR(dzp->z_mode)) {
+        zum_zrele(dzp);
+        return (ENOTDIR);
+    }
+    if (sd != NULL && (error = zum_ntacl_pack(fs, sd, sd_len, &packed,
+        &size)) == ENOTSUP) {
+        separate = B_TRUE;	/* xattr=dir: zum_fs_set_security() */
+        error = 0;
+    }
+    if (error == 0)
+        error = zum_create_entry_ex(fs, dzp, name, is_dir != 0, attributes,
+            packed, size, object);
+    if (error == 0 && separate)
+        error = zum_fs_set_security(fs, *object, sd, sd_len);
+    if (packed != NULL)
+        vmem_free(packed, size);
+    zum_zrele(dzp);
+    return (error);
+}
+
+int
 zum_fs_remove(zum_fs_t *fs, const char *path, int is_dir)
 {
     return (zum_remove_path(fs, path, is_dir != 0, B_FALSE));
+}
+
+int
+zum_fs_remove_at(zum_fs_t *fs, uint64_t dir, const char *name, int is_dir)
+{
+    zum_znode_t *dzp;
+    int error;
+
+    if (fs->readonly)
+        return (EROFS);
+    if ((error = zum_zget(fs, dir, &dzp)) != 0)
+        return (error);
+    error = S_ISDIR(dzp->z_mode) ?
+        zum_remove_at(fs, dzp, name, is_dir != 0, B_FALSE) : ENOTDIR;
+    zum_zrele(dzp);
+    return (error);
 }
 
 int
@@ -274,7 +353,7 @@ zum_fs_readdir(zum_fs_t *fs, uint64_t object, zum_dirent_cb_t cb, void *arg)
     zap_cursor_t zc;
     zap_attribute_t *za = zap_attribute_alloc();
     zum_attr_t attr;
-    zum_znode_t *zp;
+    boolean_t found;
     int error = 0, stop = 0;
 
     for (zap_cursor_init(&zc, fs->os, object);
@@ -282,10 +361,12 @@ zum_fs_readdir(zum_fs_t *fs, uint64_t object, zum_dirent_cb_t cb, void *arg)
         zap_cursor_advance(&zc)) {
         if (za->za_integer_length != 8 || za->za_num_integers != 1)
             continue;
-        if (zum_zget(fs, ZFS_DIRENT_OBJ(za->za_first_integer), &zp) != 0)
+        error = getattr_impl(fs, ZFS_DIRENT_OBJ(za->za_first_integer), &attr,
+            &found);
+        if (error != 0 && !found) {
+            error = 0;
             continue;	/* a dangling entry is skipped, as zfs_readdir() */
-        error = fill_attr(fs, zp, &attr);
-        zum_zrele(zp);
+        }
         if (error != 0)
             break;
         if ((stop = cb(arg, za->za_name, &attr)) < 0)
@@ -312,12 +393,62 @@ zum_fs_statfs(zum_fs_t *fs, zum_statfs_t *st)
     return (0);
 }
 
+/*
+ * Make the dataset's changes durable (FlushFileBuffers, write-through): wait
+ * for the txgs that hold them, and return at once when none is newer than the
+ * last synced one, as zil_commit() does with nothing to commit.  Concurrent
+ * callers share the txg they wait for.
+ *
+ * The dirty lists are read first: spa_sync() empties a txg's list while it
+ * syncs, after txg_sync_thread() set tx_syncing_txg under tx_sync_lock, so a
+ * txg found clean here is either synced or seen syncing below.
+ */
 int
 zum_fs_sync(zum_fs_t *fs)
 {
-    if (!fs->readonly)
-        zum_sync(fs);
+    zum_pool_t *pool;
+    uint64_t txg = zum_fs_sync_txg(fs, &pool);
+
+    if (txg != 0)
+        zum_pool_wait(pool, txg);
     return (0);
+}
+
+/*
+ * zum_fs_sync() in two steps, so the caller can wait without holding what
+ * keeps the dataset still: the txg to wait for (0: nothing to wait for) and
+ * its pool, which outlives a suspend of the dataset.
+ */
+uint64_t
+zum_fs_sync_txg(zum_fs_t *fs, zum_pool_t **pool)
+{
+    dsl_pool_t *dp;
+    tx_state_t *tx;
+    uint64_t synced, syncing, newest = 0, t;
+
+    *pool = NULL;
+    if (fs->readonly)
+        return (0);
+    dp = dmu_objset_pool(fs->os);
+    *pool = (zum_pool_t *)dp;
+    tx = &dp->dp_tx;
+    t = spa_last_synced_txg(dp->dp_spa);
+    for (uint64_t i = 1; i <= TXG_SIZE; i++)
+        if (dmu_objset_is_dirty(fs->os, t + i))
+            newest = t + i;
+    mutex_enter(&tx->tx_sync_lock);
+    synced = tx->tx_synced_txg;
+    syncing = tx->tx_syncing_txg;
+    mutex_exit(&tx->tx_sync_lock);
+    if (syncing > synced && syncing > newest)
+        newest = syncing;
+    return (newest > synced ? newest : 0);
+}
+
+void
+zum_pool_wait(zum_pool_t *pool, uint64_t txg)
+{
+    txg_wait_synced((dsl_pool_t *)pool, txg);
 }
 
 int

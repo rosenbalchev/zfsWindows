@@ -94,6 +94,12 @@ typedef struct mount {
     WCHAR mountpoint[MAX_PATH];
     CRITICAL_SECTION snap_lock;	/* the snapshots array */
     snapshot_t snapshots[MAX_SNAPSHOTS];
+    struct lookup_cache *lookups;	/* path -> object, live dataset */
+    LONG64 names;		/* bumped (lock exclusive) when names change */
+    /* Request statistics, per WinFsp request kind (op_leave()). */
+    volatile LONG64 op_count[FspFsctlTransactKindCount];
+    volatile LONG64 op_ns[FspFsctlTransactKindCount];
+    volatile LONG64 op_max_ns[FspFsctlTransactKindCount];
 } mount_t;
 
 typedef enum kind { K_FILE, K_CTL_ROOT, K_CTL_SNAPDIR } kind_t;
@@ -232,15 +238,22 @@ object_sd(zum_fs_t *fs, uint64_t object, BOOLEAN is_dir, int depth,
     ULONG n;
     int error;
 
-    error = zum_fs_get_security(fs, object, NULL, 0, &len);
-    if ((error == 0 || error == ERANGE) && len > 0 &&
-        (sd = LocalAlloc(LMEM_FIXED, len)) != NULL) {
-        if (zum_fs_get_security(fs, object, sd, len, &len) == 0 &&
-            IsValidSecurityDescriptor(sd)) {
+    /* One read for a descriptor of usual size, a second for a larger one. */
+    if ((sd = LocalAlloc(LMEM_FIXED, 1024)) != NULL) {
+        error = zum_fs_get_security(fs, object, sd, 1024, &len);
+        if (error == ERANGE && len > 1024) {
+            LocalFree(sd);
+            sd = LocalAlloc(LMEM_FIXED, len);
+            error = sd == NULL ? ENOMEM :
+                zum_fs_get_security(fs, object, sd, len, &len);
+        }
+        if (error == 0 && len > 0 && IsValidSecurityDescriptor(sd)) {
             *size = len;
             return (sd);
         }
-        LocalFree(sd);
+        if (sd != NULL)
+            LocalFree(sd);
+        sd = NULL;
     }
     if (zum_fs_owner(fs, object, &uid, &gid, &parent) != 0)
         return (NULL);
@@ -401,6 +414,174 @@ resolve(mount_t *m, char *path, target_t *t)
     return (0);
 }
 
+/* ---- lookup cache ------------------------------------------------------------ */
+
+/*
+ * Which object a path of the live dataset names, for the lookups of every
+ * open (GetSecurityByName, then Open: two full walks of the path, a zget and
+ * a ZAP lookup per component, issue #33).  Only names found are kept, under
+ * their exact spelling, with the mount's names generation: every delete,
+ * rename and suspend bumps it with the mount lock held exclusive, and
+ * lookups run with it held shared, so an entry of an older generation is
+ * never used.  A miss on the path can still hit its parent directory.
+ */
+#define LOOKUP_SLOTS	4096	/* a power of two */
+#define LOOKUP_PATH	224
+
+typedef struct lookup_entry {
+    LONG64 names;		/* 0: empty */
+    uint64_t object;
+    uint32_t hash;
+    uint16_t len;
+    char path[LOOKUP_PATH];
+} lookup_entry_t;
+
+typedef struct lookup_cache {
+    SRWLOCK lock;
+    lookup_entry_t slot[LOOKUP_SLOTS];
+} lookup_cache_t;
+
+static uint32_t
+path_hash(const char *path, size_t len)
+{
+    uint32_t h = 2166136261u;	/* FNV-1a */
+
+    while (len-- > 0)
+        h = (h ^ (uint8_t)*path++) * 16777619u;
+    return (h);
+}
+
+static BOOLEAN
+lookup_get(mount_t *m, const char *path, size_t len, uint64_t *object)
+{
+    lookup_cache_t *lc = m->lookups;
+    uint32_t h = path_hash(path, len);
+    lookup_entry_t *e;
+    BOOLEAN hit;
+
+    if (lc == NULL || len >= LOOKUP_PATH)
+        return (FALSE);
+    e = &lc->slot[h & (LOOKUP_SLOTS - 1)];
+    AcquireSRWLockShared(&lc->lock);
+    hit = e->names == m->names && e->hash == h && e->len == len &&
+        memcmp(e->path, path, len) == 0;
+    if (hit)
+        *object = e->object;
+    ReleaseSRWLockShared(&lc->lock);
+    return (hit);
+}
+
+static void
+lookup_put(mount_t *m, const char *path, size_t len, uint64_t object)
+{
+    lookup_cache_t *lc = m->lookups;
+    uint32_t h = path_hash(path, len);
+    lookup_entry_t *e;
+
+    if (lc == NULL || len >= LOOKUP_PATH)
+        return;
+    e = &lc->slot[h & (LOOKUP_SLOTS - 1)];
+    AcquireSRWLockExclusive(&lc->lock);
+    e->names = m->names;
+    e->object = object;
+    e->hash = h;
+    e->len = (uint16_t)len;
+    memcpy(e->path, path, len);
+    ReleaseSRWLockExclusive(&lc->lock);
+}
+
+/* Names may now point elsewhere.  The mount lock is held exclusive. */
+static void
+names_changed(mount_t *m)
+{
+    m->names++;
+}
+
+/*
+ * The names of file object (not a directory: names below it would stay)
+ * are gone, under whatever spelling the cache has them.  The mount lock is
+ * held exclusive.
+ */
+static void
+names_forget(mount_t *m, uint64_t object)
+{
+    lookup_cache_t *lc = m->lookups;
+    int i;
+
+    if (lc == NULL)
+        return;
+    AcquireSRWLockExclusive(&lc->lock);
+    for (i = 0; i < LOOKUP_SLOTS; i++)
+        if (lc->slot[i].object == object)
+            lc->slot[i].names = 0;
+    ReleaseSRWLockExclusive(&lc->lock);
+}
+
+/*
+ * zum_fs_lookup() of t's path, through the cache for the live dataset.  The
+ * mount lock is held (shared or exclusive), so the generation cannot move.
+ */
+static int
+lookup(mount_t *m, const target_t *t, uint64_t *object)
+{
+    const char *rel = t->rel, *slash = strrchr(rel, '/');
+    size_t len = strlen(rel);
+    uint64_t dir;
+    char *parent;
+    int error;
+
+    if (t->fs != m->fs || m->lookups == NULL)
+        return (zum_fs_lookup(t->fs, rel, object));
+    if (lookup_get(m, rel, len, object))
+        return (0);
+    if (slash == NULL || slash == rel || slash[1] == '\0') {
+        error = zum_fs_lookup(m->fs, rel, object);
+    } else if (lookup_get(m, rel, (size_t)(slash - rel), &dir)) {
+        error = zum_fs_lookup_at(m->fs, dir, slash + 1, object);
+    } else if ((parent = malloc((size_t)(slash - rel) + 1)) == NULL) {
+        error = zum_fs_lookup(m->fs, rel, object);
+    } else {
+        memcpy(parent, rel, (size_t)(slash - rel));
+        parent[slash - rel] = '\0';
+        error = zum_fs_lookup(m->fs, parent, &dir);
+        if (error == 0) {
+            lookup_put(m, parent, strlen(parent), dir);
+            error = zum_fs_lookup_at(m->fs, dir, slash + 1, object);
+        }
+        free(parent);
+    }
+    if (error == 0)
+        lookup_put(m, rel, len, *object);
+    return (error);
+}
+
+/*
+ * The directory holding t's path (through the cache) and the final
+ * component, which points into t->rel.
+ */
+static int
+parent_of(mount_t *m, const target_t *t, uint64_t *dir, const char **leaf)
+{
+    const char *slash = strrchr(t->rel, '/');
+    target_t parent = *t;
+    char *path;
+    int error;
+
+    *leaf = slash != NULL ? slash + 1 : t->rel;
+    if (slash == NULL || slash == t->rel) {
+        *dir = t->fs == m->fs ? m->root : 0;
+        return (*dir != 0 ? 0 : zum_fs_lookup(t->fs, "", dir));
+    }
+    if ((path = malloc((size_t)(slash - t->rel) + 1)) == NULL)
+        return (ENOMEM);
+    memcpy(path, t->rel, (size_t)(slash - t->rel));
+    path[slash - t->rel] = '\0';
+    parent.rel = path;
+    error = lookup(m, &parent, dir);
+    free(path);
+    return (error);
+}
+
 /* ---- file information ------------------------------------------------------ */
 
 static uint64_t
@@ -517,6 +698,120 @@ writable(mount_t *m, file_context_t *c)
     return (!m->readonly && c->kind == K_FILE && c->snapshot == NULL);
 }
 
+/* ---- request statistics (issue #33) ---------------------------------------- */
+
+/*
+ * Requests answered, and the time they took in this process (WinFsp's own
+ * locking included, the kernel round trip not), per WinFsp request kind and
+ * mount.  The bridge serves them as kstat "zfswin:0:winfsp" (all mounts) or
+ * "zfswin:0:winfsp@<dataset>".  Two interlocked adds per request.
+ */
+static const char *const op_names[FspFsctlTransactKindCount] = {
+    [FspFsctlTransactCreateKind] = "create",
+    [FspFsctlTransactOverwriteKind] = "overwrite",
+    [FspFsctlTransactCleanupKind] = "cleanup",
+    [FspFsctlTransactCloseKind] = "close",
+    [FspFsctlTransactReadKind] = "read",
+    [FspFsctlTransactWriteKind] = "write",
+    [FspFsctlTransactQueryInformationKind] = "query_information",
+    [FspFsctlTransactSetInformationKind] = "set_information",
+    [FspFsctlTransactFlushBuffersKind] = "flush",
+    [FspFsctlTransactQueryVolumeInformationKind] = "query_volume",
+    [FspFsctlTransactQueryDirectoryKind] = "query_directory",
+    [FspFsctlTransactDeviceControlKind] = "device_control",
+    [FspFsctlTransactQuerySecurityKind] = "query_security",
+    [FspFsctlTransactSetSecurityKind] = "set_security",
+    [FspFsctlTransactQueryStreamInformationKind] = "query_streams",
+};
+static LONGLONG op_hz;
+static __declspec(thread) LONGLONG op_started;
+
+static mount_t *find_mount(const char *dataset);
+
+static NTSTATUS
+op_enter(FSP_FILE_SYSTEM *fsp, FSP_FSCTL_TRANSACT_REQ *req,
+    FSP_FSCTL_TRANSACT_RSP *rsp)
+{
+    LARGE_INTEGER now;
+
+    QueryPerformanceCounter(&now);
+    op_started = now.QuadPart;
+    return (FspFileSystemOpEnter(fsp, req, rsp));
+}
+
+static NTSTATUS
+op_leave(FSP_FILE_SYSTEM *fsp, FSP_FSCTL_TRANSACT_REQ *req,
+    FSP_FSCTL_TRANSACT_RSP *rsp)
+{
+    NTSTATUS status = FspFileSystemOpLeave(fsp, req, rsp);
+    mount_t *m = MOUNT(fsp);
+    LARGE_INTEGER now;
+    LONGLONG ticks;
+    LONG64 ns, max;
+    UINT32 kind = req->Kind;
+
+    QueryPerformanceCounter(&now);
+    if (kind < FspFsctlTransactKindCount && op_hz > 0) {
+        ticks = now.QuadPart - op_started;
+        ns = ticks / op_hz * 1000000000 + ticks % op_hz * 1000000000 / op_hz;
+        InterlockedIncrement64(&m->op_count[kind]);
+        InterlockedAdd64(&m->op_ns[kind], ns);
+        while ((max = m->op_max_ns[kind]) < ns &&
+            InterlockedCompareExchange64(&m->op_max_ns[kind], ns, max) != max)
+            ;
+    }
+    return (status);
+}
+
+/*
+ * The statistics of spec ("zfswin:0:winfsp", or "...@<dataset>" for one
+ * mount) as "kstat -p" lines; ENOENT for an unknown spec or dataset.
+ */
+static int
+op_stats_text(const char *spec, char *out, size_t cap, size_t *used)
+{
+    const char *name = "zfswin:0:winfsp", *dataset = NULL;
+    LONG64 count, ns, max;
+    int i, j, n;
+
+    *used = 0;
+    if (strncmp(spec, name, strlen(name)) != 0)
+        return (ENOENT);
+    if (spec[strlen(name)] == '@')
+        dataset = spec + strlen(name) + 1;
+    else if (spec[strlen(name)] != '\0')
+        return (ENOENT);
+    AcquireSRWLockShared(&table_lock);
+    if (dataset != NULL && find_mount(dataset) == NULL) {
+        ReleaseSRWLockShared(&table_lock);
+        return (ENOENT);
+    }
+    for (i = 0; i < FspFsctlTransactKindCount; i++) {
+        if (op_names[i] == NULL)
+            continue;
+        count = ns = max = 0;
+        for (j = 0; j < MAX_MOUNTS; j++) {
+            const mount_t *m = &mounts[j];
+
+            if (!m->in_use ||
+                (dataset != NULL && strcmp(m->dataset, dataset) != 0))
+                continue;
+            count += m->op_count[i];
+            ns += m->op_ns[i];
+            max = m->op_max_ns[i] > max ? m->op_max_ns[i] : max;
+        }
+        n = snprintf(out + *used, cap - *used,
+            "%s:%s_count\t%lld\n%s:%s_ns\t%lld\n%s:%s_max_ns\t%lld\n",
+            spec, op_names[i], (long long)count, spec, op_names[i],
+            (long long)ns, spec, op_names[i], (long long)max);
+        if (n < 0 || (size_t)n >= cap - *used)
+            break;
+        *used += (size_t)n;
+    }
+    ReleaseSRWLockShared(&table_lock);
+    return (0);
+}
+
 /* ---- WinFsp operations ----------------------------------------------------- */
 
 static NTSTATUS
@@ -567,7 +862,7 @@ GetSecurityByName(FSP_FILE_SYSTEM *fsp, PWSTR name, PUINT32 pattributes,
         goto done;
     }
     if (error == 0)
-        error = zum_fs_lookup(t.fs, t.rel, &object);
+        error = lookup(m, &t, &object);
     if (error == 0)
         error = zum_fs_getattr(t.fs, object, &attr);
     if (error == 0 && stream != NULL) {
@@ -632,15 +927,22 @@ Create(FSP_FILE_SYSTEM *fsp, PWSTR name, UINT32 create_options,
             error = zum_fs_stream_open(t.fs, base, stream, 1, &object);
         is_dir = FALSE;
     } else if (error == 0) {
-        error = zum_fs_create(t.fs, t.rel, is_dir, &object);
+        /*
+         * In the parent the lookup cache knows, with its attributes and
+         * the descriptor WinFsp computed from the parent's and the
+         * caller's, in one transaction.
+         */
+        uint64_t dir;
+        const char *leaf;
+
+        error = parent_of(m, &t, &dir, &leaf);
+        if (error == 0)
+            error = zum_fs_create_at(t.fs, dir, leaf, is_dir,
+                (attributes & ZUM_FA_SETTABLE) != 0 ?
+                attributes & ZUM_FA_SETTABLE : UINT32_MAX,
+                sd, sd != NULL ? GetSecurityDescriptorLength(sd) : 0,
+                &object);
         base = object;
-        if (error == 0 && (attributes & ZUM_FA_SETTABLE) != 0)
-            error = zum_fs_setattr(t.fs, object,
-                attributes & ZUM_FA_SETTABLE, 0, 0, 0, 0);
-        /* WinFsp computed it from the parent's and the caller's. */
-        if (error == 0 && sd != NULL)
-            error = zum_fs_set_security(t.fs, object, sd,
-                GetSecurityDescriptorLength(sd));
     }
     status = error == ENOENT ? STATUS_OBJECT_PATH_NOT_FOUND :
         error == EROFS ? STATUS_MEDIA_WRITE_PROTECTED : status_of(error);
@@ -677,10 +979,16 @@ Open(FSP_FILE_SYSTEM *fsp, PWSTR name, UINT32 create_options,
         if (stream != NULL)
             error = ENOENT;
     } else if (error == 0) {
-        error = zum_fs_lookup(t.fs, t.rel, &base);
+        error = lookup(m, &t, &base);
         object = base;
-        if (error == 0)
+        if (error == 0) {
+            /* As context_info(), which this saves calling again. */
+            SRWLOCK *lock = object_lock(m, base);
+
+            AcquireSRWLockShared(lock);
             error = zum_fs_getattr(t.fs, base, &attr);
+            ReleaseSRWLockShared(lock);
+        }
         if (error == 0 && stream != NULL)
             error = zum_fs_stream_open(t.fs, base, stream, 0, &object);
     }
@@ -691,8 +999,14 @@ Open(FSP_FILE_SYSTEM *fsp, PWSTR name, UINT32 create_options,
             create_options, pcontext);
     else
         free(stream);
-    if (NT_SUCCESS(status))
+    if (NT_SUCCESS(status) && t.kind == K_FILE && stream == NULL) {
+        to_file_info(&attr, info);
+        info->IndexNumber = index_of(*pcontext, base);
+        if (t.snapshot != NULL)
+            info->FileAttributes |= FILE_ATTRIBUTE_READONLY;
+    } else if (NT_SUCCESS(status)) {
         status = context_info(m, *pcontext, info);
+    }
     UNLOCK_SHARED(m);
     free(path);
     return (status);
@@ -744,10 +1058,20 @@ Cleanup(FSP_FILE_SYSTEM *fsp, PVOID context, PWSTR name, ULONG flags)
         return;
     EXCLUSIVE(m);
     error = resolve(m, path, &t);
-    if (error == 0 && c->stream != NULL)
+    if (error == 0 && c->stream != NULL) {
         error = zum_fs_stream_remove(c->fs, c->base, c->stream);
-    else if (error == 0)
-        error = zum_fs_remove(c->fs, t.rel, c->is_dir);
+    } else if (error == 0) {
+        uint64_t dir;
+        const char *leaf;
+
+        error = parent_of(m, &t, &dir, &leaf);
+        if (error == 0)
+            error = zum_fs_remove_at(c->fs, dir, leaf, c->is_dir);
+    }
+    if (c->stream == NULL && !c->is_dir)
+        names_forget(m, c->base);
+    else if (c->stream == NULL)
+        names_changed(m);
     UNLOCK_EXCLUSIVE(m);
     if (error != 0)
         FspServiceLog(EVENTLOG_WARNING_TYPE,
@@ -802,7 +1126,8 @@ Write(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
     file_context_t *c = context;
     SRWLOCK *lock;
     zum_attr_t attr;
-    uint64_t at = to_end ? ZUM_FS_APPEND : offset;
+    uint64_t at = to_end ? ZUM_FS_APPEND : offset, txg = 0;
+    zum_pool_t *pool = NULL;
     NTSTATUS status;
     int error = 0;
 
@@ -823,7 +1148,7 @@ Write(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
     if (error == 0 && length > 0)
         error = zum_fs_write(c->fs, c->object, &at, buffer, length);
     if (error == 0 && c->write_through)
-        error = zum_fs_sync(c->fs);
+        txg = zum_fs_sync_txg(c->fs, &pool);
     status = status_of(error);
     if (NT_SUCCESS(status)) {
         *pdone = length;
@@ -831,6 +1156,9 @@ Write(FSP_FILE_SYSTEM *fsp, PVOID context, PVOID buffer, UINT64 offset,
     }
     ReleaseSRWLockExclusive(lock);
     UNLOCK_SHARED(m);
+    /* Written through: durable before the write completes, as Flush. */
+    if (txg != 0)
+        zum_pool_wait(pool, txg);
     return (status);
 }
 
@@ -840,12 +1168,21 @@ Flush(FSP_FILE_SYSTEM *fsp, PVOID context, FSP_FSCTL_FILE_INFO *info)
     mount_t *m = MOUNT(fsp);
     file_context_t *c = context;
     NTSTATUS status = STATUS_SUCCESS;
+    zum_pool_t *pool;
+    uint64_t txg;
 
-    EXCLUSIVE(m);
-    (void) zum_fs_sync(m->fs);
+    /*
+     * What must be durable is what was written before the flush: the txg
+     * is chosen under the lock and waited for without it, so concurrent
+     * flushes share a txg and nothing else waits behind one.
+     */
+    SHARED(m);
+    txg = zum_fs_sync_txg(m->fs, &pool);
     if (c != NULL)
         status = context_info(m, c, info);
-    UNLOCK_EXCLUSIVE(m);
+    UNLOCK_SHARED(m);
+    if (txg != 0)
+        zum_pool_wait(pool, txg);
     return (status);
 }
 
@@ -972,6 +1309,14 @@ Rename(FSP_FILE_SYSTEM *fsp, PVOID context, PWSTR name, PWSTR new_name,
     }
     if (NT_SUCCESS(status))
         status = status_of(zum_fs_rename(m->fs, tf.rel, tt.rel));
+    /* A directory moves the names below it too. */
+    if (c->is_dir) {
+        names_changed(m);
+    } else {
+        names_forget(m, c->object);
+        if (error == 0 && target != c->object)
+            names_forget(m, target);	/* replaced */
+    }
     UNLOCK_EXCLUSIVE(m);
 out:
     free(from);
@@ -1547,6 +1892,10 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
     (void) zum_fs_lookup(m->fs, "", &m->root);
     (void) zum_fs_statfs(m->fs, &st);
     m->case_sensitive = st.case_sensitive;
+    /* Without the cache (no memory) every lookup walks the path. */
+    m->names = 1;		/* an empty slot's 0 never matches */
+    if ((m->lookups = calloc(1, sizeof (*m->lookups))) != NULL)
+        InitializeSRWLock(&m->lookups->lock);
 
     memset(&params, 0, sizeof (params));
     GetSystemTimeAsFileTime(&now);
@@ -1578,6 +1927,12 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
     params.NamedStreams = 1;
     params.DeviceControl = 1;
     params.PostCleanupWhenModifiedOnly = 1;
+    /*
+     * CanDelete only refuses READONLY files and non-empty directories; the
+     * FSD knows the attributes, so a plain file's delete needs no round
+     * trip for the check (issue #33).
+     */
+    params.PostDispositionWhenNecessaryOnly = 1;
     params.UmFileContextIsUserContext2 = 1;
     params.ReadOnlyVolume = readonly;
     wcscpy_s(params.FileSystemName, ARRAYSIZE(params.FileSystemName),
@@ -1587,8 +1942,12 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
         &zum_interface, &m->fsp);
     if (NT_SUCCESS(status)) {
         PCWSTR mp = mountmgr_point(mountpoint, managed, ARRAYSIZE(managed));
+        LARGE_INTEGER hz;
 
         m->fsp->UserContext = m;
+        QueryPerformanceFrequency(&hz);
+        op_hz = hz.QuadPart;
+        FspFileSystemSetOperationGuard(m->fsp, op_enter, op_leave);
         status = FspFileSystemSetMountPoint(m->fsp, (PWSTR)mp);
         /* The Mount Manager needs an administrator; zfswin-um mount may not be. */
         if (!NT_SUCCESS(status) && mp != mountpoint &&
@@ -1605,6 +1964,8 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
             FspFileSystemDelete(m->fsp);
         (void) zum_fs_close(m->fs);
         DeleteCriticalSection(&m->snap_lock);
+        free(m->lookups);
+        m->lookups = NULL;
         return (status == STATUS_OBJECT_NAME_COLLISION ? EEXIST : EINVAL);
     }
     /* Recorded and reported as "X:", however it was mounted. */
@@ -1635,6 +1996,8 @@ unmount_one(mount_t *m)
         EVENTLOG_ERROR_TYPE, L"unmounted %s from %s (%d)", wds,
         m->mountpoint, error);
     DeleteCriticalSection(&m->snap_lock);
+    free(m->lookups);
+    m->lookups = NULL;
     m->in_use = FALSE;
 }
 
@@ -1901,6 +2264,7 @@ bridge_suspend(const char *dataset)
         EXCLUSIVE(m);
         snapshots_close(m, NULL, FALSE);
         (void) zum_fs_suspend(m->fs);
+        names_changed(m);
         m->suspended = TRUE;
     }
     ReleaseSRWLockShared(&table_lock);
@@ -1921,6 +2285,7 @@ bridge_resume(const char *dataset)
         else
             FspServiceLog(EVENTLOG_ERROR_TYPE,
                 L"remount after rollback failed: %d", error);
+        names_changed(m);	/* the rolled-back dataset's names */
         m->suspended = FALSE;
         UNLOCK_EXCLUSIVE(m);
     }
@@ -2095,10 +2460,17 @@ serve_one(HANDLE pipe, ULONG pid)
     } else if (hdr.zb_op == ZFS_BRIDGE_OP_KSTAT) {
         size_t used = 0;
 
-        resp.zb_error = sect[ZFS_BRIDGE_SRC] == NULL ||
-            sect[ZFS_BRIDGE_DST] == NULL ? EINVAL :
-            zum_kstat_text(sect[ZFS_BRIDGE_SRC], sect[ZFS_BRIDGE_DST],
-            (size_t)hdr.zb_cap[ZFS_BRIDGE_DST], &used);
+        if (sect[ZFS_BRIDGE_SRC] == NULL || sect[ZFS_BRIDGE_DST] == NULL) {
+            resp.zb_error = EINVAL;
+        } else if (strncmp(sect[ZFS_BRIDGE_SRC], "zfswin:", 7) == 0) {
+            resp.zb_error = op_stats_text(sect[ZFS_BRIDGE_SRC],
+                sect[ZFS_BRIDGE_DST], (size_t)hdr.zb_cap[ZFS_BRIDGE_DST],
+                &used);
+        } else {
+            resp.zb_error = zum_kstat_text(sect[ZFS_BRIDGE_SRC],
+                sect[ZFS_BRIDGE_DST], (size_t)hdr.zb_cap[ZFS_BRIDGE_DST],
+                &used);
+        }
         resp.zb_len[ZFS_BRIDGE_DST] = resp.zb_error == 0 ? used : 0;
     } else if (hdr.zb_op == ZFS_BRIDGE_OP_IOCTL &&
         hdr.zb_len[ZFS_BRIDGE_CMD] == zum_ioctl_cmd_size()) {

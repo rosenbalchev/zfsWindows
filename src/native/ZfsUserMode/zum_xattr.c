@@ -292,6 +292,44 @@ zum_xattr_set(zum_context_t *context, zum_znode_t *zp, const char *name,
 }
 
 int
+zum_ntacl_pack(zum_context_t *context, const void *sd, size_t len,
+    void **packed, size_t *size)
+{
+    char *prefixed, *key;
+    nvlist_t *nvl;
+    char *buf;
+    int error;
+
+    *packed = NULL;
+    if (!context->xattr_sa)
+        return (ENOTSUP);
+    if (len > DXATTR_MAX_ENTRY_SIZE)
+        return (EFBIG);
+    /* zum_xattr_set() -> sa_set(): the prefixed name, as sa_name() keys it. */
+    prefixed = kmem_asprintf("%s%s", ZUM_XATTR_PREFIX, ZUM_EA_NTACL);
+    key = sa_name(context, prefixed);
+    kmem_strfree(prefixed);
+    VERIFY0(nvlist_alloc(&nvl, NV_UNIQUE_NAME, KM_SLEEP));
+    error = nvlist_add_byte_array(nvl, key, (uchar_t *)sd, (uint_t)len);
+    /* sa_xattr_store()'s limit and encoding. */
+    if (error == 0)
+        error = nvlist_size(nvl, size, NV_ENCODE_XDR);
+    if (error == 0 && *size > SA_ATTR_MAX_LEN)
+        error = EFBIG;
+    if (error == 0) {
+        buf = vmem_alloc(*size, KM_SLEEP);
+        error = nvlist_pack(nvl, &buf, size, NV_ENCODE_XDR, KM_SLEEP);
+        if (error == 0)
+            *packed = buf;
+        else
+            vmem_free(buf, *size);
+    }
+    nvlist_free(nvl);
+    spa_strfree(key);
+    return (error);
+}
+
+int
 zum_fs_get_security(zum_fs_t *fs, uint64_t object, void *buf,
     uint32_t size, uint32_t *len)
 {

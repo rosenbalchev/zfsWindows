@@ -157,8 +157,19 @@ int zum_ioctl(uint64_t request, uint32_t client_pid, zum_ioctl_buffers_t *io);
 
 int zum_fs_statfs(zum_fs_t *fs, zum_statfs_t *st);
 int zum_fs_sync(zum_fs_t *fs);
+/*
+ * zum_fs_sync() in two steps: the txg holding the dataset's changes (0:
+ * already durable) and its pool, then the wait, which needs no lock on the
+ * dataset (the pool outlives a suspend of it).
+ */
+typedef struct zum_pool zum_pool_t;
+uint64_t zum_fs_sync_txg(zum_fs_t *fs, zum_pool_t **pool);
+void zum_pool_wait(zum_pool_t *pool, uint64_t txg);
 
 int zum_fs_lookup(zum_fs_t *fs, const char *path, uint64_t *object);
+/* path relative to directory dir; "" names dir itself. */
+int zum_fs_lookup_at(zum_fs_t *fs, uint64_t dir, const char *path,
+    uint64_t *object);
 int zum_fs_getattr(zum_fs_t *fs, uint64_t object, zum_attr_t *attr);
 /*
  * Attributes (ZUM_FA_SETTABLE bits; UINT32_MAX leaves them) and times
@@ -179,7 +190,17 @@ int zum_fs_truncate(zum_fs_t *fs, uint64_t object, uint64_t size);
 
 int zum_fs_create(zum_fs_t *fs, const char *path, int is_dir,
     uint64_t *object);
+/*
+ * name in directory dir, with Windows attributes (UINT32_MAX: none) and a
+ * security descriptor (NULL: none), in one transaction when xattr=sa.
+ */
+int zum_fs_create_at(zum_fs_t *fs, uint64_t dir, const char *name,
+    int is_dir, uint32_t attributes, const void *sd, uint32_t sd_len,
+    uint64_t *object);
 int zum_fs_remove(zum_fs_t *fs, const char *path, int is_dir);
+/* zum_fs_remove() of name in directory dir. */
+int zum_fs_remove_at(zum_fs_t *fs, uint64_t dir, const char *name,
+    int is_dir);
 /* Replaces an existing file or empty directory of the same kind. */
 int zum_fs_rename(zum_fs_t *fs, const char *from, const char *to);
 /* 1 if the directory has no entries. */
