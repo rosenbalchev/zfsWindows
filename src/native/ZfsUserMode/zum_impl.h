@@ -101,6 +101,8 @@ int zum_resolve(zum_context_t *context, const char *path, zum_znode_t **dzpp,
     char leaf[ZAP_MAXNAMELEN], zum_znode_t **zpp);
 int zum_lookup_path(zum_context_t *context, const char *path,
     uint64_t *object);
+int zum_lookup_path_at(zum_context_t *context, uint64_t dir,
+    const char *path, uint64_t *object);
 
 /* Namespace and data, '/'-separated paths relative to the dataset root. */
 int zum_create_path(zum_context_t *context, const char *path,

@@ -159,6 +159,9 @@ int zum_fs_statfs(zum_fs_t *fs, zum_statfs_t *st);
 int zum_fs_sync(zum_fs_t *fs);
 
 int zum_fs_lookup(zum_fs_t *fs, const char *path, uint64_t *object);
+/* path relative to directory dir; "" names dir itself. */
+int zum_fs_lookup_at(zum_fs_t *fs, uint64_t dir, const char *path,
+    uint64_t *object);
 int zum_fs_getattr(zum_fs_t *fs, uint64_t object, zum_attr_t *attr);
 /*
  * Attributes (ZUM_FA_SETTABLE bits; UINT32_MAX leaves them) and times

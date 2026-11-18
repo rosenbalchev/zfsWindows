@@ -190,6 +190,13 @@ zum_fs_lookup(zum_fs_t *fs, const char *path, uint64_t *object)
 }
 
 int
+zum_fs_lookup_at(zum_fs_t *fs, uint64_t dir, const char *path,
+    uint64_t *object)
+{
+    return (zum_lookup_path_at(fs, dir, path, object));
+}
+
+int
 zum_fs_read(zum_fs_t *fs, uint64_t object, uint64_t offset, uint32_t length,
     void *buffer, uint32_t *done)
 {

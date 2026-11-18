@@ -499,12 +499,12 @@ dir_remove(zum_context_t *context, zum_znode_t *dzp, const char *name,
 }
 
 /*
- * Resolve a '/'-separated path relative to the dataset root to its parent
+ * Resolve a '/'-separated path relative to directory dir to its parent
  * directory and final component.  "." and ".." components are rejected.
  */
 static int
-resolve_parent(zum_context_t *context, const char *path, zum_znode_t **dzpp,
-    char leaf[ZAP_MAXNAMELEN])
+resolve_parent_at(zum_context_t *context, uint64_t dir, const char *path,
+    zum_znode_t **dzpp, char leaf[ZAP_MAXNAMELEN])
 {
     zum_znode_t *dzp = NULL, *next;
     const char *start = path, *slash;
@@ -513,8 +513,12 @@ resolve_parent(zum_context_t *context, const char *path, zum_znode_t **dzpp,
     size_t length;
     int error;
 
-    if ((error = zum_zget(context, context->root_obj, &dzp)) != 0)
+    if ((error = zum_zget(context, dir, &dzp)) != 0)
         return (error);
+    if (!S_ISDIR(dzp->z_mode)) {
+        zum_zrele(dzp);
+        return (ENOTDIR);
+    }
     while (*start == '/')
         start++;
     for (;;) {
@@ -549,6 +553,14 @@ resolve_parent(zum_context_t *context, const char *path, zum_znode_t **dzpp,
     return (error);
 }
 
+/* resolve_parent_at() from the dataset root. */
+static int
+resolve_parent(zum_context_t *context, const char *path, zum_znode_t **dzpp,
+    char leaf[ZAP_MAXNAMELEN])
+{
+    return (resolve_parent_at(context, context->root_obj, path, dzpp, leaf));
+}
+
 /* Resolve a path to its znode, optionally also returning the parent. */
 int
 zum_resolve(zum_context_t *context, const char *path, zum_znode_t **dzpp,
@@ -573,6 +585,14 @@ zum_resolve(zum_context_t *context, const char *path, zum_znode_t **dzpp,
 int
 zum_lookup_path(zum_context_t *context, const char *path, uint64_t *object)
 {
+    return (zum_lookup_path_at(context, context->root_obj, path, object));
+}
+
+/* A path relative to directory dir (which an empty path names). */
+int
+zum_lookup_path_at(zum_context_t *context, uint64_t dir, const char *path,
+    uint64_t *object)
+{
     char leaf[ZAP_MAXNAMELEN];
     zum_znode_t *dzp;
     const char *p = path;
@@ -581,10 +601,10 @@ zum_lookup_path(zum_context_t *context, const char *path, uint64_t *object)
     while (*p == '/')
         p++;
     if (*p == '\0') {
-        *object = context->root_obj;
+        *object = dir;
         return (0);
     }
-    if ((error = resolve_parent(context, path, &dzp, leaf)) != 0)
+    if ((error = resolve_parent_at(context, dir, path, &dzp, leaf)) != 0)
         return (error);
     error = dir_lookup(context, dzp, leaf, object);
     zum_zrele(dzp);
