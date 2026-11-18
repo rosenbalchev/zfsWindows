@@ -51,7 +51,9 @@ if ($Platform -eq "x64") {
     $global:LASTEXITCODE = 0
     $suite = if ($Edition -eq "kernel") { "Test-InstallerInVm.ps1" } else { "Test-UserModeInVm.ps1" }
     try {
-        & (Join-Path $repo "scripts\vm\$suite") -Configuration $Configuration
+        # The build job's version: this job's checkout has the committed
+        # build\BUILD_NUMBER, not the one the build raised.
+        & (Join-Path $repo "scripts\vm\$suite") -Configuration $Configuration -Version $Version
     } catch {
         # Both suites throw one message: a first line, then a failure per line.
         $lines = @("$($_.Exception.Message)" -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
