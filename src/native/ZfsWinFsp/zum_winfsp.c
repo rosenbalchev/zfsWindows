@@ -1927,6 +1927,12 @@ mount_one(PCWSTR source, const char *pool, const char *dataset,
     params.NamedStreams = 1;
     params.DeviceControl = 1;
     params.PostCleanupWhenModifiedOnly = 1;
+    /*
+     * CanDelete only refuses READONLY files and non-empty directories; the
+     * FSD knows the attributes, so a plain file's delete needs no round
+     * trip for the check (issue #33).
+     */
+    params.PostDispositionWhenNecessaryOnly = 1;
     params.UmFileContextIsUserContext2 = 1;
     params.ReadOnlyVolume = readonly;
     wcscpy_s(params.FileSystemName, ARRAYSIZE(params.FileSystemName),

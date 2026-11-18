@@ -27,6 +27,7 @@ configure_file(version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/version.rc" @ONLY)
 add_executable(zfswin-um
     zum_winfsp.c
     "${CMAKE_CURRENT_BINARY_DIR}/version.rc"
+    zfswin-um.manifest
 )
 target_compile_definitions(zfswin-um PRIVATE ZFSWIN_VERSION="${ZFSWIN_VERSION}")
 # WinFsp's headers are a system header's: their warnings are WinFsp's.

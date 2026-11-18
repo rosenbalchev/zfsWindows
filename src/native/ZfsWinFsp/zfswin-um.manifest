@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  The Segment Heap for the engine's process (Windows 10 2004 and later;
+  older versions ignore the setting).  The ARC and the I/O path allocate
+  and free many 128 KiB blocks; with gigabytes of them in the classic NT
+  heap its free lists fragment, and sequential reads spent half their time
+  in RtlpInsertFreeBlock/RtlpFindEntry (GitHub issue #33).
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <heapType xmlns="http://schemas.microsoft.com/SMI/2020/WindowsSettings">SegmentHeap</heapType>
+    </windowsSettings>
+  </application>
+</assembly>
