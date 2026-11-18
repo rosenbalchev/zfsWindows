@@ -54,7 +54,7 @@ while ((Get-VM $Guest).State -notin 'Saved', 'Off' -and (Get-Date) -lt $deadline
 # As host-usermode-suite.ps1: the guest gets the memory the host has free.
 $freeMB = [math]::Floor((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1KB)
 if ((Get-VM $Guest).State -eq 'Off' -and $freeMB - 1024 -lt (Get-VM $Guest).MemoryStartup / 1MB) {
-    Set-VMMemory -VMName $Guest -StartupBytes ([int64][math]::Max(4096, [math]::Floor(($freeMB - 1024) / 512) * 512) * 1MB)
+    Set-VMMemory -VMName $Guest -StartupBytes $(if ($freeMB - 1024 -ge 6144) { 6GB } else { 4GB })
 }
 Start-VM -Name $Guest
 Start-Sleep -Seconds 30
