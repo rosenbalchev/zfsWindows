@@ -16,6 +16,10 @@ foreach(_lang C CXX)
     endif()
 endforeach()
 
+# find_package(WDK) on a case-sensitive volume (cmake/FindWDK.cmake).  Not a
+# diagnostic, but this is the file the driver tree includes.
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+
 # libspl has strlcpy/strlcat both in posix.c and in their own files; the
 # librarian keeps the first (LNK4006), as it does without this.
 string(APPEND CMAKE_STATIC_LINKER_FLAGS " /IGNORE:4006")

@@ -767,3 +767,18 @@ though the underlying physical drive is one. Taking the whole-disk flag from
 the drive made the in-use check lock every partition on it, so an extent on
 the system disk failed with "Slice \\?\HarddiskNPartitionM appears in use";
 with `-f`, `make_disks()` would have labelled the entire drive with a new GPT.
+
+## 0039 — zcommon: case-insensitive file systems by default on Windows
+
+OpenZFS creates file systems case-sensitive unless told otherwise. Windows
+names are case-insensitive and case-preserving, and Windows tools depend on
+it: CMake's `find_package(WDK)` does not find `FindWdk.cmake`, and Inf2Cat
+lowercases the names it lists and then cannot open them (GitHub issue #37).
+On Windows, `casesensitivity` now defaults to `insensitive`, in the kernel
+driver and the user-mode engine alike: the property's registered default
+(`zfs_prop.c`) and the value `zfs_get_zplprop()` (`zfs_znode.c`) gives a new
+pool's root file system, which is what pool creation reads.
+
+The property is set once, when a file system is created. Only a new pool's
+root file system takes the default; a new child takes its parent's setting,
+and existing file systems keep theirs.
