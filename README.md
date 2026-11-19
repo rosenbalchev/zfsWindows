@@ -155,13 +155,13 @@ macOS. They differ in how Windows reaches the file system.
 | | Mirrored pools: attach, resilver, detach, replace | ✅ | ✅ |
 | | Native encryption | ☑️ not tested | ☑️ not tested |
 | **Administration** | Create pools on image files; import and export | ✅ `zfswin`, GUI, PowerShell, `zpool` | ✅ the same tools, through the service's ZFS bridge |
-| | Mount at boot | ☑️ | ✅ pools and mounts back after a service restart |
+| | Mount at boot | ✅ the pools imported at shutdown, from `zpool.cache` | ✅ pools and mounts back after a service restart |
 | | Create and destroy datasets | ✅ | ✅ |
 | | Change compression, dedup, sync and other properties | ✅ | ✅ set and stored; ☑️ `sync` has no effect: the engine has no intent log, every flush waits for the transaction group (still durable, power-cut tested) |
 | | Create, destroy and roll back snapshots | ✅ create and destroy with `zfswin`; rollback with `zfs rollback` (step 12) | ✅ create and destroy with `zfswin`; rollback with `zfs rollback` ☑️ |
 | | Scrub (verify and repair) | ✅ | ✅ |
 | | Add and remove mirror disks; replace a disk | ✅ | ✅ |
-| | Add and remove read cache (L2ARC) and write log (SLOG) | ✅ the write log takes `sync=always` writes; the read cache fills and comes back after an import; both removable after an import | ☑️ added and removed, but the write log is never written (no intent log), and the read cache is dropped at the next import |
+| | Add and remove read cache (L2ARC) and write log (SLOG) | ✅ the write log takes `sync=always` writes; the read cache fills and comes back after an import; both removable after an import | ☑️ added and removed, but the write log is never written (no intent log); the read cache comes back after an import and a service restart |
 | | `zfswin` CLI, `ZfsWin` PowerShell module | ✅ | ✅ |
 | | Standard users may read, only elevated administrators change | ✅ | ✅ |
 | | GUI (`ZfsWinGui.exe`) | ✅ status, scrub, properties, mirrors, read cache and write log (self-check tested; the windows themselves not yet clicked through) | ✅ the same, plus the service and its mounts (self-check tested) |

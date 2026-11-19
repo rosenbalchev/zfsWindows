@@ -3,7 +3,7 @@
 # object.  Driven by scripts\vm\Test-InstallerInVm.ps1.
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "filesystem", "datafeatures", "memory", "wholedisk", "rebootprep", "rebootcheck", "crosscheck", "tree", "treeverify", "samples", "import", "export", "hash")]
+    [ValidateSet("state", "msi", "cli", "gui", "powershell", "standard-user", "filesystem", "datafeatures", "memory", "wholedisk", "rebootprep", "rebootcheck", "kbootprep", "kbootcheck", "crosscheck", "tree", "treeverify", "samples", "import", "export", "hash")]
     [string]$Stage,
     [string]$Msi = "",
     [ValidateSet("install", "repair", "uninstall")]
@@ -1138,6 +1138,56 @@ Start-Sleep -Seconds 600
         Check $r "cachefile-file" ((Get-Item -LiteralPath $rcCache -ErrorAction SilentlyContinue).Length -gt 0) $true
         Check $r "cachefile-export" (Zfswin @('pool', 'export', 'zrc')).exit 0
         Check $r "export" (Zfswin @('pool', 'export', $rbPool)).exit 0
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # Before the guest restarts (kernel edition, issue #46): pool zkb on an
+    # image file with a read cache and a file on it, imported when the
+    # guest goes down; pool zkbx exported first, which must stay so.
+    "kbootprep" {
+        $r = [ordered]@{}
+        $zpool = Join-Path $installDir "bin\zpool.exe"
+        $dir = "$images\kboot"
+        foreach ($p in "zkb", "zkbx") { & $zpool export $p 2>$null | Out-Null }
+        Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        foreach ($f in "zkb.img", "zkbx.img") { & fsutil.exe file createnew "$dir\$f" (256MB) | Out-Null }
+        & fsutil.exe file createnew "$dir\zkb-cache.img" (128MB) | Out-Null
+        & $zpool create zkb "\\?\$dir\zkb.img" cache "\\?\$dir\zkb-cache.img" 2>$null | Out-Null
+        Check $r "create" $LASTEXITCODE 0
+        & $zpool create zkbx "\\?\$dir\zkbx.img" 2>$null | Out-Null
+        & $zpool export zkbx 2>$null | Out-Null
+        Check $r "export-zkbx" $LASTEXITCODE 0
+        $root = MountPath "zkb"
+        $bytes = [byte[]]::new(4MB); [Random]::new(46).NextBytes($bytes)
+        $r.hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)) -replace '-', ''
+        if ($root) { [IO.File]::WriteAllBytes((Join-Path $root "kept.bin"), $bytes) }
+        Check $r "written" ([bool]($root -and (Test-Path -LiteralPath (Join-Path $root "kept.bin")))) $true
+        $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
+        $r | ConvertTo-Json -Depth 6 -Compress
+    }
+
+    # After the restart: ZfsWinBroker imported zkb from zpool.cache (up to 4
+    # minutes after boot), mounted, with its cache device and the file; zkbx
+    # stayed exported.  Both are then exported and their images removed.
+    "kbootcheck" {
+        $r = [ordered]@{}
+        $zpool = Join-Path $installDir "bin\zpool.exe"
+        $deadline = (Get-Date).AddMinutes(4)
+        do { $m = MountPath "zkb"; if (-not $m) { Start-Sleep -Seconds 3 } } while (-not $m -and (Get-Date) -lt $deadline)
+        $r.bootToMount = [math]::Round(((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds)
+        $pools = @((Zfswin @('pool', 'list')).result.pools | ForEach-Object name)
+        Check $r "pool-after-reboot" ($pools -contains "zkb") $true
+        Check $r "mounted-after-reboot" ([bool]$m) $true
+        Check $r "file-after-reboot" $(if ($m) { (Get-FileHash -LiteralPath (Join-Path $m "kept.bin") -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash }) "$($decoded.Hash)"
+        Check $r "cache-after-reboot" ([bool]((& $zpool status zkb 2>$null) -match 'zkb-cache\.img\s+ONLINE')) $true
+        Check $r "exported-stays-exported" ($pools -contains "zkbx") $false
+        $r.events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'ZfsWinBroker'; StartTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime } -ErrorAction SilentlyContinue |
+            Where-Object Id -in 4, 5 | ForEach-Object { "$($_.Id): $($_.Message)" })
+        & $zpool export zkb 2>$null | Out-Null
+        Check $r "export" $LASTEXITCODE 0
+        Remove-Item -Recurse -Force "$images\kboot" -ErrorAction SilentlyContinue
         $r.failed = @($r.Keys | Where-Object { $r[$_] -is [Collections.IDictionary] -and $r[$_].Contains('pass') -and -not $r[$_].pass })
         $r | ConvertTo-Json -Depth 6 -Compress
     }
