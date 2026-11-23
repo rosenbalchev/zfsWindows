@@ -21,8 +21,17 @@ standard user. Start the shell with **Run as administrator** for changes.
 ## Safety rules
 
 - Nothing chooses a disk, pool or dataset for you. Every device is named
-  explicitly, either as a fully qualified file path (`D:\pools\disk1.img`) or
-  as `\\?\PhysicalDriveN`.
+  explicitly. A device is one of:
+  - a fully qualified file path (`D:\pools\disk1.img`);
+  - a whole disk, `\\?\PhysicalDriveN`;
+  - one partition of a disk: `\\?\HarddiskNPartitionM`,
+    `\\?\HarddiskN\PartitionM`, `PhysicalDriveN/PartitionM`,
+    `PhysicalDiskN/PartitionM`, or its byte range
+    `#offset#length#\\?\PhysicalDriveN`. zpool turns a partition name into
+    that byte range, and the other partitions stay untouched (see the
+    README, *A pool on one partition of a disk*). Partition 0 (the whole
+    disk) is refused, and so is a partition with a drive letter or a file
+    system.
 - Commands that overwrite devices or destroy data need `--yes` in zfswin.
   Without it they exit with code 6 and change nothing. In PowerShell these
   cmdlets have `ConfirmImpact = High`, so they prompt unless you pass

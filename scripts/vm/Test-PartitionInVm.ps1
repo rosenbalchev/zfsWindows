@@ -5,9 +5,10 @@ Issue #48: pools on single partitions of a disk, in both editions, inside
 the isolated driver VM.  Never targets this host.
 
 .DESCRIPTION
-From the "fixtures" checkpoint, with a 10 GB disk added to the VM:
+From the "fixtures" checkpoint, with a 12 GB disk added to the VM:
 
-  P: NTFS | T1 | Q: NTFS | T2 | T3 | R: NTFS   (GPT, 256 MiB file on each NTFS)
+  P: NTFS | T1 | Q: NTFS | T2 | T3 | T4 | R: NTFS   (GPT, 256 MiB file on
+  each NTFS; T2 has the ZFS partition type, T4 is larger)
 
  1. kernel edition: every spelling of T1 (\\?\HarddiskNPartitionM,
     PhysicalDriveN/PartitionM, ...) resolves to the same extent
@@ -16,9 +17,10 @@ From the "fixtures" checkpoint, with a 10 GB disk added to the VM:
  2. kernel: pool kp1 on T1 by zpool.exe (\\?\HarddiskNPartitionM, the
     issue's command), kp2 on T2 by zfswin (PhysicalDiskN/PartitionM);
     each recorded as its extent, no larger than its partition;
- 3. kernel: export and import, broker restart, Windows restart;
+ 3. kernel: export and import, broker restart, Windows restart; kp2
+    replaced onto T4 (zpool replace <guid> \\?\HarddiskNPartitionM);
  4. switch to the user-mode edition: the kernel's pools imported, scrubbed
-    clean; the same resolution checks; pool up3 on T3 by zfswin; engine
+    clean; the same resolution checks; pool up3 on T3 by New-ZfsPool; engine
     restart and Windows restart;
  5. switch back to the kernel edition: all three pools imported and clean.
 
@@ -113,7 +115,7 @@ Stop-VM -Name $Name -TurnOff -Force -ErrorAction SilentlyContinue
 Restore-VMCheckpoint -VMName $Name -Name "fixtures" -Confirm:$false
 Get-VMHardDiskDrive -VMName $Name | Where-Object Path -eq $vhd | Remove-VMHardDiskDrive
 Remove-Item -LiteralPath $vhd -Force -ErrorAction SilentlyContinue
-New-VHD -Path $vhd -SizeBytes 10GB -Dynamic | Out-Null
+New-VHD -Path $vhd -SizeBytes 12GB -Dynamic | Out-Null
 # A disk of the VM, not a guest-attached VHDX: it must come back after a restart.
 Add-VMHardDiskDrive -VMName $Name -ControllerType SCSI -Path $vhd
 Start-VM -Name $Name
@@ -157,6 +159,8 @@ Step "kernel-restart" "restart" @{ Edition = "kernel"; Pools = @("kp1", "kp2") }
 Restart-Guest
 Step "kernel-rebooted" "restart" @{ Edition = "kernel"; Pools = @("kp1", "kp2") } | Out-Null
 Step "kernel-after-reboot" "verify" @{ Edition = "kernel"; Pools = $kernelPools } | Out-Null
+Step "kernel-replace" "replace" @{ Edition = "kernel"; Pool = "kp2"; Device = "\\?\Harddisk${disk}Partition$($parts.T4.number)"; Offset = $parts.T4.offset; Length = $parts.T4.size } | Out-Null
+Step "kernel-after-replace" "verify" @{ Edition = "kernel"; Pools = $kernelPools } | Out-Null
 Neighbors "kernel-done"
 
 # --- 4. user mode -------------------------------------------------------------------------------------
@@ -168,7 +172,7 @@ Step "usermode-install" "msi" @{ Msi = $guestUserMsi; Action = "install" } | Out
 Step "usermode-import-kernel-pools" "verify" @{ Edition = "usermode"; Pools = $kernelPools } | Out-Null
 Step "usermode-export-kp" "export" @{ Edition = "usermode"; Pools = @("kp1", "kp2") } | Out-Null
 Resolve "usermode" "usermode"
-$up3 = Step "usermode-create-up3" "create" @{ Edition = "usermode"; Via = "zfswin"; Pool = "up3"; Device = "PhysicalDrive$disk/Partition$($parts.T3.number)"; Offset = $parts.T3.offset; Length = $parts.T3.size; Seed = 3 }
+$up3 = Step "usermode-create-up3" "create" @{ Edition = "usermode"; Via = "powershell"; Pool = "up3"; Device = "PhysicalDrive$disk/Partition$($parts.T3.number)"; Offset = $parts.T3.offset; Length = $parts.T3.size; Seed = 3 }
 $allPools = $kernelPools + @(@{ Name = "up3"; Hash = $up3.hash })
 Step "usermode-import-all" "verify" @{ Edition = "usermode"; Pools = $allPools } | Out-Null
 Step "usermode-restart" "restart" @{ Edition = "usermode"; Pools = @("kp1", "kp2", "up3") } | Out-Null

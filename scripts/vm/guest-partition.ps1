@@ -3,7 +3,7 @@
 # scripts\vm\Test-PartitionInVm.ps1.
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("layout", "resolve", "create", "verify", "export", "restart", "neighbors", "msi")]
+    [ValidateSet("layout", "resolve", "create", "replace", "verify", "export", "restart", "neighbors", "msi")]
     [string]$Stage,
     # The orchestrator's arguments as Base64 JSON.
     [string]$ArgumentsBase64 = ""
@@ -64,17 +64,21 @@ function Finish {
 
 switch ($Stage) {
     # The test disk (the VM's only RAW disk): GPT with an NTFS partition on
-    # each side of every partition a pool goes on.
-    #   P: NTFS | T1 | Q: NTFS | T2 | T3 | R: NTFS
+    # each side of the partitions pools go on.  T2 is marked as a ZFS
+    # partition (as the README suggests), the others stay basic data
+    # partitions, which Windows gives RAW volumes.  T4 is larger, for a
+    # replace.
+    #   P: NTFS | T1 | Q: NTFS | T2 | T3 | T4 | R: NTFS
     "layout" {
         $disk = Get-Disk | Where-Object PartitionStyle -eq 'RAW' | Sort-Object Number | Select-Object -Last 1
         Initialize-Disk -Number $disk.Number -PartitionStyle GPT
         $parts = [ordered]@{}
-        foreach ($p in @(@('P', 1GB, 'P'), @('T1', 2GB, $null), @('Q', 1GB, 'Q'), @('T2', 2GB, $null), @('T3', 2GB, $null), @('R', 1GB, 'R'))) {
+        foreach ($p in @(@('P', 1GB, 'P'), @('T1', 2GB, $null), @('Q', 1GB, 'Q'), @('T2', 2GB, $null), @('T3', 2GB, $null), @('T4', 2560MB, $null), @('R', 1GB, 'R'))) {
             $part = if ($p[2]) { New-Partition -DiskNumber $disk.Number -Size $p[1] -DriveLetter $p[2] } else { New-Partition -DiskNumber $disk.Number -Size $p[1] }
             if ($p[2]) { Format-Volume -Partition $part -FileSystem NTFS -NewFileSystemLabel "neighbor$($p[0])" -Confirm:$false | Out-Null }
             $parts[$p[0]] = [ordered]@{ number = $part.PartitionNumber; offset = $part.Offset; size = $part.Size }
         }
+        Set-Partition -DiskNumber $disk.Number -PartitionNumber $parts.T2.number -GptType '{6a898cc3-1dd2-11b2-99a6-080020736631}'
         $hashes = [ordered]@{}
         foreach ($letter in 'P', 'Q', 'R') {
             $bytes = [byte[]]::new(256MB); [Random]::new([int][char]$letter).NextBytes($bytes)
@@ -132,6 +136,12 @@ switch ($Stage) {
             $z = Zpool (@('create', '-o', 'ashift=12', '-O', 'compression=lz4', '-O', 'normalization=formD', '-O', 'casesensitivity=insensitive', $a.Pool, $a.Device))
             $r.create = $z.text
             Check "create" $z.exit 0
+        } elseif ($a.Via -eq 'powershell') {
+            Import-Module ZfsWin
+            $e = $null
+            try { New-ZfsPool $a.Pool -Device $a.Device -DatasetProperty @{ compression = 'lz4' } -Force -ErrorAction Stop | Out-Null } catch { $e = "$_" }
+            $r.create = $e
+            Check "create" ((Pools) -contains $a.Pool) $true
         } else {
             $w = Zfswin @('pool', 'create', $a.Pool, $a.Device, '-O', 'compression=lz4', '--yes')
             $r.create = $w.error
@@ -171,6 +181,20 @@ switch ($Stage) {
             $r["$($p.Name) status"] = (Zpool @('status', '-P', $p.Name)).text
             Check "$($p.Name) healthy" ($x.text -match 'is healthy') $true
         }
+        Finish
+    }
+
+    # A pool moved onto another (larger) partition, named by its number:
+    # zpool replace <pool> <guid> <partition>, waiting for the resilver.
+    "replace" {
+        $want = "#$($a.Offset)#$($a.Length)#"
+        $guid = ((Zpool @('status', '-g', $a.Pool)).text -split "`n" | Where-Object { $_ -match '^\s+(\d{6,})\s+ONLINE' } | Select-Object -First 1) -replace '^\s+(\d+)\s.*$', '$1'
+        $r.guid = $guid
+        $z = Zpool @('replace', '-w', $a.Pool, $guid, $a.Device)
+        $r.replace = $z.text
+        Check "replace" $z.exit 0
+        $status = Zpool @('status', '-j', '-p', '-P', $a.Pool)
+        Check "moved-to-extent" ($status.text -match [regex]::Escape($want)) $true
         Finish
     }
 
