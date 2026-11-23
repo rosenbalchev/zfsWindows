@@ -188,7 +188,8 @@ function New-ZfsPool {
     [OutputType('ZfsWin.Pool')]
     param(
         [Parameter(Mandatory, Position = 0)][string]$Name,
-        # Every device is overwritten.  Files must exist; disks are \\?\PhysicalDriveN.
+        # Every device is overwritten.  Files must exist; disks are \\?\PhysicalDriveN,
+        # one partition \\?\HarddiskNPartitionM or PhysicalDriveN/PartitionM.
         [Parameter(Mandatory, Position = 1)][string[]]$Device,
         [switch]$Mirror,
         [hashtable]$PoolProperty,

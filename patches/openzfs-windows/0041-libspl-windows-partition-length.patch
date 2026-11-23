@@ -1,0 +1,21 @@
+diff --git a/lib/libspl/os/windows/posix.c b/lib/libspl/os/windows/posix.c
+--- a/lib/libspl/os/windows/posix.c
++++ b/lib/libspl/os/windows/posix.c
+@@ -1865,8 +1865,16 @@
+ 	HANDLE handle = ITOH(fd);
+ 	DWORD len;
+ 	LARGE_INTEGER size;
++	GET_LENGTH_INFORMATION length;
+ 
+-	// Try device first
++	// Try device first.  The length of a partition, not of its disk,
++	// which is what the geometry reports for a partition too.
++	if (DeviceIoControl(handle, IOCTL_DISK_GET_LENGTH_INFO, NULL, 0,
++	    &length, sizeof (length), &len, NULL)) {
++		st->st_size = (diskaddr_t)length.Length.QuadPart;
++		st->st_mode = S_IFBLK;
++		return (0);
++	}
+ 	if (DeviceIoControl(handle, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0,
+ 	    &geometry_ex, sizeof (geometry_ex), &len, NULL)) {
+ 		st->st_size = (diskaddr_t)geometry_ex.DiskSize.QuadPart;

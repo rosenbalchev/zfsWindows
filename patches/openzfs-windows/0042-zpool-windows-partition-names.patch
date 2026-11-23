@@ -1,0 +1,312 @@
+diff --git a/cmd/zpool/zpool_util.h b/cmd/zpool/zpool_util.h
+--- a/cmd/zpool/zpool_util.h
++++ b/cmd/zpool/zpool_util.h
+@@ -136,6 +136,9 @@
+ int check_file(const char *file, boolean_t force, boolean_t isspare);
+ void after_zpool_upgrade(zpool_handle_t *zhp);
+ int check_file_generic(const char *file, boolean_t force, boolean_t isspare);
++#ifdef _WIN32
++int zpool_partition_device_path(const char *arg, char *path, size_t size);
++#endif
+ 
+ int zpool_power(zpool_handle_t *zhp, char *vdev, boolean_t turn_on);
+ int zpool_power_current_state(zpool_handle_t *zhp, char *vdev);
+diff --git a/cmd/zpool/zpool_vdev.c b/cmd/zpool/zpool_vdev.c
+--- a/cmd/zpool/zpool_vdev.c
++++ b/cmd/zpool/zpool_vdev.c
+@@ -300,8 +300,20 @@
+ 	boolean_t wholedisk = B_FALSE;
+ 	int err;
+ #ifdef _WIN32
++	char partition_path[MAXPATHLEN];
+ 	char offset_path[MAXPATHLEN];
+-	const char *complete_arg = zpool_offset_device_path(arg, offset_path,
++	const char *complete_arg;
++
++	/* A partition by number becomes its extent, "#offset#length#disk". */
++	switch (zpool_partition_device_path(arg, partition_path,
++	    sizeof (partition_path))) {
++	case -1:
++		return (NULL);
++	case 1:
++		arg = partition_path;
++		break;
++	}
++	complete_arg = zpool_offset_device_path(arg, offset_path,
+ 	    sizeof (offset_path));
+ #else
+ 	const char *complete_arg = arg;
+diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_vdev_os.c
+--- a/cmd/zpool/os/windows/zpool_vdev_os.c
++++ b/cmd/zpool/os/windows/zpool_vdev_os.c
+@@ -50,6 +50,128 @@
+ 	    "failed: %s\n"), strerror(err));
+ }
+ 
++/*
++ * An extent "#offset#length#device" is written through the disk, past any
++ * volume Windows has on it.  It is in use when it overlaps a volume that
++ * has a mount point (a drive letter or folder), a file system other than
++ * RAW, or a handle that keeps it from being locked.  Windows gives an
++ * unformatted basic partition a RAW volume; that one is free to use.
++ */
++static int
++check_extent(const char *path, int force)
++{
++	unsigned long long offset, length;
++	STORAGE_DEVICE_NUMBER sdn;
++	char volume[MAX_PATH], device[MAX_PATH], names[MAX_PATH];
++	char fs[MAX_PATH];
++	BYTE buffer[sizeof (VOLUME_DISK_EXTENTS) + 15 * sizeof (DISK_EXTENT)];
++	VOLUME_DISK_EXTENTS *extents = (VOLUME_DISK_EXTENTS *)buffer;
++	const char *dev;
++	char *end;
++	HANDLE h, find;
++	DWORD bytes;
++	int err = 0;
++
++	offset = strtoull(path + 1, &end, 10);
++	if (*end != '#')
++		return (0);
++	length = strtoull(end + 1, &end, 10);
++	if (*end != '#')
++		return (0);
++	dev = end + 1;
++
++	h = CreateFileA(dev, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
++	    OPEN_EXISTING, 0, NULL);
++	if (h == INVALID_HANDLE_VALUE)
++		return (0);
++	if (!DeviceIoControl(h, IOCTL_STORAGE_GET_DEVICE_NUMBER, NULL, 0,
++	    &sdn, sizeof (sdn), &bytes, NULL)) {
++		CloseHandle(h);
++		return (0);
++	}
++	CloseHandle(h);
++
++	find = FindFirstVolumeA(volume, sizeof (volume));
++	if (find == INVALID_HANDLE_VALUE)
++		return (0);
++	do {
++		const char *why = NULL;
++		boolean_t overlaps = B_FALSE;
++		size_t n = strlen(volume);
++
++		/* "\\?\Volume{guid}\": the volume device has no slash. */
++		if (n == 0 || n >= sizeof (device))
++			continue;
++		strlcpy(device, volume, sizeof (device));
++		device[n - 1] = '\0';
++
++		h = CreateFileA(device, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
++		    NULL, OPEN_EXISTING, 0, NULL);
++		if (h == INVALID_HANDLE_VALUE)
++			continue;
++		if (DeviceIoControl(h, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
++		    NULL, 0, extents, sizeof (buffer), &bytes, NULL)) {
++			for (DWORD i = 0; i < extents->NumberOfDiskExtents; i++) {
++				DISK_EXTENT *e = &extents->Extents[i];
++				unsigned long long start =
++				    e->StartingOffset.QuadPart;
++
++				if (e->DiskNumber == sdn.DeviceNumber &&
++				    start < offset + length &&
++				    offset < start + e->ExtentLength.QuadPart)
++					overlaps = B_TRUE;
++			}
++		}
++		CloseHandle(h);
++		if (!overlaps)
++			continue;
++
++		names[0] = '\0';
++		fs[0] = '\0';
++		if (GetVolumePathNamesForVolumeNameA(volume, names,
++		    sizeof (names), &bytes) && names[0] != '\0') {
++			why = "is mounted at";
++		} else if (GetVolumeInformationA(volume, NULL, 0, NULL, NULL,
++		    NULL, fs, sizeof (fs)) && fs[0] != '\0' &&
++		    strcasecmp(fs, "RAW") != 0) {
++			why = "holds a file system:";
++			strlcpy(names, fs, sizeof (names));
++		} else {
++			/*
++			 * Windows briefly opens a RAW volume again after a
++			 * pool on it is exported or destroyed: retry for
++			 * about two seconds before calling it open.
++			 */
++			why = "is open";
++			for (int tries = 0; tries < 10 && why != NULL; tries++) {
++				if (tries > 0)
++					Sleep(200);
++				h = CreateFileA(device, GENERIC_READ,
++				    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
++				    OPEN_EXISTING, 0, NULL);
++				if (h == INVALID_HANDLE_VALUE)
++					continue;
++				if (DeviceIoControl(h, FSCTL_LOCK_VOLUME, NULL,
++				    0, NULL, 0, &bytes, NULL)) {
++					(void) DeviceIoControl(h,
++					    FSCTL_UNLOCK_VOLUME, NULL, 0, NULL,
++					    0, &bytes, NULL);
++					why = NULL;
++				}
++				CloseHandle(h);
++			}
++		}
++		if (why != NULL) {
++			(void) fprintf(stderr, gettext("%s overlaps volume %s, "
++			    "which %s %s\n"), path, volume, why, names);
++			err = force ? 0 : EBUSY;
++		}
++	} while (FindNextVolumeA(find, volume, sizeof (volume)));
++	FindVolumeClose(find);
++
++	return (err);
++}
++
+ static int
+ check_slice(const char *path, int force, boolean_t isspare)
+ {
+@@ -60,10 +182,12 @@
+ 	BOOL result;
+ 
+ 	// If it starts with # it is a EFI partition we handle differently.
+-	// Since we can't lock that, we call check_file() to see if it
+-	// is a ZFS partition.
+-	if (path[0] == '#')
+-		return (check_file(path, force, isspare));
++	// Since we can't lock that, we check the volumes it overlaps, then
++	// call check_file() to see if it is a ZFS partition.
++	if (path[0] == '#') {
++		err = check_extent(path, force);
++		return (err != 0 ? err : check_file(path, force, isspare));
++	}
+ 
+ 	if ((fd = open(path, flags)) < 0) {
+ 		fprintf(stderr, "%s: failed to open %s\n", __func__, path);
+@@ -304,3 +428,124 @@
+ 	/* Enclosure slot power not supported on macOS yet */
+ 	return (ENOTSUP);
+ }
++
++/*
++ * A partition named as Windows names it -- HarddiskNPartitionM,
++ * HarddiskN\PartitionM, PhysicalDriveN\PartitionM or PhysicalDiskN\PartitionM,
++ * with "/" or "\" and with or without \\?\, \\.\ or /dev/ in front --
++ * becomes the extent it covers on its disk, "#offset#length#\\?\PhysicalDriveN".
++ * That is the form zpool gives the ZFS partition of a whole disk: the
++ * driver and the user-mode engine both open it, and the driver records
++ * the disk by its identity, not its number, which can change.
++ * Partition 0 is Windows' name for the whole disk; it is refused, so that
++ * a whole disk is only ever named as one.
++ *
++ * Returns 0 when arg names no partition, 1 with the extent in path, and
++ * -1 after printing why the partition cannot be used.
++ */
++int
++zpool_partition_device_path(const char *arg, char *path, size_t size)
++{
++	static const char *prefixes[] =
++	    { "\\\\?\\", "\\\\.\\", "//?/", "//./", "/dev/" };
++	static const char *disks[] =
++	    { "Harddisk", "PhysicalDrive", "PhysicalDisk" };
++	DRIVE_LAYOUT_INFORMATION_EX *layout = NULL;
++	DWORD layout_size = sizeof (DRIVE_LAYOUT_INFORMATION_EX) +
++	    127 * sizeof (PARTITION_INFORMATION_EX);
++	const char *p = arg;
++	char drive[64];
++	unsigned long disk, part;
++	char *end;
++	boolean_t named = B_FALSE;
++	HANDLE h;
++	DWORD bytes;
++	int ret = -1;
++
++	for (size_t i = 0; i < sizeof (prefixes) / sizeof (prefixes[0]); i++) {
++		if (strncasecmp(p, prefixes[i], strlen(prefixes[i])) == 0) {
++			p += strlen(prefixes[i]);
++			break;
++		}
++	}
++	for (size_t i = 0; i < sizeof (disks) / sizeof (disks[0]) && !named; i++) {
++		if (strncasecmp(p, disks[i], strlen(disks[i])) == 0) {
++			p += strlen(disks[i]);
++			named = B_TRUE;
++		}
++	}
++	if (!named || !isdigit(*p))
++		return (0);
++	disk = strtoul(p, &end, 10);
++	p = end;
++	if (*p == '\\' || *p == '/')
++		p++;
++	if (strncasecmp(p, "Partition", 9) != 0 || !isdigit(p[9]))
++		return (0);
++	part = strtoul(p + 9, &end, 10);
++	if (*end != '\0')
++		return (0);
++
++	if (part == 0) {
++		(void) fprintf(stderr, gettext("cannot use '%s': partition 0 "
++		    "is the whole disk; name the whole disk as "
++		    "\\\\?\\PhysicalDrive%lu\n"), arg, disk);
++		return (-1);
++	}
++	if (disk > 9999) {
++		(void) fprintf(stderr, gettext("cannot use '%s': no such "
++		    "disk\n"), arg);
++		return (-1);
++	}
++
++	(void) snprintf(drive, sizeof (drive), "\\\\.\\PhysicalDrive%lu",
++	    disk);
++	h = CreateFileA(drive, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
++	    NULL, OPEN_EXISTING, 0, NULL);
++	if (h == INVALID_HANDLE_VALUE) {
++		(void) fprintf(stderr, gettext("cannot use '%s': cannot open "
++		    "disk %lu (error %lu)\n"), arg, disk, GetLastError());
++		return (-1);
++	}
++	for (int tries = 0; tries < 4; tries++) {
++		layout = malloc(layout_size);
++		if (layout == NULL)
++			break;
++		if (DeviceIoControl(h, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, NULL, 0,
++		    layout, layout_size, &bytes, NULL))
++			break;
++		free(layout);
++		layout = NULL;
++		if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
++			break;
++		layout_size *= 2;
++	}
++	CloseHandle(h);
++	if (layout == NULL) {
++		(void) fprintf(stderr, gettext("cannot use '%s': cannot read "
++		    "the partition table of disk %lu\n"), arg, disk);
++		return (-1);
++	}
++
++	for (DWORD i = 0; i < layout->PartitionCount; i++) {
++		PARTITION_INFORMATION_EX *pi = &layout->PartitionEntry[i];
++
++		if (pi->PartitionNumber != part ||
++		    pi->PartitionLength.QuadPart <= 0)
++			continue;
++		/* An MBR extended partition only holds logical ones. */
++		if (pi->PartitionStyle == PARTITION_STYLE_MBR &&
++		    IsContainerPartition(pi->Mbr.PartitionType))
++			continue;
++		(void) snprintf(path, size, "#%llu#%llu#\\\\?\\PhysicalDrive%lu",
++		    (unsigned long long)pi->StartingOffset.QuadPart,
++		    (unsigned long long)pi->PartitionLength.QuadPart, disk);
++		ret = 1;
++		break;
++	}
++	if (ret != 1)
++		(void) fprintf(stderr, gettext("cannot use '%s': disk %lu has "
++		    "no partition %lu\n"), arg, disk, part);
++	free(layout);
++	return (ret);
++}

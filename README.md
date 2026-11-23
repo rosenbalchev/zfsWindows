@@ -119,6 +119,95 @@ What has been tested:
     then read on the other platforms and on Linux.
 - Windows 10 and Windows Server have not been tested yet (plan step 17).
 
+## A pool on one partition of a disk
+
+A pool can live on one partition, and the other partitions of the disk are
+left alone. This works in both editions (issue #48). Name the
+partition in any of these ways; they all mean partition 3 of disk 0:
+
+| Name | Notes |
+| --- | --- |
+| `\\?\Harddisk0Partition3`, `\\.\Harddisk0Partition3`, `\\?\Harddisk0\Partition3` | as Windows names it |
+| `PhysicalDrive0/Partition3`, `PhysicalDrive0\Partition3`, `PhysicalDisk0/Partition3` | `/` or `\` |
+| `#<offset>#<length>#\\?\PhysicalDrive0` | the byte range itself; what the others become |
+
+zpool turns every one of them into the byte range the partition covers,
+`#offset#length#\\?\PhysicalDrive0`, read from the disk's partition table.
+That range is what the pool records, and both editions use the same one. The
+pool cannot write outside it, and a pool moved between the editions is
+found again. The kernel edition records the disk by its identity, so a pool
+is still found when disk numbers change. The user-mode edition looks for a
+pool on every disk when the recorded disk number is wrong.
+
+- **The whole disk:** `\\?\PhysicalDriveN` or `\\.\PhysicalDriveN`. It is
+  never taken for a partition. Creating a pool on it overwrites every
+  partition.
+- **Partition 0:** Windows' name for the whole disk. It is refused.
+- **Partitions in use are refused.** That means a partition with a drive
+  letter or folder mount, a file system (NTFS, FAT, ReFS), or a volume
+  that is open. An empty partition that Windows shows as RAW can be used.
+
+**Example: make a partition and put a pool on it** (elevated PowerShell;
+`Get-Disk` and `Get-Partition` show the numbers):
+
+```powershell
+# Free 200 GB at the end of disk 0 by shrinking its last NTFS partition
+# (here partition 2), then make a partition there without a drive letter.
+Resize-Partition -DiskNumber 0 -PartitionNumber 2 -Size ((Get-Partition -DiskNumber 0 -PartitionNumber 2).Size - 200GB)
+New-Partition -DiskNumber 0 -Size 200GB      # becomes partition 3; no letter, no format
+Get-Partition -DiskNumber 0                  # check the number and that nothing else changed
+
+# The pool: zfswin (either edition)...
+zfswin pool create tank '\\?\Harddisk0Partition3' -O compression=lz4 --yes
+# ...or zpool directly...
+zpool create -o ashift=12 -O compression=lz4 -O casesensitivity=insensitive -O normalization=formD tank '\\?\Harddisk0Partition3'
+# ...or PowerShell.
+New-ZfsPool tank -Device 'PhysicalDrive0/Partition3' -DatasetProperty @{ compression = 'lz4' }
+
+zpool status -P tank                         # shows the byte range, #<offset>#<length>#...
+```
+
+Use `zpool create -n ...` first to see what would be made without writing
+anything. Quote the name in PowerShell (`'...'`), because `#` starts a
+comment there.
+
+**Example: change a partition that holds a pool:**
+
+```powershell
+# Optional: mark the partition as a ZFS partition. Windows then no longer
+# shows it as a RAW volume or offers to format it. Only its partition-table
+# entry changes; the pool is untouched.
+Set-Partition -DiskNumber 0 -PartitionNumber 3 -GptType '{6a898cc3-1dd2-11b2-99a6-080020736631}'
+
+# A drive letter on the partition itself (not on the pool) is in the way;
+# remove it.
+Remove-PartitionAccessPath -DiskNumber 0 -PartitionNumber 3 -AccessPath 'X:\'
+```
+
+Don't resize or move a partition that holds a pool. The pool records the
+byte range it was created on, so growing the partition does not grow the
+pool, and shrinking or moving it destroys the pool. For more room, make a
+larger partition and move the pool onto it. Take the device's GUID from
+`zpool status -g tank`, then run
+`zpool replace -w tank <guid> '\\?\Harddisk0Partition4'`.
+
+**Example: delete a pool and its partition:**
+
+```powershell
+zfswin pool export tank                      # the pool is gone with its partition
+Remove-Partition -DiskNumber 0 -PartitionNumber 3 -Confirm:$false
+Resize-Partition -DiskNumber 0 -PartitionNumber 2 -Size (Get-PartitionSupportedSize -DiskNumber 0 -PartitionNumber 2).SizeMax
+```
+
+Never delete or format a partition while its pool is imported. Export the
+pool first.
+
+**Known issue (kernel edition):** do not `zpool destroy` a pool on a
+partition. In the test VM, destroying such a pool soon after creating it
+once hung, and once stopped Windows with bugcheck 0x0A in PnP device
+removal (`nt!IopInsertRemoveDevice`). Pools in files did not do this.
+Export the pool instead; deleting the partition afterwards removes it.
+
 ## User mode or kernel mode? Feature matrix
 
 Both editions run the same OpenZFS engine, write the same on-disk format,

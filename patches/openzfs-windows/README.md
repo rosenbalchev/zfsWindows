@@ -795,3 +795,70 @@ they stayed recorded in the MOS (GitHub issue #43). The engine's own import
 at service start now runs a tryimport too (`zum_pool_um.c`).
 
 libzpool now loads the cache devices in a tryimport, as the kernel does.
+
+## 0041 — libspl: a partition's length, not its disk's
+
+`wosix_fstat_blk()` gave a block device the size from
+`IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`. For a partition (`\\?\HarddiskNPartitionM`)
+that is the size of the whole disk. The user-mode engine therefore put a
+pool's end labels past the end of the partition. The partition device
+refused those writes, so `zpool create` failed with "I/O error", and a pool
+that the kernel made on a partition was imported with read and write errors
+(GitHub issue #48). The kernel driver asks for the partition's length and
+was not affected.
+
+`IOCTL_DISK_GET_LENGTH_INFO` now comes first. It gives the partition's
+length for a partition and the disk's for a disk. The geometry stays as the
+fallback.
+
+## 0042 — zpool: a partition by its Windows names
+
+A pool can be made on one partition of a disk (GitHub issue #48).
+`make_leaf_vdev()` now turns every name of a partition into the byte range
+it covers on its disk: `\\?\HarddiskNPartitionM`, `\\?\HarddiskN\PartitionM`,
+`PhysicalDriveN/PartitionM`, `PhysicalDiskN\PartitionM`, with `/` or `\`,
+and with `\\?\`, `\\.\`, `//?/` or `/dev/` in front or nothing. The range
+is `#offset#length#\\?\PhysicalDriveN`, read from the disk's partition
+table (`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`; an MBR extended partition only
+holds logical ones and is skipped).
+
+That form is the one patch 0031 gives the ZFS partition of a whole disk:
+- both editions open it;
+- 0038 records it as a slice, so nothing relabels the disk;
+- the driver records its physical path by the disk's interface name, which
+  survives renumbering.
+
+Before this patch, zpool rejected `\\?\HarddiskN\PartitionM` and
+`PhysicalDriveN/PartitionM`. It took `\\?\HarddiskNPartitionM` as the
+partition device itself: the kernel recorded the disk number, and user mode
+failed (0041).
+
+Partition 0, Windows' name for the whole disk, is refused, so a whole disk
+is only ever named as `\\?\PhysicalDriveN`. A missing partition is refused
+too.
+
+The in-use check of a `#` range (`check_slice()`) used to look only for a
+ZFS label. It now also refuses a range that overlaps a volume which has a
+mount point, a file system other than RAW, or a handle that keeps it from
+being locked. Windows briefly opens a RAW volume again after a pool on it
+goes away, so the lock is retried for about two seconds. `-f` overrides
+this, as for other devices. An empty basic
+data partition, which Windows shows as a RAW volume, can be used: writes
+through the disk to a RAW volume's sectors are allowed.
+
+## 0043 — libzutil: a partition's range named as the partition
+
+`update_vdev_config_dev_strs()` stores the `#offset#length#device` range
+as the vdev's physical path, which is what both editions open. It also
+gives the vdev a readable path. For a range that is not a whole disk, it
+took the partition number from the disk handle, which is always 0. A pool
+on partition 3 was therefore shown as `/dev/Harddisk1Partition0`, Windows'
+name for the whole disk. The GUI marks partitions as used by the
+`HarddiskNPartitionM` in a pool's paths, so it could offer that partition
+for another pool (GitHub issue #48).
+
+The readable path now names the partition that starts at the range's
+offset (`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`). A range of free space (a cache
+device on unallocated space, 0038) matches no partition and keeps
+`Partition0`. Only the displayed path changes. The physical path, and with
+it what is opened and recorded, stays the same.
