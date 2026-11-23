@@ -840,7 +840,9 @@ too.
 The in-use check of a `#` range (`check_slice()`) used to look only for a
 ZFS label. It now also refuses a range that overlaps a volume which has a
 mount point, a file system other than RAW, or a handle that keeps it from
-being locked. `-f` overrides this, as for other devices. An empty basic
+being locked. Windows briefly opens a RAW volume again after a pool on it
+goes away, so the lock is retried for about two seconds. `-f` overrides
+this, as for other devices. An empty basic
 data partition, which Windows shows as a RAW volume, can be used: writes
 through the disk to a RAW volume's sectors are allowed.
 
