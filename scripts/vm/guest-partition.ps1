@@ -92,9 +92,10 @@ switch ($Stage) {
         Finish
     }
 
-    # zpool create -n with every spelling of one partition: all resolve to
-    # the same extent.  Partition 0, a missing partition, a partition
-    # holding NTFS and the whole disk are refused.
+    # Every spelling of one partition: a pool made on it records the
+    # partition's range and is shown as HarddiskNPartitionM, then is
+    # destroyed.  Partition 0, a missing partition, a partition holding
+    # NTFS and the whole disk are refused.
     "resolve" {
         $n = $a.Disk; $m = $a.Partition; $ntfs = $a.NtfsPartition
         $want = "#$($a.Offset)#$($a.Length)#"
@@ -104,12 +105,15 @@ switch ($Stage) {
         $r.spellings = [ordered]@{}
         foreach ($s in $spellings) {
             $z = Zpool @('create', '-n', 'zres', $s)
-            $r.spellings[$s] = $z.text
             Check "dryrun $s" $z.exit 0
+            $z = Zpool @('create', 'zres', $s)
+            Check "create $s" $z.exit 0
+            $status = (Zpool @('status', '-j', '-p', '-P', 'zres')).text
+            $r.spellings[$s] = $status
+            Check "range $s" ($status -match [regex]::Escape($want)) $true
+            Check "named $s" ($status -match "Harddisk${n}Partition$m\b") $true
+            Check "destroy $s" (Zpool @('destroy', 'zres')).exit 0
         }
-        # The dry run prints the vdev as zpool names it; every spelling the same.
-        $texts = @($r.spellings.Values | ForEach-Object { ($_ -split "`n" | Where-Object { $_ -match '^\s+\S' -and $_ -notmatch 'would create' }) -join '|' } | Sort-Object -Unique)
-        Check "one-extent" $texts.Count 1
         $z = Zpool @('create', '-n', 'zres', "\\?\Harddisk${n}Partition0")
         Check "partition0-refused" ($z.exit -ne 0 -and $z.text -match 'partition 0 is the whole disk') $true
         $z = Zpool @('create', '-n', 'zres', "\\?\Harddisk${n}Partition99")
@@ -150,6 +154,7 @@ switch ($Stage) {
         $status = Zpool @('status', '-j', '-p', '-P', $a.Pool)
         $r.status = $status.text
         Check "recorded-as-extent" ($status.text -match [regex]::Escape($want)) $true
+        Check "named-as-partition" ($status.text -match "Harddisk$($a.Disk)Partition$($a.Number)\b") $true
         $size = [long]((Zpool @('get', '-H', '-p', '-o', 'value', 'size', $a.Pool)).text.Trim())
         $r.size = $size
         Check "within-partition" ($size -gt 0 -and $size -le [long]$a.Length) $true
@@ -195,6 +200,7 @@ switch ($Stage) {
         Check "replace" $z.exit 0
         $status = Zpool @('status', '-j', '-p', '-P', $a.Pool)
         Check "moved-to-extent" ($status.text -match [regex]::Escape($want)) $true
+        Check "named-as-partition" ($status.text -match "Harddisk$($a.Disk)Partition$($a.Number)\b") $true
         Finish
     }
 

@@ -843,3 +843,20 @@ mount point, a file system other than RAW, or a handle that keeps it from
 being locked. `-f` overrides this, as for other devices. An empty basic
 data partition, which Windows shows as a RAW volume, can be used: writes
 through the disk to a RAW volume's sectors are allowed.
+
+## 0043 — libzutil: a partition's range named as the partition
+
+`update_vdev_config_dev_strs()` stores the `#offset#length#device` range
+as the vdev's physical path, which is what both editions open. It also
+gives the vdev a readable path. For a range that is not a whole disk, it
+took the partition number from the disk handle, which is always 0. A pool
+on partition 3 was therefore shown as `/dev/Harddisk1Partition0`, Windows'
+name for the whole disk. The GUI marks partitions as used by the
+`HarddiskNPartitionM` in a pool's paths, so it could offer that partition
+for another pool (GitHub issue #48).
+
+The readable path now names the partition that starts at the range's
+offset (`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`). A range of free space (a cache
+device on unallocated space, 0038) matches no partition and keeps
+`Partition0`. Only the displayed path changes. The physical path, and with
+it what is opened and recorded, stays the same.

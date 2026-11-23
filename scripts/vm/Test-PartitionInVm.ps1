@@ -147,8 +147,8 @@ Step "kernel-install" "msi" @{ Msi = $guestKernelMsi; Action = "install" } | Out
 
 # --- 1-2. kernel: resolution, two pools ------------------------------------------------------------
 Resolve "kernel" "kernel"
-$kp1 = Step "kernel-create-kp1" "create" @{ Edition = "kernel"; Via = "zpool"; Pool = "kp1"; Device = "\\?\Harddisk${disk}Partition$($parts.T1.number)"; Offset = $parts.T1.offset; Length = $parts.T1.size; Seed = 1 }
-$kp2 = Step "kernel-create-kp2" "create" @{ Edition = "kernel"; Via = "zfswin"; Pool = "kp2"; Device = "PhysicalDisk$disk/Partition$($parts.T2.number)"; Offset = $parts.T2.offset; Length = $parts.T2.size; Seed = 2 }
+$kp1 = Step "kernel-create-kp1" "create" @{ Edition = "kernel"; Via = "zpool"; Pool = "kp1"; Device = "\\?\Harddisk${disk}Partition$($parts.T1.number)"; Disk = $disk; Number = $parts.T1.number; Offset = $parts.T1.offset; Length = $parts.T1.size; Seed = 1 }
+$kp2 = Step "kernel-create-kp2" "create" @{ Edition = "kernel"; Via = "zfswin"; Pool = "kp2"; Device = "PhysicalDisk$disk/Partition$($parts.T2.number)"; Disk = $disk; Number = $parts.T2.number; Offset = $parts.T2.offset; Length = $parts.T2.size; Seed = 2 }
 $kernelPools = @(@{ Name = "kp1"; Hash = $kp1.hash }, @{ Name = "kp2"; Hash = $kp2.hash })
 Neighbors "kernel-created"
 
@@ -159,7 +159,7 @@ Step "kernel-restart" "restart" @{ Edition = "kernel"; Pools = @("kp1", "kp2") }
 Restart-Guest
 Step "kernel-rebooted" "restart" @{ Edition = "kernel"; Pools = @("kp1", "kp2") } | Out-Null
 Step "kernel-after-reboot" "verify" @{ Edition = "kernel"; Pools = $kernelPools } | Out-Null
-Step "kernel-replace" "replace" @{ Edition = "kernel"; Pool = "kp2"; Device = "\\?\Harddisk${disk}Partition$($parts.T4.number)"; Offset = $parts.T4.offset; Length = $parts.T4.size } | Out-Null
+Step "kernel-replace" "replace" @{ Edition = "kernel"; Pool = "kp2"; Device = "\\?\Harddisk${disk}Partition$($parts.T4.number)"; Disk = $disk; Number = $parts.T4.number; Offset = $parts.T4.offset; Length = $parts.T4.size } | Out-Null
 Step "kernel-after-replace" "verify" @{ Edition = "kernel"; Pools = $kernelPools } | Out-Null
 Neighbors "kernel-done"
 
@@ -172,7 +172,7 @@ Step "usermode-install" "msi" @{ Msi = $guestUserMsi; Action = "install" } | Out
 Step "usermode-import-kernel-pools" "verify" @{ Edition = "usermode"; Pools = $kernelPools } | Out-Null
 Step "usermode-export-kp" "export" @{ Edition = "usermode"; Pools = @("kp1", "kp2") } | Out-Null
 Resolve "usermode" "usermode"
-$up3 = Step "usermode-create-up3" "create" @{ Edition = "usermode"; Via = "powershell"; Pool = "up3"; Device = "PhysicalDrive$disk/Partition$($parts.T3.number)"; Offset = $parts.T3.offset; Length = $parts.T3.size; Seed = 3 }
+$up3 = Step "usermode-create-up3" "create" @{ Edition = "usermode"; Via = "powershell"; Pool = "up3"; Device = "PhysicalDrive$disk/Partition$($parts.T3.number)"; Disk = $disk; Number = $parts.T3.number; Offset = $parts.T3.offset; Length = $parts.T3.size; Seed = 3 }
 $allPools = $kernelPools + @(@{ Name = "up3"; Hash = $up3.hash })
 Step "usermode-import-all" "verify" @{ Edition = "usermode"; Pools = $allPools } | Out-Null
 Step "usermode-restart" "restart" @{ Edition = "usermode"; Pools = @("kp1", "kp2", "up3") } | Out-Null

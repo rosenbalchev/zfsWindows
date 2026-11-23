@@ -1,0 +1,65 @@
+diff --git a/lib/libzutil/os/windows/zutil_import_os.c b/lib/libzutil/os/windows/zutil_import_os.c
+--- a/lib/libzutil/os/windows/zutil_import_os.c
++++ b/lib/libzutil/os/windows/zutil_import_os.c
+@@ -865,6 +865,43 @@
+ 	return (ERROR_SUCCESS);
+ }
+ 
++/*
++ * The number of the partition of disk device_path that starts at offset,
++ * or 0 when none does (a range of free space).
++ */
++static unsigned long
++partition_at_offset(const char *device_path, uint64_t offset)
++{
++	DWORD size = sizeof (DRIVE_LAYOUT_INFORMATION_EX) +
++	    127 * sizeof (PARTITION_INFORMATION_EX);
++	DRIVE_LAYOUT_INFORMATION_EX *layout;
++	unsigned long number = 0;
++	DWORD returned;
++	HANDLE h;
++
++	h = CreateFileA(device_path, GENERIC_READ,
++	    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
++	if (h == INVALID_HANDLE_VALUE)
++		return (0);
++	layout = malloc(size);
++	if (layout != NULL && DeviceIoControl(h, IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
++	    NULL, 0, layout, size, &returned, NULL)) {
++		for (DWORD i = 0; i < layout->PartitionCount; i++) {
++			PARTITION_INFORMATION_EX *p = &layout->PartitionEntry[i];
++
++			if (p->PartitionNumber != 0 &&
++			    p->PartitionLength.QuadPart > 0 &&
++			    (uint64_t)p->StartingOffset.QuadPart == offset) {
++				number = p->PartitionNumber;
++				break;
++			}
++		}
++	}
++	free(layout);
++	CloseHandle(h);
++	return (number);
++}
++
+ 
+ /*
+  * Update a leaf vdev's persistent device strings
+@@ -1079,10 +1116,16 @@
+ 				asprintf(&vdev_path, "/dev/physicaldrive%lu",
+ 				    deviceNumber.DeviceNumber);
+ 			else
++				/*
++				 * One partition of the disk (issue #48):
++				 * named by the partition at the range's
++				 * offset, not by the disk handle's 0.
++				 */
+ 				asprintf(&vdev_path,
+ 				    "/dev/Harddisk%luPartition%lu",
+ 				    deviceNumber.DeviceNumber,
+-				    deviceNumber.PartitionNumber);
++				    partition_at_offset(end,
++				    strtoull(path + 1, NULL, 10)));
+ 		} else if (deviceNumber.PartitionNumber > 0) {
+ 			/*
+ 			 * Partition device (\\?\HarddiskXPartitionY).
