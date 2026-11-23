@@ -96,6 +96,31 @@ public class ValidationTests
     public void RejectsInvalidOffsetDeviceRanges(string path) =>
         Assert.Equal(ErrorCode.InvalidArgument, Assert.Throws<AdminException>(() => Validation.DevicePath(path, mustExist: false)).Code);
 
+    // Every spelling of a partition reaches zpool as one form (issue #48).
+    [Theory]
+    [InlineData(@"\\?\Harddisk0Partition3")]
+    [InlineData(@"\\.\Harddisk0Partition3")]
+    [InlineData(@"\\?\Harddisk0\Partition3")]
+    [InlineData(@"Harddisk0Partition3")]
+    [InlineData(@"PhysicalDrive0/Partition3")]
+    [InlineData(@"PhysicalDrive0\Partition3")]
+    [InlineData(@"\\?\PhysicalDrive0\Partition3")]
+    [InlineData(@"PhysicalDisk0/Partition3")]
+    [InlineData(@"//?/harddisk0partition3")]
+    [InlineData(@"/dev/Harddisk0Partition3")]
+    public void NormalizesPartitions(string input) => Assert.Equal(@"\\?\Harddisk0Partition3", Validation.DevicePath(input));
+
+    // A whole disk stays a whole disk; partition 0 (Windows' name for the
+    // whole disk) is refused rather than taken as either.
+    [Theory]
+    [InlineData(@"\\?\Harddisk0Partition0")]
+    [InlineData(@"PhysicalDrive0/Partition0")]
+    [InlineData(@"\\?\Harddisk0Partition")]
+    [InlineData(@"\\?\Harddisk0Partition3x")]
+    [InlineData(@"\\?\Harddisk0Partition3\..\Partition4")]
+    public void RejectsInvalidPartitions(string path) =>
+        Assert.Equal(ErrorCode.InvalidArgument, Assert.Throws<AdminException>(() => Validation.DevicePath(path, mustExist: false)).Code);
+
     [Theory]
     [InlineData(@"relative\disk.img")]
     [InlineData(@"\\server\share\disk.img")]

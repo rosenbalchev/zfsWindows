@@ -31,6 +31,10 @@ public static partial class Validation
     [GeneratedRegex(@"^#([0-9]{1,20})#([0-9]{1,20})#(?:\\\\[?.]\\)?PhysicalDrive([0-9]{1,3})$", RegexOptions.IgnoreCase)]
     private static partial Regex OffsetDevicePattern();
 
+    // HarddiskNPartitionM and its other spellings (issue #48).
+    [GeneratedRegex(@"^(?:\\\\[?.]\\|//[?.]/|/dev/)?(?:Harddisk|PhysicalDrive|PhysicalDisk)([0-9]{1,4})[\\/]?Partition([0-9]{1,4})$", RegexOptions.IgnoreCase)]
+    private static partial Regex PartitionPattern();
+
     [GeneratedRegex(@"^[0-9]{1,20}$")]
     private static partial Regex GuidPattern();
 
@@ -113,12 +117,21 @@ public static partial class Validation
     /// <summary>
     /// A device for a vdev, in the form zpool.exe takes: an existing file
     /// (given as an absolute path, returned as \\?\X:\...; zpool refuses a
-    /// plain path with "must be a full path or shorthand device name") or
-    /// \\?\PhysicalDriveN.
+    /// plain path with "must be a full path or shorthand device name"),
+    /// \\?\PhysicalDriveN, or a partition, returned as
+    /// \\?\HarddiskNPartitionM: zpool resolves it to the extent it covers.
     /// </summary>
     public static string DevicePath(string? value, string argument = "device", bool mustExist = true)
     {
         value = Required(value, argument);
+        Match partition = PartitionPattern().Match(value);
+        if (partition.Success)
+        {
+            int disk = int.Parse(partition.Groups[1].Value), number = int.Parse(partition.Groups[2].Value);
+            if (number == 0)
+                throw Invalid(argument, $"partition 0 is the whole disk; name the whole disk as \\\\?\\PhysicalDrive{disk}.");
+            return $@"\\?\Harddisk{disk}Partition{number}";
+        }
         Match offsetDevice = OffsetDevicePattern().Match(value);
         if (offsetDevice.Success)
         {

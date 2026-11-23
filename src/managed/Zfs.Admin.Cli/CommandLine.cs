@@ -64,8 +64,10 @@ internal static class CommandLine
           version
           help
 
-        A device is a fully qualified file path (D:\pools\disk1.img) or
-        \\?\PhysicalDriveN.  Exit codes: 0 ok, 1 command failed, 2 usage,
+        A device is a fully qualified file path (D:\pools\disk1.img),
+        a whole disk (\\?\PhysicalDriveN) or one partition of a disk
+        (\\?\HarddiskNPartitionM, PhysicalDriveN/PartitionM, or
+        #offset#length#\\?\PhysicalDriveN).  Exit codes: 0 ok, 1 command failed, 2 usage,
         3 not found, 4 access denied, 5 broker unavailable, 6 confirmation
         required, 7 timeout or cancelled, 8 protocol error, 9 busy, 10 internal.
         """;
