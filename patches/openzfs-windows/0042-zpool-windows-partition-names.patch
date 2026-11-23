@@ -182,8 +182,8 @@ diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_v
 +/*
 + * A partition named as Windows names it -- HarddiskNPartitionM,
 + * HarddiskN\PartitionM, PhysicalDriveN\PartitionM or PhysicalDiskN\PartitionM,
-+ * with "/" or "\" and with or without \?\, \.\ or /dev/ in front --
-+ * becomes the extent it covers on its disk, "#offset#length#\?\PhysicalDriveN".
++ * with "/" or "\" and with or without \\?\, \\.\ or /dev/ in front --
++ * becomes the extent it covers on its disk, "#offset#length#\\?\PhysicalDriveN".
 + * That is the form zpool gives the ZFS partition of a whole disk: the
 + * driver and the user-mode engine both open it, and the driver records
 + * the disk by its identity, not its number, which can change.
@@ -197,7 +197,7 @@ diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_v
 +zpool_partition_device_path(const char *arg, char *path, size_t size)
 +{
 +	static const char *prefixes[] =
-+	    { "\\?\\", "\\.\\", "//?/", "//./", "/dev/" };
++	    { "\\\\?\\", "\\\\.\\", "//?/", "//./", "/dev/" };
 +	static const char *disks[] =
 +	    { "Harddisk", "PhysicalDrive", "PhysicalDisk" };
 +	DRIVE_LAYOUT_INFORMATION_EX *layout = NULL;
@@ -228,7 +228,7 @@ diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_v
 +		return (0);
 +	disk = strtoul(p, &end, 10);
 +	p = end;
-+	if (*p == '\' || *p == '/')
++	if (*p == '\\' || *p == '/')
 +		p++;
 +	if (strncasecmp(p, "Partition", 9) != 0 || !isdigit(p[9]))
 +		return (0);
@@ -239,7 +239,7 @@ diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_v
 +	if (part == 0) {
 +		(void) fprintf(stderr, gettext("cannot use '%s': partition 0 "
 +		    "is the whole disk; name the whole disk as "
-+		    "\\?\PhysicalDrive%lu\n"), arg, disk);
++		    "\\\\?\\PhysicalDrive%lu\n"), arg, disk);
 +		return (-1);
 +	}
 +	if (disk > 9999) {
@@ -248,7 +248,7 @@ diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_v
 +		return (-1);
 +	}
 +
-+	(void) snprintf(drive, sizeof (drive), "\\.\PhysicalDrive%lu",
++	(void) snprintf(drive, sizeof (drive), "\\\\.\\PhysicalDrive%lu",
 +	    disk);
 +	h = CreateFileA(drive, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
 +	    NULL, OPEN_EXISTING, 0, NULL);
@@ -287,7 +287,7 @@ diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_v
 +		if (pi->PartitionStyle == PARTITION_STYLE_MBR &&
 +		    IsContainerPartition(pi->Mbr.PartitionType))
 +			continue;
-+		(void) snprintf(path, size, "#%llu#%llu#\\?\PhysicalDrive%lu",
++		(void) snprintf(path, size, "#%llu#%llu#\\\\?\\PhysicalDrive%lu",
 +		    (unsigned long long)pi->StartingOffset.QuadPart,
 +		    (unsigned long long)pi->PartitionLength.QuadPart, disk);
 +		ret = 1;

@@ -799,7 +799,7 @@ libzpool now loads the cache devices in a tryimport, as the kernel does.
 ## 0041 — libspl: a partition's length, not its disk's
 
 `wosix_fstat_blk()` gave a block device the size from
-`IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`. For a partition (`\?\HarddiskNPartitionM`)
+`IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`. For a partition (`\\?\HarddiskNPartitionM`)
 that is the size of the whole disk. The user-mode engine therefore put a
 pool's end labels past the end of the partition. The partition device
 refused those writes, so `zpool create` failed with "I/O error", and a pool
@@ -815,10 +815,10 @@ fallback.
 
 A pool can be made on one partition of a disk (GitHub issue #48).
 `make_leaf_vdev()` now turns every name of a partition into the byte range
-it covers on its disk: `\?\HarddiskNPartitionM`, `\?\HarddiskN\PartitionM`,
+it covers on its disk: `\\?\HarddiskNPartitionM`, `\\?\HarddiskN\PartitionM`,
 `PhysicalDriveN/PartitionM`, `PhysicalDiskN\PartitionM`, with `/` or `\`,
-and with `\?\`, `\.\`, `//?/` or `/dev/` in front or nothing. The range
-is `#offset#length#\?\PhysicalDriveN`, read from the disk's partition
+and with `\\?\`, `\\.\`, `//?/` or `/dev/` in front or nothing. The range
+is `#offset#length#\\?\PhysicalDriveN`, read from the disk's partition
 table (`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`; an MBR extended partition only
 holds logical ones and is skipped).
 
@@ -828,13 +828,13 @@ That form is the one patch 0031 gives the ZFS partition of a whole disk:
 - the driver records its physical path by the disk's interface name, which
   survives renumbering.
 
-Before this patch, zpool rejected `\?\HarddiskN\PartitionM` and
-`PhysicalDriveN/PartitionM`. It took `\?\HarddiskNPartitionM` as the
+Before this patch, zpool rejected `\\?\HarddiskN\PartitionM` and
+`PhysicalDriveN/PartitionM`. It took `\\?\HarddiskNPartitionM` as the
 partition device itself: the kernel recorded the disk number, and user mode
 failed (0041).
 
 Partition 0, Windows' name for the whole disk, is refused, so a whole disk
-is only ever named as `\?\PhysicalDriveN`. A missing partition is refused
+is only ever named as `\\?\PhysicalDriveN`. A missing partition is refused
 too.
 
 The in-use check of a `#` range (`check_slice()`) used to look only for a
