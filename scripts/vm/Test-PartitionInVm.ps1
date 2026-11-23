@@ -5,15 +5,16 @@ Issue #48: pools on single partitions of a disk, in both editions, inside
 the isolated driver VM.  Never targets this host.
 
 .DESCRIPTION
-From the "fixtures" checkpoint, with a 12 GB disk added to the VM:
+From the "fixtures" checkpoint, with a 14 GB disk added to the VM:
 
-  P: NTFS | T1 | Q: NTFS | T2 | T3 | T4 | R: NTFS   (GPT, 256 MiB file on
-  each NTFS; T2 has the ZFS partition type, T4 is larger)
+  P: NTFS | T1 | Q: NTFS | T2 | T3 | T4 | T5 | R: NTFS   (GPT, 256 MiB file
+  on each NTFS; T2 has the ZFS partition type, T4 is larger)
 
- 1. kernel edition: every spelling of T1 (\\?\HarddiskNPartitionM,
-    PhysicalDriveN/PartitionM, ...) resolves to the same extent
-    (zpool create -n); partition 0, a missing partition, an NTFS partition
-    and the whole disk are refused, by zpool and by zfswin;
+ 1. kernel edition: a pool made with every spelling of T5
+    (\\?\HarddiskNPartitionM, PhysicalDriveN/PartitionM, ...) records T5's
+    range and is shown as HarddiskNPartitionM; partition 0, a missing
+    partition, an NTFS partition and the whole disk are refused, by zpool
+    and by zfswin;
  2. kernel: pool kp1 on T1 by zpool.exe (\\?\HarddiskNPartitionM, the
     issue's command), kp2 on T2 by zfswin (PhysicalDiskN/PartitionM);
     each recorded as its extent, no larger than its partition;
@@ -115,7 +116,7 @@ Stop-VM -Name $Name -TurnOff -Force -ErrorAction SilentlyContinue
 Restore-VMCheckpoint -VMName $Name -Name "fixtures" -Confirm:$false
 Get-VMHardDiskDrive -VMName $Name | Where-Object Path -eq $vhd | Remove-VMHardDiskDrive
 Remove-Item -LiteralPath $vhd -Force -ErrorAction SilentlyContinue
-New-VHD -Path $vhd -SizeBytes 12GB -Dynamic | Out-Null
+New-VHD -Path $vhd -SizeBytes 14GB -Dynamic | Out-Null
 # A disk of the VM, not a guest-attached VHDX: it must come back after a restart.
 Add-VMHardDiskDrive -VMName $Name -ControllerType SCSI -Path $vhd
 Start-VM -Name $Name
@@ -139,14 +140,15 @@ $disk = $layout.disk
 $parts = $layout.partitions
 $hashes = $layout.hashes
 function Neighbors($phase) { Step "$phase-neighbors" "neighbors" @{ Disk = $disk; Layout = $layout.layout; Hashes = $hashes } | Out-Null }
-function Resolve($phase, $edition) {
-    Step "$phase-resolve" "resolve" @{ Edition = $edition; Disk = $disk; Partition = $parts.T1.number; Offset = $parts.T1.offset; Length = $parts.T1.size; NtfsPartition = $parts.P.number } | Out-Null
+function Resolve($phase, $edition, [bool]$force) {
+    # T5: the second run (-Force) finds the first run's exported pool on it.
+    Step "$phase-resolve" "resolve" @{ Edition = $edition; Disk = $disk; Partition = $parts.T5.number; Offset = $parts.T5.offset; Length = $parts.T5.size; NtfsPartition = $parts.P.number; Force = $force } | Out-Null
 }
 
 Step "kernel-install" "msi" @{ Msi = $guestKernelMsi; Action = "install" } | Out-Null
 
 # --- 1-2. kernel: resolution, two pools ------------------------------------------------------------
-Resolve "kernel" "kernel"
+Resolve "kernel" "kernel" $false
 $kp1 = Step "kernel-create-kp1" "create" @{ Edition = "kernel"; Via = "zpool"; Pool = "kp1"; Device = "\\?\Harddisk${disk}Partition$($parts.T1.number)"; Disk = $disk; Number = $parts.T1.number; Offset = $parts.T1.offset; Length = $parts.T1.size; Seed = 1 }
 $kp2 = Step "kernel-create-kp2" "create" @{ Edition = "kernel"; Via = "zfswin"; Pool = "kp2"; Device = "PhysicalDisk$disk/Partition$($parts.T2.number)"; Disk = $disk; Number = $parts.T2.number; Offset = $parts.T2.offset; Length = $parts.T2.size; Seed = 2 }
 $kernelPools = @(@{ Name = "kp1"; Hash = $kp1.hash }, @{ Name = "kp2"; Hash = $kp2.hash })
@@ -171,7 +173,7 @@ Step "winfsp-install" "msi" @{ Msi = "$guestDir\$(Split-Path -Leaf $winfsp)"; Ac
 Step "usermode-install" "msi" @{ Msi = $guestUserMsi; Action = "install" } | Out-Null
 Step "usermode-import-kernel-pools" "verify" @{ Edition = "usermode"; Pools = $kernelPools } | Out-Null
 Step "usermode-export-kp" "export" @{ Edition = "usermode"; Pools = @("kp1", "kp2") } | Out-Null
-Resolve "usermode" "usermode"
+Resolve "usermode" "usermode" $true
 $up3 = Step "usermode-create-up3" "create" @{ Edition = "usermode"; Via = "powershell"; Pool = "up3"; Device = "PhysicalDrive$disk/Partition$($parts.T3.number)"; Disk = $disk; Number = $parts.T3.number; Offset = $parts.T3.offset; Length = $parts.T3.size; Seed = 3 }
 $allPools = $kernelPools + @(@{ Name = "up3"; Hash = $up3.hash })
 Step "usermode-import-all" "verify" @{ Edition = "usermode"; Pools = $allPools } | Out-Null

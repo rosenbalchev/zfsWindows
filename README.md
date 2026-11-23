@@ -122,7 +122,7 @@ What has been tested:
 ## A pool on one partition of a disk
 
 A pool can live on one partition, and the other partitions of the disk are
-left alone. This works in both editions (since 1.0.100, issue #48). Name the
+left alone. This works in both editions (issue #48). Name the
 partition in any of these ways; they all mean partition 3 of disk 0:
 
 | Name | Notes |
@@ -194,13 +194,19 @@ larger partition and move the pool onto it. Take the device's GUID from
 **Example: delete a pool and its partition:**
 
 ```powershell
-zpool destroy tank                           # or: zfswin pool export tank, to keep the data
+zfswin pool export tank                      # the pool is gone with its partition
 Remove-Partition -DiskNumber 0 -PartitionNumber 3 -Confirm:$false
 Resize-Partition -DiskNumber 0 -PartitionNumber 2 -Size (Get-PartitionSupportedSize -DiskNumber 0 -PartitionNumber 2).SizeMax
 ```
 
-Never delete or format a partition while its pool is imported. Export or
-destroy the pool first.
+Never delete or format a partition while its pool is imported. Export the
+pool first.
+
+**Known issue (kernel edition):** do not `zpool destroy` a pool on a
+partition. In the test VM, destroying such a pool soon after creating it
+once hung, and once stopped Windows with bugcheck 0x0A in PnP device
+removal (`nt!IopInsertRemoveDevice`). Pools in files did not do this.
+Export the pool instead; deleting the partition afterwards removes it.
 
 ## User mode or kernel mode? Feature matrix
 

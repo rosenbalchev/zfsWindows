@@ -67,13 +67,13 @@ switch ($Stage) {
     # each side of the partitions pools go on.  T2 is marked as a ZFS
     # partition (as the README suggests), the others stay basic data
     # partitions, which Windows gives RAW volumes.  T4 is larger, for a
-    # replace.
-    #   P: NTFS | T1 | Q: NTFS | T2 | T3 | T4 | R: NTFS
+    # replace; T5 is for the resolve stage's pools.
+    #   P: NTFS | T1 | Q: NTFS | T2 | T3 | T4 | T5 | R: NTFS
     "layout" {
         $disk = Get-Disk | Where-Object PartitionStyle -eq 'RAW' | Sort-Object Number | Select-Object -Last 1
         Initialize-Disk -Number $disk.Number -PartitionStyle GPT
         $parts = [ordered]@{}
-        foreach ($p in @(@('P', 1GB, 'P'), @('T1', 2GB, $null), @('Q', 1GB, 'Q'), @('T2', 2GB, $null), @('T3', 2GB, $null), @('T4', 2560MB, $null), @('R', 1GB, 'R'))) {
+        foreach ($p in @(@('P', 1GB, 'P'), @('T1', 2GB, $null), @('Q', 1GB, 'Q'), @('T2', 2GB, $null), @('T3', 2GB, $null), @('T4', 2560MB, $null), @('T5', 2GB, $null), @('R', 1GB, 'R'))) {
             $part = if ($p[2]) { New-Partition -DiskNumber $disk.Number -Size $p[1] -DriveLetter $p[2] } else { New-Partition -DiskNumber $disk.Number -Size $p[1] }
             if ($p[2]) { Format-Volume -Partition $part -FileSystem NTFS -NewFileSystemLabel "neighbor$($p[0])" -Confirm:$false | Out-Null }
             $parts[$p[0]] = [ordered]@{ number = $part.PartitionNumber; offset = $part.Offset; size = $part.Size }
@@ -94,8 +94,10 @@ switch ($Stage) {
 
     # Every spelling of one partition: a pool made on it records the
     # partition's range and is shown as HarddiskNPartitionM, then is
-    # destroyed.  Partition 0, a missing partition, a partition holding
-    # NTFS and the whole disk are refused.
+    # exported (not destroyed: destroying a pool on a partition right after
+    # creating it hangs or crashes the kernel edition, a separate issue), so
+    # the next one needs -f.  Partition 0, a missing partition, a partition
+    # holding NTFS and the whole disk are refused.
     "resolve" {
         $n = $a.Disk; $m = $a.Partition; $ntfs = $a.NtfsPartition
         $want = "#$($a.Offset)#$($a.Length)#"
@@ -103,16 +105,19 @@ switch ($Stage) {
             "PhysicalDrive$n/Partition$m", "PhysicalDrive$n\Partition$m", "\\?\PhysicalDrive$n\Partition$m", "PhysicalDisk$n/Partition$m",
             "//?/Harddisk${n}Partition$m", "/dev/Harddisk${n}Partition$m", "#$($a.Offset)#$($a.Length)#\\?\PhysicalDrive$n")
         $r.spellings = [ordered]@{}
+        $first = -not $a.Force
         foreach ($s in $spellings) {
-            $z = Zpool @('create', '-n', 'zres', $s)
+            $force = if ($first) { @() } else { @('-f') }
+            $z = Zpool (@('create', '-n') + $force + @('zres', $s))
             Check "dryrun $s" $z.exit 0
-            $z = Zpool @('create', 'zres', $s)
+            $z = Zpool (@('create') + $force + @('zres', $s))
             Check "create $s" $z.exit 0
+            $first = $false
             $status = (Zpool @('status', '-j', '-p', '-P', 'zres')).text
             $r.spellings[$s] = $status
             Check "range $s" ($status -match [regex]::Escape($want)) $true
             Check "named $s" ($status -match "Harddisk${n}Partition$m\b") $true
-            Check "destroy $s" (Zpool @('destroy', 'zres')).exit 0
+            Check "export $s" (Zpool @('export', 'zres')).exit 0
         }
         $z = Zpool @('create', '-n', 'zres', "\\?\Harddisk${n}Partition0")
         Check "partition0-refused" ($z.exit -ne 0 -and $z.text -match 'partition 0 is the whole disk') $true

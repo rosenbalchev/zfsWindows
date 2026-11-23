@@ -39,7 +39,7 @@ diff --git a/cmd/zpool/zpool_vdev.c b/cmd/zpool/zpool_vdev.c
 diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_vdev_os.c
 --- a/cmd/zpool/os/windows/zpool_vdev_os.c
 +++ b/cmd/zpool/os/windows/zpool_vdev_os.c
-@@ -50,6 +50,117 @@
+@@ -50,6 +50,128 @@
  	    "failed: %s\n"), strerror(err));
  }
  
@@ -130,18 +130,29 @@ diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_v
 +			why = "holds a file system:";
 +			strlcpy(names, fs, sizeof (names));
 +		} else {
-+			h = CreateFileA(device, GENERIC_READ,
-+			    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-+			    OPEN_EXISTING, 0, NULL);
-+			if (h == INVALID_HANDLE_VALUE ||
-+			    !DeviceIoControl(h, FSCTL_LOCK_VOLUME, NULL, 0,
-+			    NULL, 0, &bytes, NULL))
-+				why = "is open";
-+			else
-+				(void) DeviceIoControl(h, FSCTL_UNLOCK_VOLUME,
-+				    NULL, 0, NULL, 0, &bytes, NULL);
-+			if (h != INVALID_HANDLE_VALUE)
++			/*
++			 * Windows briefly opens a RAW volume again after a
++			 * pool on it is exported or destroyed: retry for
++			 * about two seconds before calling it open.
++			 */
++			why = "is open";
++			for (int tries = 0; tries < 10 && why != NULL; tries++) {
++				if (tries > 0)
++					Sleep(200);
++				h = CreateFileA(device, GENERIC_READ,
++				    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
++				    OPEN_EXISTING, 0, NULL);
++				if (h == INVALID_HANDLE_VALUE)
++					continue;
++				if (DeviceIoControl(h, FSCTL_LOCK_VOLUME, NULL,
++				    0, NULL, 0, &bytes, NULL)) {
++					(void) DeviceIoControl(h,
++					    FSCTL_UNLOCK_VOLUME, NULL, 0, NULL,
++					    0, &bytes, NULL);
++					why = NULL;
++				}
 +				CloseHandle(h);
++			}
 +		}
 +		if (why != NULL) {
 +			(void) fprintf(stderr, gettext("%s overlaps volume %s, "
@@ -157,7 +168,7 @@ diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_v
  static int
  check_slice(const char *path, int force, boolean_t isspare)
  {
-@@ -60,10 +171,12 @@
+@@ -60,10 +182,12 @@
  	BOOL result;
  
  	// If it starts with # it is a EFI partition we handle differently.
@@ -174,7 +185,7 @@ diff --git a/cmd/zpool/os/windows/zpool_vdev_os.c b/cmd/zpool/os/windows/zpool_v
  
  	if ((fd = open(path, flags)) < 0) {
  		fprintf(stderr, "%s: failed to open %s\n", __func__, path);
-@@ -304,3 +417,124 @@
+@@ -304,3 +428,124 @@
  	/* Enclosure slot power not supported on macOS yet */
  	return (ENOTSUP);
  }
