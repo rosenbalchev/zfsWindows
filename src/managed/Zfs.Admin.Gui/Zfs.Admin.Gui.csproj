@@ -26,11 +26,11 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Zfs.Admin\Zfs.Admin.csproj" />
-    <PackageReference Include="System.Management" Version="10.0.0" />
+    <PackageReference Include="System.Management" Version="10.0.15" />
     <!-- The window is a web app in WebView2 when its runtime is installed; only
          the loader is bundled. Without it, the native WinForms tabs remain. -->
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
-    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4370.26" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.15" />
   </ItemGroup>
   <ItemGroup>
     <!-- The web app, served from the exe itself (WebShell.cs): web/index.html, app.css, app.js. -->

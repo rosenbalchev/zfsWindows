@@ -1,13 +1,28 @@
 # Patches to `third_party/openzfs-windows`
 
 The submodule stays pinned to an upstream openzfsonwindows release, now
-`zfswin-2.4.4rc9` (`b125f492`, branch `zfs-Windows-2.4.4-release`).
+`zfswin-2.4.4rc10` (`c5cb4b9f`, branch `zfs-Windows-2.4.4-release`).
 `scripts/apply-openzfs-patches.ps1` (run by `build-write-core.ps1` and
 `build-driver.ps1`) applies these patches idempotently before configuring.
 It checks the whole stack, not each patch alone, because a later patch can
 change lines an earlier one added (0031 inside 0003). Most patches are bug
 fixes and candidates for upstream submission (GitHub issue #13); 0003 is
 test instrumentation.
+
+### Rebase onto `zfswin-2.4.4rc10` (from `b125f492`, rc9; issue #50)
+
+- 42 of the 43 patches apply unchanged. Only 0020 was regenerated: its
+  context moved because upstream added the `OPENZFS_BUILD_TEST_TOOLS`
+  option next to it in `CMakeLists.txt` (`cebac4a06`).
+- None became redundant. rc10 also changes files that 0001, 0002, 0009,
+  0011, 0012, 0014, 0016, 0024, 0026–0029, 0031, 0032 and 0041 touch, in
+  other places: SEEK_DATA/SEEK_HOLE and open flags in `posix.c`, the
+  `.zfs/snapshot` tunables in `zfs_ctldir.c`, an empty-string Registry
+  value in `sysctl_os.c`, clone, rewrite and sparse FSCTLs in the vnops.
+- rc10's `vdev_file_win32_flags` (`09ff81c38`) adds `O_WIN_WRITETHROUGH`
+  and `O_WIN_NOBUFFERING` (`0x2000000`, `0x4000000`) to the open flags of
+  file vdevs. No patch uses those bits, and the tunable is empty by
+  default, so the open of a file vdev is unchanged.
 
 ### Rebase onto `zfswin-2.4.4rc9` (from `e7c0984`, 2.4.1-rc17)
 

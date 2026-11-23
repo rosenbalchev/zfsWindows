@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Schema;
 using Zfs.Admin;
@@ -17,10 +18,14 @@ public class SchemaCompatibilityTests
 
     static string Sample(string name) => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "samples", name));
 
+    // JsonSchema.Net 9 evaluates a JsonElement, not a JsonNode.
+    static EvaluationResults Evaluate(JsonNode envelope, EvaluationOptions? options = null) =>
+        Schema.Evaluate(JsonSerializer.SerializeToElement(envelope), options);
+
     static void AssertValid(JsonNode envelope)
     {
-        EvaluationResults result = Schema.Evaluate(envelope, new EvaluationOptions { OutputFormat = OutputFormat.List });
-        string errors = string.Join("; ", result.Details.Where(d => d.HasErrors).SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Value}")));
+        EvaluationResults result = Evaluate(envelope, new EvaluationOptions { OutputFormat = OutputFormat.List });
+        string errors = string.Join("; ", result.Details.Where(d => d.Errors is { Count: > 0 }).SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Value}")));
         Assert.True(result.IsValid, errors + "\n" + envelope.ToJsonString());
     }
 
@@ -106,7 +111,7 @@ public class SchemaCompatibilityTests
         AssertValid(CliProgram.Success("memory.stats", memory));
         var bad = memory.DeepClone();
         bad["arc"]!["size"] = "5 MiB";
-        Assert.False(Schema.Evaluate(CliProgram.Success("memory.stats", bad)).IsValid);
+        Assert.False(Evaluate(CliProgram.Success("memory.stats", bad)).IsValid);
     }
 
     [Fact]
@@ -124,15 +129,15 @@ public class SchemaCompatibilityTests
         AssertValid(good);
         var renamed = good.DeepClone();
         renamed["result"]!["pools"]![0]!.AsObject().Remove("health");
-        Assert.False(Schema.Evaluate(renamed).IsValid);
+        Assert.False(Evaluate(renamed).IsValid);
         var retyped = good.DeepClone();
         retyped["result"]!["pools"]![0]!["size"] = "12G";
-        Assert.False(Schema.Evaluate(retyped).IsValid);
+        Assert.False(Evaluate(retyped).IsValid);
         var wrongSchema = good.DeepClone();
         wrongSchema["schema"] = "zfswin/2";
-        Assert.False(Schema.Evaluate(wrongSchema).IsValid);
+        Assert.False(Evaluate(wrongSchema).IsValid);
         var failureWithoutError = CliProgram.Failure("pool.list", new AdminException(ErrorCode.NotFound, "x"));
         failureWithoutError.Remove("error");
-        Assert.False(Schema.Evaluate(failureWithoutError).IsValid);
+        Assert.False(Evaluate(failureWithoutError).IsValid);
     }
 }

@@ -31,7 +31,7 @@ $tag = if ($Configuration -eq "Debug") { "-debug" } else { "" }
 $build = Join-Path $root ("out\openzfs-write-$($Configuration.ToLowerInvariant())" + $(if ($Architecture -eq "x64") { "" } else { "-$Architecture" }) + "\zfswin-um")
 $payload = Join-Path $root "out\installer-payload\usermode-$Architecture-$($Configuration.ToLowerInvariant())"
 $release = Join-Path $root "out\release\$Version"
-$winfspLicense = Join-Path $root "third_party\winfsp\sdk-2.1\DYNAMIC\License.txt"
+$winfspLicense = Join-Path $root "third_party\winfsp\sdk-2.2\DYNAMIC\License.txt"
 $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
 

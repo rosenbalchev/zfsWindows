@@ -47,7 +47,7 @@ $tag = if ($Configuration -eq "Debug") { "-debug" } else { "" }
 $release = Join-Path $repo "out\release\$version"
 $kernelMsi = Join-Path $release "OpenZFS-for-Windows-$version-x64-testsigned$tag.msi"
 $userMsi = Join-Path $release "OpenZFS-for-Windows-$version-x64-usermode$tag.msi"
-$winfsp = Join-Path $repo "third_party\winfsp\download\winfsp-2.1.25156.msi"
+$winfsp = Join-Path $repo "third_party\winfsp\download\winfsp-2.2.26323.msi"
 foreach ($f in $kernelMsi, $userMsi, $winfsp) { if (-not (Test-Path $f)) { throw "Missing $f." } }
 $guestDir = "C:\zfswin\partition"
 $guestKernelMsi = "$guestDir\$(Split-Path -Leaf $kernelMsi)"

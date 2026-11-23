@@ -76,7 +76,7 @@ jobs:
     steps:
       # Submodules in the "Submodules" step: checkout would force them back
       # to the pinned commit every run.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -159,7 +159,7 @@ jobs:
 
       - name: Upload build logs
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: build-logs-${{ steps.version.outputs.version }}
           path: out/logs
@@ -174,7 +174,7 @@ jobs:
 
       - name: Upload x64 unit test results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-results-x64-${{ steps.version.outputs.version }}
           path: out/test-results/usermode-x64-${{ steps.plan.outputs.test-configuration == 'Release' && 'release' || 'debug' }}
@@ -183,7 +183,7 @@ jobs:
       # The ARM64 engine for unit-tests-arm64, which cannot run it here.
       - name: Upload ARM64 unit test engine
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.arm64-unit-tests }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-engine-arm64-${{ steps.version.outputs.version }}
           path: out/openzfs-write-${{ steps.plan.outputs.test-configuration == 'Release' && 'release' || 'debug' }}-arm64/zfs-um-test/ZfsUserModeTest.dll
@@ -195,7 +195,7 @@ jobs:
       # upload stores them as they are.
       - name: Upload x64 Release
         if: ${{ contains(steps.plan.outputs.configurations, 'Release') }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-release
           path: |
@@ -209,7 +209,7 @@ jobs:
           compression-level: 0
 
       - name: Upload x64 Debug
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-x64-debug
           path: |
@@ -224,7 +224,7 @@ jobs:
 
       - name: Upload ARM64 Release
         if: ${{ contains(steps.plan.outputs.configurations, 'Release') }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-release
           path: |
@@ -238,7 +238,7 @@ jobs:
           compression-level: 0
 
       - name: Upload ARM64 Debug
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: OpenZFS-for-Windows-${{ steps.version.outputs.version }}-arm64-debug
           path: |
@@ -263,7 +263,7 @@ jobs:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -271,7 +271,7 @@ jobs:
       # on this runner may have cleaned out\release in between (a master
       # build did, between this run's build and these tests).
       - name: Download packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: OpenZFS-for-Windows-${{ needs.build.outputs.version }}-x64-${{ inputs.configuration == 'Debug' && 'debug' || 'release' }}
           path: artifact
@@ -303,12 +303,12 @@ jobs:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           clean: true
 
       - name: Download packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: OpenZFS-for-Windows-${{ needs.build.outputs.version }}-arm64-${{ inputs.configuration == 'Debug' && 'debug' || 'release' }}
           path: artifact
@@ -339,12 +339,12 @@ jobs:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           clean: true
 
       - name: Download engine
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: unit-test-engine-arm64-${{ needs.build.outputs.version }}
           path: out/openzfs-write-${{ needs.build.outputs.test-configuration == 'Release' && 'release' || 'debug' }}-arm64/zfs-um-test
@@ -354,7 +354,7 @@ jobs:
 
       - name: Upload ARM64 unit test results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-results-arm64-${{ needs.build.outputs.version }}
           path: out/test-results/usermode-arm64-${{ needs.build.outputs.test-configuration == 'Release' && 'release' || 'debug' }}
@@ -383,14 +383,14 @@ jobs:
         run: if (Test-Path out\github-release) { Remove-Item -Recurse -Force out\github-release }
 
       - name: Download packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: OpenZFS-for-Windows-${{ needs.build.outputs.version }}-*
           path: out/github-release
           merge-multiple: true
 
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.build.outputs.version }}
           target_commitish: ${{ github.sha }}
@@ -421,7 +421,7 @@ jobs:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -433,7 +433,7 @@ jobs:
 
       - name: Upload coverage report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-html-${{ needs.build.outputs.version }}
           path: out/coverage/html

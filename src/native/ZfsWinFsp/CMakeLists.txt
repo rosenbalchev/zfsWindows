@@ -3,7 +3,7 @@
 # neither their forced zfs_config.h nor libspl's replacement headers.
 
 if(NOT DEFINED WINFSP_SDK)
-    set(WINFSP_SDK "${ZFSWINDOWS_ROOT}/third_party/winfsp/sdk-2.1/DYNAMIC")
+    set(WINFSP_SDK "${ZFSWINDOWS_ROOT}/third_party/winfsp/sdk-2.2/DYNAMIC")
 endif()
 if(CMAKE_C_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64")
     set(WINFSP_ARCH a64)

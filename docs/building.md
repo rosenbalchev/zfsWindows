@@ -48,7 +48,7 @@ place.
 | git | submodules | `git submodule update --init --recursive` |
 
 The WinFsp SDK is not installed. `scripts/fetch-winfsp.ps1` downloads the
-pinned, Microsoft-signed WinFsp 2.1 MSI and checks its SHA-256 and signature.
+pinned, signed WinFsp 2.2 MSI and checks its SHA-256 and signature.
 It then unpacks the headers and import libraries with `msiexec /a`, which only
 copies files and installs no driver.
 

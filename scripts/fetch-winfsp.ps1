@@ -4,7 +4,7 @@
 Downloads the pinned WinFsp release and extracts its SDK (plan step 15).
 
 .DESCRIPTION
-The official, Microsoft-signed MSI is verified against its pinned SHA-256
+The official MSI (signed by Navimatics LLC, the WinFsp publisher) is verified against its pinned SHA-256
 and Authenticode signature, then unpacked with an administrative install
 (msiexec /a), which copies files only: no driver or service is installed on
 this machine.  The headers and import libraries build zfswin-um.exe; the MSI
@@ -12,12 +12,12 @@ itself is what the VM tests install.  Both stay out of git.
 #>
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$version = "2.1.25156"
-$sha256 = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
-$url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-$version.msi"
+$version = "2.2.26323"
+$sha256 = "36CE01F9EEDBBE6842B7FB4BEDC79D7D4F71983E8ACEB6877B46A07B331C7E19"
+$url = "https://github.com/winfsp/winfsp/releases/download/v2.2/winfsp-$version.msi"
 $dir = Join-Path $root "third_party\winfsp"
 $msi = Join-Path $dir "download\winfsp-$version.msi"
-$sdk = Join-Path $dir "sdk-2.1"
+$sdk = Join-Path $dir "sdk-2.2"
 
 New-Item -ItemType Directory -Force (Split-Path -Parent $msi) | Out-Null
 if (-not (Test-Path $msi) -or (Get-FileHash $msi).Hash -ne $sha256) {
