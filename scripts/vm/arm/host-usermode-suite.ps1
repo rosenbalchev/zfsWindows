@@ -51,7 +51,7 @@ Start-Sleep -Seconds 30
 $s = Open-ArmGuest 10
 Invoke-Command $s { New-Item -ItemType Directory -Force C:\zfswin\um, C:\zfswin\installer, C:\zfswin\dumps | Out-Null }
 Copy-Item -ToSession $s "C:\zfswin-arm\stage\$MsiName" C:\zfswin\um\zfswin-usermode.msi -Force
-Copy-Item -ToSession $s C:\zfswin-arm\stage\winfsp-2.1.25156.msi C:\zfswin\um\winfsp.msi -Force
+Copy-Item -ToSession $s C:\zfswin-arm\stage\winfsp-2.2.26323.msi C:\zfswin\um\winfsp.msi -Force
 Copy-Item -ToSession $s C:\zfswin-arm\stage\windowsdesktop-runtime-10.0.14-win-arm64.exe C:\zfswin\um\dotnet-desktop-runtime.exe -Force
 Copy-Item -ToSession $s C:\zfswin-arm\stage\guest-installer.ps1 C:\zfswin\installer\guest-installer.ps1 -Force
 $setup = Invoke-Command $s {

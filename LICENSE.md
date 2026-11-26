@@ -35,8 +35,8 @@ their source, and the rest of the repository stays MIT.
 | `src/native/ZfsWriteCore/zfs_write_core.c` | CDDL-1.0 | Ports of the OpenZFS Linux ZPL (`zfs_dir.c`, `zfs_znode.c`, `zfs_vnops_os.c`). The file carries `SPDX-License-Identifier: CDDL-1.0`. |
 | `patches/openzfs-windows/*.patch` | CDDL-1.0 | Modifications to OpenZFS / OpenZFS-on-Windows files, all of which are CDDL-1.0. |
 | `OpenZFS/` (submodule) | CDDL-1.0, with per-file exceptions | Upstream OpenZFS `zfs-2.4.4`, unmodified. |
-| `third_party/openzfs-windows/` (submodule) | CDDL-1.0, with per-file exceptions | OpenZFS on Windows `zfswin-2.4.4rc9`, with the patches above applied at build time. |
-| `third_party/zlib-1.3.2/` | zlib | Unmodified zlib release. |
+| `third_party/openzfs-windows/` (submodule) | CDDL-1.0, with per-file exceptions | OpenZFS on Windows `zfswin-2.4.4rc10`, with the patches above applied at build time. |
+| `third_party/zlib-1.4/` | zlib | Unmodified zlib release. |
 
 The read-only reader's LZJB and ZLE decoders in `src/native/ZfsCore/zfs_core.c`
 were written for this repository from the on-disk formats. They are MIT.
@@ -52,10 +52,10 @@ this repository builds:
 | Component | Version | License | Used by |
 |---|---|---|---|
 | OpenZFS | 2.4.4 | CDDL-1.0 | Reference tree; LZ4 and Zstandard sources compiled into `ZfsCore` |
-| OpenZFS on Windows | 2.4.4rc9 | CDDL-1.0 | Kernel driver (`OpenZFS.sys`, `OpenZVOL.sys`), `zpool`, `zfs`, `zdb`, `kstat`, `zfsinstaller`, and `libzpool` in `zfs-write-core` |
+| OpenZFS on Windows | 2.4.4rc10 | CDDL-1.0 | Kernel driver (`OpenZFS.sys`, `OpenZVOL.sys`), `zpool`, `zfs`, `zdb`, `kstat`, `zfsinstaller`, and `libzpool` in `zfs-write-core` |
 | LZ4 (in OpenZFS `module/zfs/lz4.c`) | as vendored by OpenZFS | BSD-2-Clause | `ZfsCore` LZ4 decompression |
 | Zstandard (in OpenZFS `module/zstd/lib`) | as vendored by OpenZFS | BSD-3-Clause OR GPL-2.0-only (BSD-3-Clause elected) | `ZfsCore` zstd decompression; driver |
-| zlib | 1.3.2 | zlib | `ZfsCore` gzip decompression |
+| zlib | 1.4 | zlib | `ZfsCore` gzip decompression |
 | zlib (in OpenZFS on Windows `lib/os/windows/zlib-1.2.13`) | 1.2.13 | zlib | Windows userland tools |
 | libpthread for Windows (in OpenZFS on Windows) | as vendored | BSD-3-Clause | Windows userland tools |
 | libregex (NetBSD, in OpenZFS on Windows) | as vendored | BSD-3-Clause | Windows userland tools |
@@ -63,13 +63,13 @@ this repository builds:
 | libuuid (in OpenZFS on Windows) | as vendored | BSD-3-Clause | Windows userland tools |
 | OpenSSL `libcrypto` (linked statically) | 3.x / 4.x as installed for the build | Apache-2.0 | `zfs.exe`, `zpool.exe`, `zfs-write-core.exe` (encryption key handling) |
 | .NET runtime (self-contained `Zfs.MountVerifier.exe`) | 10.0 | MIT | Test verifier run inside the driver VM |
-| xUnit (`xunit`, `xunit.runner.visualstudio`) | 2.9.3 / 3.1.4 | Apache-2.0 | Tests only, not shipped |
-| Microsoft.NET.Test.Sdk | 17.14.1 | MIT | Tests only, not shipped |
+| xUnit (`xunit`, `xunit.runner.visualstudio`) | 2.9.3 / 4.0.1 | Apache-2.0 | Tests only, not shipped |
+| Microsoft.NET.Test.Sdk | 18.12.0 | MIT | Tests only, not shipped |
 | BenchmarkDotNet | 0.15.8 | MIT | Benchmarks only, not shipped |
 | Microsoft C runtime and WDK libraries | from the build toolchain | Microsoft Software License Terms | All native binaries |
 
 Each component's own license text is in its source tree: `OpenZFS/LICENSE`,
-`third_party/openzfs-windows/LICENSE`, `third_party/zlib-1.3.2/LICENSE`, the
+`third_party/openzfs-windows/LICENSE`, `third_party/zlib-1.4/LICENSE`, the
 per-file headers of the vendored libraries, the OpenSSL `LICENSE.txt`, and
 the NuGet package licenses.
 
